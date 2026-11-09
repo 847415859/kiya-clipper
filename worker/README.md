@@ -38,6 +38,27 @@ python scripts/evaluate.py --log "情绪词加了草和绷"
 
 **下播后自动运行**：监控脚本在下播后会自动跑 `screen.py`，把前 5 个候选推到微信。
 
+## 标注工具（网页）
+
+在浏览器里逐个播放候选片段，按键标注，自动保存到 `eval/reviews/<场次>.csv`（`evaluate.py` 直接读取），不用再手改 CSV。
+
+```bash
+# 服务器上（可先剪好片段：python scripts/cut.py output/<场次>/candidates.json --height 480）
+cd /opt/kiya-clipper/worker && source .venv/bin/activate
+python scripts/review.py
+
+# 你的电脑上：建隧道后浏览器打开 http://localhost:8765
+ssh -N -o ServerAliveInterval=30 -L 8765:127.0.0.1:8765 root@<服务器IP>
+```
+
+- 快捷键：**Y** 有趣 · **N** 不有趣（标完自动跳下一个）· **←/→** 切换 · **空格** 播放/暂停 · **J/L** 后退/前进 5 秒 · **E** 写备注
+- 还没剪的片段，页面上点“剪切这个片段”，服务器现剪（480p 加载更快）
+- 每个片段旁边显示主要信号、高频弹幕；页面底部可展开本场信号曲线
+- 只监听服务器本机，必须通过 SSH 隧道访问；标完 `Ctrl+C` 关掉即可
+- 3M 带宽下 1 分钟 720p 片段约 10–20 秒加载，480p 快一倍
+
+备注建议写：发生了什么、笑点大概在第几秒、边界问题（太早 / 太晚 / 被截断）。这些会直接用来调参数和写阶段 2 的提示词。
+
 ## 安装（服务器或你的电脑都行，Python 3.10+）
 
 ```bash
@@ -125,6 +146,7 @@ worker/
 ├── scripts/screen.py    # 阶段 1 粗筛入口
 ├── scripts/cut.py       # 精确剪切（跨分段自动拼接）
 ├── scripts/evaluate.py  # 命中率 / 召回率评测，记录到 eval/results.csv
+├── scripts/review.py    # 网页标注工具（SSH 隧道访问）
 ├── scripts/analyze_danmaku.py   # 命令行入口：分场、输出 CSV / 曲线图 / 剪切脚本
 ├── scripts/try_llm.py           # 试用百炼多模态大模型判断片段（阶段 0）
 └── tests/               # 合成弹幕 + 合成录像的端到端测试，不需要真实录像（约 40 秒）
