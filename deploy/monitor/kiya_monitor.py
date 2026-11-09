@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+"""kiya-clipper 监控告警：每 3 分钟由 cron 运行一次，异常时推送到手机微信。
+
+检查项
+  - 录播服务 brec 是否在运行
+  - 主播开播了，但没有正在写入的录像 / 弹幕（= 漏录）
+  - 硬盘使用率过高
+  - OSS 同步太久没成功
+通知项
+  - 开播（并附录制是否正常）、下播（本场时长、录像大小、弹幕数）
+  - 下播后自动跑弹幕分析，把前 5 个高峰推送过来
+
+同一个问题只推送一次，持续未恢复则每 6 小时提醒一次；恢复时再推一条“已恢复”。
+只用 Python 标准库，不依赖 worker 的虚拟环境（自动分析那一步除外）。
+
+配置读取仓库根目录 .env（见 .env.example 的“监控告警”部分）。
+手动测试推送：python3 kiya_monitor.py --test-notify
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
+from datetime import datetime
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+REALERT_SECONDS = 6 * 3600
+
+
+# ---------------------------------------------------------------- 配置
+def load_env() -> dict:
+    env = {}
+    p = Path(os.environ.get("KIYA_ENV_FILE", REPO / ".env"))
+    if p.exists():
+        for line in p.read_text(encoding="utf-8").splitlines():
+            m = re.match(r"\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$", line)
+            if m:
+                env[m.group(1)] = m.group(2).strip('"').strip("'")
+    env.update({k: v for k, v in os.environ.items() if k.startswith(("KIYA_", "REC_", "PUSH", "SERVERCHAN", "WECOM", "DINGTALK"))})
+    return env
+
+
+def cfg(env: dict, key: str, default: str = "") -> str:
+    v = env.get(key, "")
+    return v if v != "" else default
+
+
+# ---------------------------------------------------------------- 推送
+def _post_json(url: str, payload: dict) -> str:
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return r.read().decode(errors="replace")[:300]
+
+
+def _post_form(url: str, data: dict) -> str:
+    req = urllib.request.Request(url, data=urllib.parse.urlencode(data).encode(), method="POST")
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return r.read().decode(errors="replace")[:300]
+
+
+def notify(env: dict, title: str, body: str, dry_run: bool = False) -> None:
+    """推送到所有已配置的渠道；一个都没配就只打印。"""
+    text = f"{title}\n{body}".strip()
+    print(f"[{datetime.now():%F %T}] 通知：{title} | {body.replace(chr(10), ' / ')}")
+    if dry_run:
+        return
+    sent = False
+    try:
+        if cfg(env, "PUSHPLUS_TOKEN"):
+            _post_json("http://www.pushplus.plus/send",
+                       {"token": env["PUSHPLUS_TOKEN"], "title": title, "content": body.replace("\n", "<br>")})
+            sent = True
+        if cfg(env, "SERVERCHAN_SENDKEY"):
+            _post_form(f"https://sctapi.ftqq.com/{env['SERVERCHAN_SENDKEY']}.send", {"title": title, "desp": body})
+            sent = True
+        if cfg(env, "WECOM_WEBHOOK"):
+            _post_json(env["WECOM_WEBHOOK"], {"msgtype": "text", "text": {"content": text}})
+            sent = True
+        if cfg(env, "DINGTALK_WEBHOOK"):
+            # 钉钉机器人安全设置建议用“自定义关键词：kiya”
+            _post_json(env["DINGTALK_WEBHOOK"], {"msgtype": "text", "text": {"content": "kiya " + text}})
+            sent = True
+    except Exception as e:  # 推送失败不能让监控本身崩掉
+        print(f"推送失败：{e}", file=sys.stderr)
+    if not sent:
+        print("（未配置任何推送渠道，只打印到日志）")
+
+
+# ---------------------------------------------------------------- 状态
+class State:
+    def __init__(self, path: Path):
+        self.path = path
+        try:
+            self.data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            self.data = {}
+        self.data.setdefault("alerts", {})
+
+    def save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(self.path)
+
+
+def alert(env, st: State, key: str, bad: bool, title: str, body: str, recover_msg: str, now: float, dry: bool) -> None:
+    """bad=True：问题存在（首次或每 6 小时推一次）；bad=False：若之前在告警则推“已恢复”。"""
+    a = st.data["alerts"]
+    if bad:
+        last = a.get(key)
+        if last is None or now - last >= REALERT_SECONDS:
+            prefix = "" if last is None else "（仍未恢复）"
+            notify(env, f"⚠️ {title}{prefix}", body, dry)
+            a[key] = now
+    elif key in a:
+        notify(env, "✅ 已恢复", recover_msg, dry)
+        del a[key]
+
+
+# ---------------------------------------------------------------- 检查项
+def service_active(env: dict) -> bool:
+    cmd = cfg(env, "KIYA_SYSTEMCTL", "systemctl")
+    try:
+        r = subprocess.run([cmd, "is-active", cfg(env, "KIYA_SERVICE", "brec")], capture_output=True, text=True, timeout=10)
+        return r.stdout.strip() == "active"
+    except Exception:
+        return False
+
+
+def live_status(env: dict) -> tuple[int | None, str]:
+    """返回 (live_status, title)。1=直播中，0=未开播，2=轮播；接口失败返回 (None, 错误)。"""
+    room = cfg(env, "KIYA_ROOM_ID", "1724773744")
+    url = cfg(env, "KIYA_LIVE_API", "https://api.live.bilibili.com/room/v1/Room/get_info") + f"?room_id={room}"
+    headers = {"User-Agent": UA, "Referer": f"https://live.bilibili.com/{room}"}
+    # 机房 IP 被风控（412）时，带上 B站小号 Cookie（与 yt-dlp 共用的 Netscape 格式文件）
+    ck_file = Path(cfg(env, "KIYA_COOKIE_FILE", "/root/bili_cookies.txt"))
+    try:
+        if ck_file.exists():
+            pairs = [l.split("\t") for l in ck_file.read_text(encoding="utf-8").splitlines() if l and not l.startswith("#")]
+            headers["Cookie"] = "; ".join(f"{p[5]}={p[6]}" for p in pairs if len(p) >= 7)
+    except OSError:
+        pass
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            d = json.loads(r.read().decode())
+        if d.get("code") != 0:
+            return None, f"code {d.get('code')} {d.get('message') or d.get('msg')}"
+        return int(d["data"]["live_status"]), d["data"].get("title", "")
+    except Exception as e:
+        return None, str(e)
+
+
+def newest(rec_dir: Path, pattern: str) -> tuple[Path | None, float]:
+    best, mt = None, 0.0
+    for p in rec_dir.rglob(pattern):
+        try:
+            m = p.stat().st_mtime
+        except OSError:
+            continue
+        if m > mt:
+            best, mt = p, m
+    return best, mt
+
+
+def session_files(rec_dir: Path, since: float, pattern: str) -> list[Path]:
+    out = []
+    for p in rec_dir.rglob(pattern):
+        try:
+            if p.stat().st_mtime >= since - 60:
+                out.append(p)
+        except OSError:
+            pass
+    return out
+
+
+def count_danmaku(xmls: list[Path]) -> int:
+    n = 0
+    for x in xmls:
+        try:
+            n += x.read_text(encoding="utf-8", errors="replace").count("<d p=")
+        except OSError:
+            pass
+    return n
+
+
+def sync_age_hours(log: Path) -> float | None:
+    """距上次“sync done”多少小时；日志不存在返回 None（未启用同步）。"""
+    if not log.exists():
+        return None
+    last = None
+    try:
+        for line in log.read_text(encoding="utf-8", errors="replace").splitlines()[-2000:]:
+            m = re.match(r"\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] sync done", line)
+            if m:
+                last = m.group(1)
+    except OSError:
+        return None
+    if not last:
+        return float("inf")
+    return (time.time() - datetime.strptime(last, "%Y-%m-%d %H:%M:%S").timestamp()) / 3600
+
+
+def fmt_dur(sec: float) -> str:
+    sec = int(max(0, sec))
+    return f"{sec // 3600} 小时 {sec % 3600 // 60} 分" if sec >= 3600 else f"{sec // 60} 分钟"
+
+
+def run_analysis(env: dict, rec_dir: Path) -> str:
+    """下播后自动跑弹幕分析，返回前 5 个高峰的摘要。"""
+    worker = REPO / "worker"
+    py = worker / ".venv" / "bin" / "python"
+    if not py.exists():
+        return "（worker/.venv 不存在，跳过自动分析）"
+    out_dir = worker / "output"
+    try:
+        r = subprocess.run([str(py), str(worker / "scripts" / "analyze_danmaku.py"), str(rec_dir), "--latest",
+                            "--top", "20", "--out", str(out_dir)], capture_output=True, text=True, timeout=600)
+    except Exception as e:
+        return f"自动分析失败：{e}"
+    if r.returncode != 0:
+        return "自动分析失败：" + (r.stderr.strip().splitlines() or ["未知错误"])[-1][:200]
+    lines = [l for l in r.stdout.splitlines() if re.match(r"#\s*\d+\s", l)][:5]
+    head = next((l for l in r.stdout.splitlines() if l.startswith("==")), "")
+    return (head + "\n前 5 个弹幕高峰：\n" + "\n".join(lines)) if lines else ("自动分析完成，但没有高峰\n" + r.stdout[-300:])
+
+
+# ---------------------------------------------------------------- 主流程
+def check(env: dict, dry: bool = False) -> int:
+    now = time.time()
+    rec_dir = Path(cfg(env, "REC_DIR", "/data/rec"))
+    st = State(Path(cfg(env, "KIYA_STATE_FILE", "/var/lib/kiya-monitor/state.json")))
+    name = cfg(env, "KIYA_STREAMER_NAME", "娜由纪雅kiya")
+    room = cfg(env, "KIYA_ROOM_ID", "1724773744")
+    fresh_video = float(cfg(env, "KIYA_VIDEO_STALE_SECONDS", "180"))
+    fresh_xml = float(cfg(env, "KIYA_DANMAKU_STALE_SECONDS", "900"))
+    grace = float(cfg(env, "KIYA_START_GRACE_SECONDS", "240"))
+
+    # 1. 录播服务
+    svc = service_active(env)
+    alert(env, st, "service", not svc, "录播服务没有运行",
+          "brec 不是 active 状态，开播将不会录制。\n排查：systemctl status brec；journalctl -u brec -n 50",
+          "录播服务 brec 已恢复运行", now, dry)
+
+    # 2. 开播状态
+    live, info = live_status(env)
+    if live is None:
+        fails = st.data.get("api_fail", 0) + 1
+        st.data["api_fail"] = fails
+        alert(env, st, "api", fails >= 5, "查询开播状态失败",
+              f"连续 {fails} 次查询 B站直播间状态失败：{info[:150]}", "开播状态查询已恢复", now, dry)
+    else:
+        st.data["api_fail"] = 0
+        alert(env, st, "api", False, "", "", "开播状态查询已恢复", now, dry)
+        was_live = st.data.get("live", False)
+        is_live = live == 1
+        vid, vid_m = newest(rec_dir, "*.flv")
+        xml, xml_m = newest(rec_dir, "*.xml")
+        recording = vid is not None and now - vid_m < fresh_video
+
+        if is_live and not was_live:
+            st.data.update(live=True, live_since=now, live_title=info)
+            notify(env, f"🔴 {name} 开播了", f"《{info}》\nhttps://live.bilibili.com/{room}\n"
+                   + ("录制正常 ✅" if recording else "录像文件还没开始写入，几分钟后会再检查"), dry)
+        elif not is_live and was_live:
+            since = st.data.get("live_since", now)
+            vids = session_files(rec_dir, since, "*.flv")
+            xmls = session_files(rec_dir, since, "*.xml")
+            size = sum(p.stat().st_size for p in vids if p.exists()) / 1e9
+            body = (f"《{st.data.get('live_title', '')}》时长约 {fmt_dur(now - since)}\n"
+                    f"录像 {len(vids)} 段，共 {size:.1f} GB；弹幕 {count_danmaku(xmls)} 条")
+            notify(env, f"⚪ {name} 下播了", body, dry)
+            st.data.update(live=False, live_since=None)
+            for k in ("not_recording", "danmaku_stale"):
+                st.data["alerts"].pop(k, None)
+            if cfg(env, "KIYA_AUTO_ANALYZE", "1") == "1":
+                st.save()  # 分析可能较慢，先存状态，避免下一轮重复触发
+                notify(env, f"📈 {name} 弹幕分析", run_analysis(env, rec_dir), dry)
+
+        if is_live:
+            since = st.data.get("live_since", now)
+            in_grace = now - since < grace
+            alert(env, st, "not_recording", not recording and not in_grace, "开播了但没有在录制",
+                  f"{name} 正在直播，但 {fmt_dur(fresh_video)}内没有录像写入。\n"
+                  "排查：systemctl status brec；录播姬管理界面里房间是否开了自动录制；Cookie 是否失效",
+                  "录像已恢复写入", now, dry)
+            xml_ok = xml is not None and now - xml_m < fresh_xml
+            alert(env, st, "danmaku_stale", recording and not xml_ok and not in_grace, "弹幕可能没在录",
+                  f"录像在写入，但 {fmt_dur(fresh_xml)}内弹幕文件没有更新。\n"
+                  "如果直播间本来就很安静可忽略；否则检查录播姬弹幕设置和 Cookie",
+                  "弹幕文件已恢复更新", now, dry)
+
+    # 3. 硬盘
+    try:
+        du = shutil.disk_usage(rec_dir if rec_dir.exists() else "/")
+        pct = du.used / du.total * 100
+        limit = float(cfg(env, "KIYA_DISK_ALERT_PERCENT", "80"))
+        alert(env, st, "disk", pct >= limit, "硬盘快满了",
+              f"{rec_dir} 所在磁盘已用 {pct:.0f}%，剩余 {du.free / 1e9:.1f} GB。\n写满后会漏录：检查 OSS 同步是否正常，或手动清理",
+              f"硬盘使用率已降到 {pct:.0f}%", now, dry)
+    except OSError:
+        pass
+
+    # 4. OSS 同步
+    age = sync_age_hours(Path(cfg(env, "KIYA_SYNC_LOG", "/var/log/kiya-sync.log")))
+    if age is not None:
+        limit_h = float(cfg(env, "KIYA_SYNC_STALE_HOURS", "3"))
+        alert(env, st, "sync", age > limit_h, "OSS 同步太久没成功",
+              ("同步日志里还没有成功记录" if age == float("inf") else f"上次同步成功是 {age:.1f} 小时前")
+              + "。\n排查：tail -50 /var/log/kiya-sync.log；rclone lsd oss:",
+              "OSS 同步已恢复", now, dry)
+
+    st.data["last_check"] = datetime.now().strftime("%F %T")
+    st.save()
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--test-notify", action="store_true", help="发一条测试消息，确认推送配置正确")
+    ap.add_argument("--dry-run", action="store_true", help="只打印要推送的内容，不真的推送")
+    args = ap.parse_args()
+    env = load_env()
+    if args.test_notify:
+        notify(env, "kiya 监控测试", f"推送配置正常 {datetime.now():%F %T}", args.dry_run)
+        return 0
+    return check(env, args.dry_run)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

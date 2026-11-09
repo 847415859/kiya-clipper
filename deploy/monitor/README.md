@@ -1,0 +1,79 @@
+# 监控告警
+
+`kiya_monitor.py` 每 3 分钟运行一次（cron），出问题时推送到你的微信。
+
+| 推送 | 什么时候 |
+| --- | --- |
+| 🔴 开播了 | kiya 开播，附带“录制正常”或“录像还没开始写入” |
+| ⚪ 下播了 | 本场时长、录像段数和大小、弹幕条数 |
+| 📈 弹幕分析 | 下播后自动跑弹幕分析，推送前 5 个高峰 |
+| ⚠️ 录播服务没有运行 | `brec` 服务不是 active |
+| ⚠️ 开播了但没有在录制 | 开播 4 分钟后，3 分钟内仍没有录像写入（= 正在漏录） |
+| ⚠️ 弹幕可能没在录 | 录像在写，但 15 分钟没有新弹幕（直播间很安静时可能误报） |
+| ⚠️ 硬盘快满了 | 录像目录所在磁盘使用率 ≥ 80% |
+| ⚠️ OSS 同步太久没成功 | 超过 3 小时没有成功同步 |
+| ⚠️ 查询开播状态失败 | 连续 5 次查不到 B站直播间状态 |
+| ✅ 已恢复 | 上面任一问题恢复时 |
+
+同一个问题只推一次，6 小时内未恢复会再提醒一次。
+
+## 第 1 步：选一个推送渠道，拿到密钥
+
+任选一个即可（可以同时配多个）。各家的免费额度和实名要求会变，以官网为准。
+
+- **Server酱**（推荐，最简单）：打开 sct.ftqq.com，微信扫码登录，复制 SendKey。消息推到“方糖”服务号。免费版每天条数有限，开播 / 下播 / 分析每天约 3 条，够用。
+- **PushPlus**：打开 www.pushplus.plus，微信扫码登录，复制 token。
+- **企业微信群机器人**：在企业微信群里添加机器人，复制 Webhook 地址；微信里可通过企业微信插件收到。
+- **钉钉群机器人**：安全设置选“自定义关键词”，填 `kiya`，复制 Webhook 地址。
+
+## 第 2 步：填进 .env（不在屏幕上显示）
+
+```bash
+cd /opt/kiya-clipper && git pull
+read -rsp "粘贴 SendKey 后回车: " K && echo && \
+  (grep -q '^SERVERCHAN_SENDKEY=' .env && sed -i "s|^SERVERCHAN_SENDKEY=.*|SERVERCHAN_SENDKEY=$K|" .env \
+   || echo "SERVERCHAN_SENDKEY=$K" >> .env) && unset K
+```
+
+用 PushPlus 就把两处 `SERVERCHAN_SENDKEY` 换成 `PUSHPLUS_TOKEN`；企业微信换成 `WECOM_WEBHOOK`。
+
+## 第 3 步：测试推送
+
+```bash
+python3 /opt/kiya-clipper/deploy/monitor/kiya_monitor.py --test-notify
+```
+
+手机收到“kiya 监控测试”即成功。
+
+## 第 4 步：先手动跑一次检查，再加定时任务
+
+```bash
+python3 /opt/kiya-clipper/deploy/monitor/kiya_monitor.py --dry-run   # 只打印，不推送
+crontab -e
+```
+
+在最后加一行：
+
+```
+*/3 * * * * /usr/bin/python3 /opt/kiya-clipper/deploy/monitor/kiya_monitor.py >> /var/log/kiya-monitor.log 2>&1
+```
+
+`crontab -l` 确认已加上。运行记录在 `/var/log/kiya-monitor.log`，状态文件在 `/var/lib/kiya-monitor/state.json`。
+
+## 可选配置（.env）
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `KIYA_AUTO_ANALYZE` | 1 | 下播后自动跑弹幕分析，0 关闭 |
+| `KIYA_DISK_ALERT_PERCENT` | 80 | 硬盘告警阈值（%） |
+| `KIYA_DANMAKU_STALE_SECONDS` | 900 | 多久没新弹幕算异常；直播间很安静导致误报时调大 |
+| `KIYA_SYNC_STALE_HOURS` | 3 | 多久没同步成功算异常 |
+| `KIYA_COOKIE_FILE` | /root/bili_cookies.txt | 查询开播状态被风控（412）时自动带上这份 Cookie |
+
+## 测试
+
+```bash
+cd /opt/kiya-clipper && worker/.venv/bin/python -m pytest -q deploy/monitor/test_monitor.py
+```
+
+7 个场景：一切正常不打扰、服务停止并恢复、开播到下播、开播但漏录、弹幕中断、硬盘与同步、接口连续失败。
