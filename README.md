@@ -1,0 +1,36 @@
+# kiya-clipper
+
+VTuber 直播自动切片系统。首位主播：娜由纪雅kiya（B站 UID 646830928，直播间 1724773744）。
+
+完整技术方案与开发流程见 Claude 文档《VTuber 直播切片技术方案》（“技术方案”“开发流程”两个标签页）。
+
+## 当前进度：阶段 0（准备与手工验证）
+
+| 任务 | 文件 |
+| --- | --- |
+| 服务器部署录播姬，开始录制 | [deploy/README.md](deploy/README.md) |
+| 弹幕分析：密度曲线 + 前 20 高峰 | [worker/README.md](worker/README.md) |
+| 主播合作与授权沟通 | [docs/合作邀请与授权说明.md](docs/合作邀请与授权说明.md) |
+| 评测集标注 | [eval/README.md](eval/README.md) |
+
+## 目录结构
+
+```
+kiya-clipper/
+├── backend/     # Spring Boot：主播、场次、切片、审核、任务编排（阶段 3）
+├── worker/      # Python：预处理、粗筛、转写、大模型、剪辑脚本（阶段 0 起）
+├── renderer/    # Remotion：视频模板（阶段 3）
+├── admin/       # 审核后台前端（阶段 3）
+├── schema/      # 剪辑脚本、任务消息的 JSON Schema（阶段 2）
+├── prompts/     # 版本化的大模型提示词（阶段 2）
+├── deploy/      # 部署：录播姬 docker-compose、服务器初始化
+├── eval/        # 评测集：人工标注的高光时间点、评测结果
+├── config/      # 主播配置：直播间、信号权重、弹幕词典
+└── docs/        # 合作、授权等非代码文档
+```
+
+## 约定
+
+- 密钥（API Key、云账号）只放 `.env`，不进 Git；从 `.env.example` 复制。
+- 主播配置、权重、词典放 `config/*.yaml`，进 Git。
+- 每次改权重、词典、提示词，都跑一遍评测并记入 `eval/results.csv`。

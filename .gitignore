@@ -1,0 +1,34 @@
+# 密钥
+.env
+*.pem
+
+# 录像与大文件
+*.flv
+*.mp4
+*.ts
+*.m4a
+*.wav
+rec/
+data/
+output/
+worker/output/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+
+# Java
+target/
+*.class
+.idea/
+*.iml
+
+# 系统
+.DS_Store

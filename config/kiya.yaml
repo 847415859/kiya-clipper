@@ -1,0 +1,35 @@
+# 主播配置：娜由纪雅kiya
+streamer:
+  name: 娜由纪雅kiya
+  uid: 646830928
+  room_id: 1724773744
+  live_url: https://live.bilibili.com/1724773744
+  space_url: https://space.bilibili.com/646830928
+
+# 弹幕分析参数（阶段 0 / 1）
+analysis:
+  bucket_seconds: 10          # 分桶大小
+  baseline_seconds: 300       # 滑动基线窗口：用前 5 分钟均值做对比，避免开播“打招呼”刷屏干扰
+  smooth_seconds: 30          # 平滑窗口
+  min_peak_gap_seconds: 60    # 两个高峰至少间隔，太近的合并
+  top_n: 20                   # 输出前 N 个高峰
+  danmaku_delay_seconds: 5    # 观众反应比画面慢，候选起点往前挪
+  clip_before_seconds: 30     # 候选片段：峰值前取多少秒
+  clip_after_seconds: 30      # 候选片段：峰值后取多少秒
+
+# 信号权重（只用弹幕时的版本；阶段 1 加入音频和画面后再调）
+weights:
+  density: 0.55      # 弹幕密度
+  emotion: 0.35      # 情绪词占比
+  gift: 0.10         # 礼物、SC、上舰金额
+
+# 情绪词典：命中即计入“情绪词占比”。按 VTuber 圈和 kiya 粉丝的梗持续扩充
+emotion_words:
+  laugh: [哈哈, hhh, "233", 草, 笑死, 绷, 蚌埠住, 乐, 好好笑, xswl, 笑不活]
+  surprise: ["？", "?", 啊这, 卧槽, 我草, 震惊, 离谱, 逆天, 什么]
+  hype: ["666", 牛, 好强, 帅, 高能, 名场面, 切片, 录屏, 截图]
+  cute: [可爱, awsl, 好耶, 贴贴, 嘿嘿]
+  sad: [破防, 心疼, 哭, 呜呜, 寄]
+
+# kiya 专属梗、口头禅、粉丝昵称：阶段 0 起逐步补充
+lore_words: []

@@ -1,0 +1,24 @@
+# 录播姬（BililiveRecorder）—— 阶段 0 录制
+# 用法：cd deploy/recorder && cp ../../.env.example .env && 修改 .env && docker compose up -d
+services:
+  recorder:
+    # 首次部署跑通后，建议把 latest 换成当时的具体版本号（如 2.12.0）固定下来
+    image: bililive/recorder:latest
+    container_name: brec
+    restart: always
+    # 只绑定到本机回环地址：管理界面通过 SSH 隧道访问，不对公网开放
+    ports:
+      - "127.0.0.1:2356:2356"
+    volumes:
+      - ${REC_DIR:-/data/rec}:/rec
+    environment:
+      - BREC_HTTP_BASIC_USER=${BREC_HTTP_BASIC_USER}
+      - BREC_HTTP_BASIC_PASS=${BREC_HTTP_BASIC_PASS}
+      - UMASK=022
+      - PUID=1000
+      - PGID=1000
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
