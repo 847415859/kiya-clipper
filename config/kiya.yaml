@@ -31,5 +31,17 @@ emotion_words:
   cute: [可爱, awsl, 好耶, 贴贴, 嘿嘿]
   sad: [破防, 心疼, 哭, 呜呜, 寄]
 
-# kiya 专属梗、口头禅、粉丝昵称：阶段 0 起逐步补充
-lore_words: []
+# 计入情绪词得分的 kiya 专属梗（只放“出现就说明有事发生”的词；常见称呼不要放，否则全场都在命中）
+lore_words: [做局, 禁言凶手, 律师函, 牢猫]
+
+# 主播梗百科（不参与弹幕打分）：用作 ASR 热词、大模型上下文、标题生成。详见 docs/主播档案-娜由纪雅kiya.md
+lore:
+  nicknames: [kiya, 72, 娜由纪雅, 粉毛小猫, 牢猫]
+  fan_name: ki由米
+  audience_call: 人类酱
+  world: [咪嗷岛, ko li]
+  catchphrases: [喵, 泥嚎, 空你几哇, 歌会走调但kiya不会走掉, 掉落一只双马尾]
+  persona: [猫娘, 粉色头发, 双马尾, 温柔治愈杂谈势, 窝囊势, 抽象]
+  recurring_topics: [舰长, 禁言, 做局, 旮旯给木, 钓鱼, 不怕死挑战, 翻唱]
+  # 同名 / 近名主播：标题标签写全名，检索时排除
+  not_to_confuse: [金飞龙Kiya, 芙宴璃kiya]

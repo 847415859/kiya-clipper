@@ -6,6 +6,11 @@
 
 > 这台机器在阶段 0–2 只做录制和弹幕分析；阶段 3 之后跑完整系统需要 4 核 8G。它可以一直留作专职录制机。
 
+> **实际部署记录（2026-11-09）**：服务器已换成 Ubuntu 24.04；国内服务器连不上 Docker Hub（拉镜像超时），
+> 改用录播姬命令行版 v2.20.0，装在 `/opt/brec`，用 systemd 服务 `brec` 运行（配置见 `recorder/brec.service`）。
+> 第 3、4 步的 Docker 方式保留作参考，实际按“附录：不用 Docker，直接运行录播姬”执行。
+> 服务器直连 GitHub 下载很慢，大文件在本机下载后用 `rz` 或 Xftp 上传。
+
 ---
 
 ## 第 1 步：换系统为 Ubuntu 24.04（推荐，5 分钟）
@@ -133,12 +138,19 @@ scp root@<服务器IP>:/tmp/sample.flv .
 到录播姬的 GitHub Releases 下载 Linux x64 的命令行版（CLI），解压到 `/opt/brec`，然后：
 
 ```bash
-/opt/brec/BililiveRecorder.Cli --help          # 先看一下 run 命令的参数，以实际输出为准
 /opt/brec/BililiveRecorder.Cli run --bind "http://127.0.0.1:2356" \
   --http-basic-user admin --http-basic-pass '<长随机密码>' /data/rec
 ```
 
-跑通后写成 systemd 服务（`Restart=always`），保证重启后自动运行。GitHub 下载慢时，可以先在你自己的电脑下载，再 `scp` 上传到服务器。
+看到 `Web host started.` 即成功（已在 v2.20.0 验证）。然后 `Ctrl+C`，注册为 systemd 服务：
+
+```bash
+cp /opt/kiya-clipper/deploy/recorder/brec.service /etc/systemd/system/
+nano /etc/systemd/system/brec.service      # 把 <你的密码> 换成真实密码（只改服务器上这份，仓库里保留占位符）
+systemctl daemon-reload && systemctl enable --now brec
+systemctl status brec --no-pager
+```
+GitHub 下载慢时，可以先在你自己的电脑下载，再 `scp` 上传到服务器。
 
 ## 附录：留在 CentOS Stream 10
 

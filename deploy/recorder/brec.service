@@ -1,0 +1,17 @@
+# 录播姬命令行版 systemd 服务（Docker Hub 拉不下来时用）
+# 安装：cp brec.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now brec
+# 先把下面的 <你的密码> 换成 .env 里 BREC_HTTP_BASIC_PASS 的值
+[Unit]
+Description=BililiveRecorder CLI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/brec
+ExecStart=/opt/brec/BililiveRecorder.Cli run --bind "http://127.0.0.1:2356" --http-basic-user admin --http-basic-pass "<你的密码>" /data/rec
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

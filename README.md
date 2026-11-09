@@ -12,6 +12,7 @@ VTuber 直播自动切片系统。首位主播：娜由纪雅kiya（B站 UID 646
 | 弹幕分析：密度曲线 + 前 20 高峰 | [worker/README.md](worker/README.md) |
 | 主播合作与授权沟通 | [docs/合作邀请与授权说明.md](docs/合作邀请与授权说明.md) |
 | 评测集标注 | [eval/README.md](eval/README.md) |
+| 主播档案与梗百科 | [docs/主播档案-娜由纪雅kiya.md](docs/主播档案-娜由纪雅kiya.md) |
 
 ## 目录结构
 
