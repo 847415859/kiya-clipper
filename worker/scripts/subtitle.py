@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.subtitles import (StyleError, ass_filter, build_events, font_available, get_style,  # noqa: E402
-                               load_config, lore_keywords, to_ass, to_srt)
+                               load_config, lore_keywords, to_ass, to_srt, validate_style)
 
 SAMPLE = "有没有做过什么对不起舰长的事儿啊？人类酱晚上好喵，舰长寄来了律师函！"
 
@@ -84,13 +84,23 @@ def render_preview(style: dict, out: Path, video: str | None, at: float, text: s
 
 def cmd_preview(args) -> int:
     cfg = load_config()
-    names = list(cfg.get("styles") or {}) if args.all else [args.style or cfg.get("active") or "default"]
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     kw = lore_keywords(streamer_cfg(args.config))
+    if args.style_json:                     # 后台编辑中的样式：直接给 JSON，不必先存进配置
+        try:
+            st = validate_style(json.loads(Path(args.style_json).read_text(encoding="utf-8")))
+        except (StyleError, ValueError) as e:
+            print(f"样式有误：{e}", file=sys.stderr)
+            return 1
+        out = out_dir / f"{args.name or Path(args.style_json).stem}.png"
+        render_preview(st, out, args.video, args.at, args.text, kw, cfg.get("corrections") or {})
+        print(f"  → {out}")
+        return 0
+    names = list(cfg.get("styles") or {}) if args.all else [args.style] if args.style else [None]
     for name in names:
         try:
-            _, st = get_style(name, cfg)
+            name, st = get_style(name, cfg)
         except StyleError as e:
             print(f"  {name}：配置有误，跳过：{e}")
             continue
@@ -143,6 +153,8 @@ def main() -> int:
     p = sub.add_parser("preview", help="出预览图")
     p.add_argument("--style")
     p.add_argument("--all", action="store_true")
+    p.add_argument("--style-json", help="直接给一套样式的 JSON 文件（后台预览用）")
+    p.add_argument("--name", help="配合 --style-json：输出图片名")
     p.add_argument("--video", help="用这个视频的画面做背景")
     p.add_argument("--at", type=float, default=5.0, help="取视频第几秒的画面")
     p.add_argument("--text", default=SAMPLE)

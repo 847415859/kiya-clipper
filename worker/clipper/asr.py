@@ -20,6 +20,8 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from .overrides import load_overrides
+
 PRICE_PER_SEC = {"paraformer-v2": 0.00008, "fun-asr": 0.00022}   # 元/秒，北京地域官方单价（2026-11 查询）
 DEFAULT_HOST = "https://dashscope.aliyuncs.com"
 
@@ -228,7 +230,8 @@ def _valid_hotword(text: str) -> bool:
 
 
 def build_hotwords(streamer_cfg: dict) -> list[dict]:
-    """热词 = 主播资料（昵称、粉丝名、观众称呼、世界观、口头禅、常见话题、专属梗）+ asr.hotwords 里手写的。"""
+    """热词 = asr.hotwords 里手写的 + 主播资料（昵称、粉丝名、观众称呼、世界观、口头禅、常见话题、专属梗）
+    + 后台加的（config/admin_overrides.json）。"""
     lore = streamer_cfg.get("lore") or {}
     asr = streamer_cfg.get("asr") or {}
     weight = int(asr.get("hotword_weight", 4))
@@ -242,6 +245,7 @@ def build_hotwords(streamer_cfg: dict) -> list[dict]:
         words += [(str(w), weight) for w in lore.get(k) or []]
     words += [(str(lore[k]), weight) for k in ("fan_name", "audience_call") if lore.get(k)]
     words += [(str(w), weight) for w in streamer_cfg.get("lore_words") or []]
+    words += [(str(w), weight) for w in load_overrides().get("hotwords") or [] if isinstance(w, str)]   # 后台加的
     seen, out = set(), []
     for text, w in words:
         text = text.strip()

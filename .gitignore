@@ -36,3 +36,9 @@ target/
 # 字幕字体（体积大，各自下载，见 fonts/README.md）
 fonts/*
 !fonts/README.md
+
+# 后台管理写入的覆盖配置（热词、纠错词、默认字幕样式）
+config/admin_overrides.json
+
+# 后台：前端打包产物（由 admin/ 前端构建生成）
+backend/src/main/resources/static/

@@ -1,0 +1,10 @@
+:root { --muted: #8a8f98; }
+html, body, #app { margin: 0; height: 100%; }
+body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+.page { padding: 16px 20px; }
+.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.toolbar .spacer { flex: 1; }
+.muted { color: var(--muted); font-size: 12px; }
+pre.log { background: #1e1f22; color: #d4d7dc; padding: 12px; border-radius: 6px; font-size: 12px;
+  line-height: 1.5; white-space: pre-wrap; word-break: break-all; max-height: 60vh; overflow: auto; margin: 0; }
+@media (max-width: 768px) { .page { padding: 12px; } }

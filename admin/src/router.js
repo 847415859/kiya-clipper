@@ -1,0 +1,39 @@
+import { createRouter, createWebHashHistory } from 'vue-router'
+import { ensureAuth } from './auth'
+import Layout from './views/Layout.vue'
+import Login from './views/Login.vue'
+import Sessions from './views/Sessions.vue'
+import Review from './views/Review.vue'
+import Jobs from './views/Jobs.vue'
+import Styles from './views/Styles.vue'
+import Eval from './views/Eval.vue'
+import Settings from './views/Settings.vue'
+
+// hash 路由：刷新页面不需要后端做路由回退
+const router = createRouter({
+  history: createWebHashHistory(),
+  routes: [
+    { path: '/login', component: Login, meta: { public: true } },
+    {
+      path: '/',
+      component: Layout,
+      children: [
+        { path: '', redirect: '/sessions' },
+        { path: 'sessions', component: Sessions, meta: { title: '场次' } },
+        { path: 'sessions/:name/review', component: Review, meta: { title: '审核' } },
+        { path: 'jobs', component: Jobs, meta: { title: '任务' } },
+        { path: 'styles', component: Styles, meta: { title: '字幕样式' } },
+        { path: 'eval', component: Eval, meta: { title: '评测' } },
+        { path: 'settings', component: Settings, meta: { title: '配置' } }
+      ]
+    },
+    { path: '/:pathMatch(.*)*', redirect: '/sessions' }
+  ]
+})
+
+router.beforeEach(async (to) => {
+  if (to.meta.public) return true
+  return (await ensureAuth()) ? true : { path: '/login', query: { next: to.fullPath } }
+})
+
+export default router

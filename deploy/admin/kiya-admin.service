@@ -1,0 +1,18 @@
+[Unit]
+Description=kiya-clipper 后台管理
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+# 数据库密码等放在这个文件里（chmod 600），见 deploy/admin/README.md
+EnvironmentFile=/etc/kiya-admin.env
+Environment=HOME=/root
+WorkingDirectory=/opt/kiya-admin
+# 2 核 2G：堆最多 256M，串行 GC 最省内存
+ExecStart=/usr/bin/java -Xms64m -Xmx256m -XX:MaxMetaspaceSize=160m -XX:+UseSerialGC -Xss512k -Dfile.encoding=UTF-8 -jar /opt/kiya-admin/kiya-admin.jar
+Restart=on-failure
+RestartSec=10
+User=root
+
+[Install]
+WantedBy=multi-user.target

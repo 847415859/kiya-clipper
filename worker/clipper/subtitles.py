@@ -14,6 +14,8 @@ from pathlib import Path
 
 import yaml
 
+from .overrides import load_overrides
+
 REPO = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = REPO / "config" / "schema" / "subtitle_style.schema.json"
 CONFIG_PATH = REPO / "config" / "subtitles.yaml"
@@ -69,11 +71,25 @@ def validate_style(raw: dict, schema: dict | None = None) -> dict:
 
 
 def load_config(path: Path | None = None) -> dict:
-    return yaml.safe_load(Path(path or CONFIG_PATH).read_text(encoding="utf-8")) or {}
+    """读 config/subtitles.yaml；读默认文件时合并后台的覆盖配置（纠错词、默认样式）。"""
+    cfg = yaml.safe_load(Path(path or CONFIG_PATH).read_text(encoding="utf-8")) or {}
+    if path is None:
+        ov = load_overrides()
+        if isinstance(ov.get("corrections"), dict):
+            cfg["corrections"] = {**(cfg.get("corrections") or {}), **ov["corrections"]}
+        if isinstance(ov.get("subtitle_style"), dict):
+            cfg["_admin_style"] = (str(ov.get("subtitle_style_name") or "admin"), ov["subtitle_style"])
+    return cfg
 
 
 def get_style(name: str | None = None, cfg: dict | None = None) -> tuple[str, dict]:
     cfg = cfg if cfg is not None else load_config()
+    if not name and cfg.get("_admin_style"):          # 后台设了默认样式：不指定样式时用它
+        aname, raw = cfg["_admin_style"]
+        try:
+            return aname, validate_style(raw)
+        except StyleError as e:
+            raise StyleError(f"后台默认样式 {aname}：{e}") from None
     styles = cfg.get("styles") or {}
     name = name or cfg.get("active") or "default"
     if name not in styles:
