@@ -159,6 +159,31 @@ python scripts/screen.py /data/rec --latest                 # 再粗筛一次，
 - 转写过的场次：`peaks.csv` 多一列“主播原话”；标注页显示原话，点一句跳到那里；`try_llm.py --peaks` 自动把原话带进提示词。
 - 录像 2 天后会被同步脚本移走，要在下播后尽快转写。验证完效果后，在 `.env` 加 `KIYA_ASR=1`，监控脚本下播后会自动“转写 → 粗筛”。
 
+## 字幕
+
+场次转写过（有 `output/<场次>/transcript.json`）时，`cut.py` 剪切会自动把主播原话烧录进视频，并在旁边生成同名 `.srt`（可作为 B 站 CC 字幕上传）和 `.ass`。标注页的“剪切”按钮也一样。
+
+**第一次用先装字体**（不装的话中文会变成方块）：
+
+```bash
+apt install -y fonts-noto-cjk          # 思源黑体，默认样式用
+# 综艺快乐体（kuaile 样式）见 fonts/README.md
+python scripts/subtitle.py styles      # 列出样式，检查字体是否就绪
+```
+
+**样式**在 `config/subtitles.yaml` 里，现在有 4 套：`default` 白字黑边、`kuaile` 综艺快乐体、`box` 半透明底框、`karaoke` 逐字变色。主播昵称、粉丝名、专属梗（来自 `config/kiya.yaml`）会自动换色。每个字段的含义、取值范围、默认值都在 `config/schema/subtitle_style.schema.json`，以后后台管理就用这个 schema 生成编辑表单，再通过 `cut.py --sub-style-json` 下发样式，worker 这边不用改。
+
+```bash
+python scripts/subtitle.py preview --all                                   # 每套样式一张预览图 → output/sub_preview/
+python scripts/subtitle.py preview --style kuaile --video output/<场次>/clips/01_xxx.mp4 --at 12   # 用真实画面预览
+python scripts/cut.py output/<场次>/candidates.json --sub-style kuaile      # 用指定样式剪
+python scripts/cut.py output/<场次>/candidates.json --no-subs               # 不要字幕
+python scripts/subtitle.py make output/<场次>/candidates.json              # 只重新生成 .srt/.ass，不重剪视频
+```
+
+- **错字修正**：识别固定出错的词（比如“发件礼”→“发舰礼”）加到 `config/subtitles.yaml` 的 `corrections`，下次剪切生效。
+- **已经剪好的片段**要加字幕或换样式，重新运行 `cut.py` 就会覆盖。
+
 ## 调参（config/kiya.yaml）
 
 - **情绪词**：看 `peaks.csv` 的“高频弹幕”列，把 kiya 粉丝常刷的梗、口头禅加进 `emotion_words` 或 `lore_words`。
@@ -182,6 +207,8 @@ worker/
 ├── scripts/review.py    # 网页标注工具（SSH 隧道访问）
 ├── scripts/analyze_danmaku.py   # 命令行入口：分场、输出 CSV / 曲线图 / 剪切脚本
 ├── scripts/try_llm.py           # 试用百炼多模态大模型判断片段（阶段 0）
+├── clipper/subtitles.py # 字幕：样式校验（按 schema）、分条、ASS/SRT 生成、烧录参数
+├── scripts/subtitle.py  # 字幕样式列表 / 预览图 / 只生成字幕文件
 ├── clipper/asr.py       # 百炼录音文件识别：抽音频、OSS 签名链接、异步任务、整场时间轴
 ├── scripts/transcribe.py        # 整场语音转写 → transcript.json
 ├── scripts/try_asr.py           # 试用百炼语音转写（Paraformer / Fun-ASR），不需要 GPU

@@ -1,0 +1,53 @@
+# 字幕配置：cut.py 剪切时自动把主播原话（transcribe.py 的转写结果）烧录进视频。
+#
+# 每套样式的字段、取值范围、默认值都定义在 config/schema/subtitle_style.schema.json：
+#   - 这里没写的字段用 schema 里的默认值
+#   - 以后的后台管理直接用这个 schema 生成编辑表单、校验，再把样式存进数据库；worker 读取的结构不变
+# 调样式时先出预览图（几秒钟），满意了再剪：
+#   python scripts/subtitle.py preview --style kuaile
+#   python scripts/subtitle.py preview --all --video output/<场次>/clips/01_xxx.mp4 --at 12
+
+active: default            # cut.py 默认用的样式，也可以 cut.py --sub-style kuaile 临时指定
+
+# 语音识别常见错字修正（所有样式共用）。看 transcript.txt 发现固定的错就加在这里
+corrections:
+  发件礼: 发舰礼
+  敬见礼: 寄舰礼
+  Qq堂: QQ糖
+  ohmygod: Oh my god
+
+styles:
+  default:
+    name: 标准白字黑边
+    font: Noto Sans CJK SC
+    font_size: 64
+    outline: 4
+
+  kuaile:
+    name: 综艺快乐体
+    font: ZCOOL KuaiLe          # 站酷快乐体（开源免费可商用），需先下载到 fonts/，见 worker/README.md
+    font_size: 72
+    color: "#FFFFFF"
+    outline_color: "#E0457B"
+    outline: 6
+    shadow: 3
+    shadow_color: "#00000090"
+    highlight_color: "#FFE14D"
+
+  box:
+    name: 半透明底框
+    font: Noto Sans CJK SC
+    font_size: 58
+    box: true
+    box_color: "#000000A0"
+    highlight_color: "#FF9FC8"
+
+  karaoke:
+    name: 逐字变色
+    font: Noto Sans CJK SC
+    font_size: 66
+    color: "#FFFFFF"
+    outline_color: "#3A1C40"
+    outline: 5
+    karaoke: true
+    karaoke_color: "#FF7EB6"

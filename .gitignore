@@ -32,3 +32,7 @@ target/
 
 # 系统
 .DS_Store
+
+# 字幕字体（体积大，各自下载，见 fonts/README.md）
+fonts/*
+!fonts/README.md
