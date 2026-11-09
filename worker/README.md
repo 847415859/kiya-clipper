@@ -147,6 +147,18 @@ python scripts/try_asr.py /data/rec/<录像>.flv --start 600 --end 900
 
 结果在 `output/asr_trials/<时间>/`：`<模型>.txt`（每句一行带时间）、`<模型>.json`（含词级时间戳）。重点看：人名 / 梗（kiya、ki由米、人类酱、律师函…）认得对不对，笑声、尖叫、BGM 下的句子有没有漏。专有名词错得多，阶段 2 再加热词表。
 
+### 整场转写（对比完选定模型后）
+
+```bash
+python scripts/transcribe.py /data/rec --latest             # 最近一场 → output/<场次>/transcript.json、transcript.txt
+python scripts/transcribe.py /data/rec --latest --dry-run   # 只算时长和费用
+python scripts/screen.py /data/rec --latest                 # 再粗筛一次，候选带上主播原话
+```
+
+- 模型在 `config/kiya.yaml` 的 `asr.model` 里选；一场的所有分段放在一个识别任务里，时间自动拼成整场时间轴。
+- 转写过的场次：`peaks.csv` 多一列“主播原话”；标注页显示原话，点一句跳到那里；`try_llm.py --peaks` 自动把原话带进提示词。
+- 录像 2 天后会被同步脚本移走，要在下播后尽快转写。验证完效果后，在 `.env` 加 `KIYA_ASR=1`，监控脚本下播后会自动“转写 → 粗筛”。
+
 ## 调参（config/kiya.yaml）
 
 - **情绪词**：看 `peaks.csv` 的“高频弹幕”列，把 kiya 粉丝常刷的梗、口头禅加进 `emotion_words` 或 `lore_words`。
@@ -170,6 +182,8 @@ worker/
 ├── scripts/review.py    # 网页标注工具（SSH 隧道访问）
 ├── scripts/analyze_danmaku.py   # 命令行入口：分场、输出 CSV / 曲线图 / 剪切脚本
 ├── scripts/try_llm.py           # 试用百炼多模态大模型判断片段（阶段 0）
+├── clipper/asr.py       # 百炼录音文件识别：抽音频、OSS 签名链接、异步任务、整场时间轴
+├── scripts/transcribe.py        # 整场语音转写 → transcript.json
 ├── scripts/try_asr.py           # 试用百炼语音转写（Paraformer / Fun-ASR），不需要 GPU
-└── tests/               # 合成弹幕 + 合成录像的端到端测试，不需要真实录像（约 40 秒）
+└── tests/               # 合成弹幕 + 合成录像 + 假百炼接口的端到端测试，不需要真实录像（约 1 分钟）
 ```

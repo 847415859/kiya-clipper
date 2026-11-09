@@ -217,13 +217,26 @@ def fmt_dur(sec: float) -> str:
 
 
 def run_analysis(env: dict, rec_dir: Path) -> str:
-    """下播后自动粗筛（阶段 1：弹幕 + 音频 + 画面），返回前 5 个候选的摘要。"""
+    """下播后自动粗筛（阶段 1：弹幕 + 音频 + 画面），返回前 5 个候选的摘要。
+    KIYA_ASR=1 时先做整场语音转写（百炼，每场约 ¥1–3），候选会带上主播原话。"""
     worker = REPO / "worker"
     py = worker / ".venv" / "bin" / "python"
     if not py.exists():
         return "（worker/.venv 不存在，跳过自动分析）"
     screen = worker / "scripts" / "screen.py"
     script = screen if screen.exists() else worker / "scripts" / "analyze_danmaku.py"
+    asr_note = ""
+    transcribe = worker / "scripts" / "transcribe.py"
+    if cfg(env, "KIYA_ASR", "0") == "1" and transcribe.exists():
+        # 先转写，粗筛时候选就能带上主播原话；转写失败不影响粗筛
+        try:
+            r = subprocess.run([str(py), str(transcribe), str(rec_dir), "--latest", "--out", str(worker / "output")],
+                               capture_output=True, text=True, timeout=int(cfg(env, "KIYA_ASR_TIMEOUT", "3600")))
+            done = next((l.strip() for l in r.stdout.splitlines() if "完成：" in l or "跳过" in l), "")
+            asr_note = f"语音转写：{done}" if r.returncode == 0 else \
+                "语音转写失败：" + ((r.stderr or r.stdout).strip().splitlines() or ["未知错误"])[-1][:200]
+        except Exception as e:
+            asr_note = f"语音转写失败：{e}"
     args = [str(py), str(script), str(rec_dir), "--latest", "--top", "20", "--out", str(worker / "output")]
     if cfg(env, "KIYA_ANALYZE_NO_VIDEO", "0") == "1" and script == screen:
         args.append("--no-video")
@@ -238,8 +251,8 @@ def run_analysis(env: dict, rec_dir: Path) -> str:
     head = next((l.strip() for l in out if l.startswith("==")), "")
     extra = next((l.strip() for l in out if "使用信号" in l), "")
     if not tops:
-        return "自动分析完成，但没有找到高峰\n" + r.stdout[-300:]
-    return "\n".join(x for x in [head, extra, "前 5 个候选："] + tops if x)
+        return "\n".join(x for x in [asr_note, "自动分析完成，但没有找到高峰", r.stdout[-300:]] if x)
+    return "\n".join(x for x in [head, extra, asr_note, "前 5 个候选："] + tops if x)
 
 
 # ---------------------------------------------------------------- 主流程

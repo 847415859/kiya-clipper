@@ -73,7 +73,7 @@ class Store:
             c["clip"] = mp4[0].name if mp4 else None
             c["flv_only"] = bool(flv) and not mp4
         return {"session": session, "delay": data.get("delay_seconds"), "signals": data.get("signals_used"),
-                "candidates": data["candidates"]}
+                "transcript": data.get("transcript"), "candidates": data["candidates"]}
 
     def save_mark(self, session: str, rank: int, mark: str | None, note: str | None) -> None:
         with LOCK:
@@ -237,6 +237,8 @@ section{padding:16px;overflow:auto}video{width:100%;max-height:58vh;background:#
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}.row input[type=text]{flex:1;min-width:200px}
 .empty{padding:40px;border:1px dashed var(--line);border-radius:8px;text-align:center;color:var(--muted)}
 .keys{color:var(--muted);font-size:12px}.saved{color:var(--yes);font-size:12px;min-width:48px}
+.speech{margin:10px 0;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);max-height:220px;overflow:auto}
+.sl{padding:2px 4px;border-radius:4px;cursor:pointer}.sl:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}.st{color:var(--muted);font-size:12px;margin-right:8px;font-variant-numeric:tabular-nums}
 details img{max-width:100%;border-radius:6px;margin-top:8px;background:#fff}
 </style></head><body>
 <header><h1>kiya 切片标注</h1><select id="sess"></select><span class="stat" id="stat"></span>
@@ -258,18 +260,23 @@ function stats(){const c=data.candidates,d=c.filter(x=>x.mark).length,y=c.filter
 function renderList(){const L=$('#list');L.innerHTML='';data.candidates.forEach((c,i)=>{const d=document.createElement('div');
  d.className='item'+(i===cur?' cur':'');d.innerHTML=`<span class="r">#${c.rank}</span><span>${fmt(c.t)}</span><span class="badge ${c.mark}">${c.mark==='Y'?'有趣':c.mark==='N'?'不有趣':(c.clip?'未标':'未剪')}</span>`;
  d.onclick=()=>{cur=i;renderList();show()};L.appendChild(d)});stats();const el=L.children[cur];if(el)el.scrollIntoView({block:'nearest'})}
+function esc(x){return String(x).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
+function speechHtml(c){if(!c.speech)return '';if(!c.speech.length)return '<div class="speech"><div class="keys">主播原话：这段没有识别到说话</div></div>';
+ return '<div class="speech"><div class="keys">主播原话（点一句跳到那里；语音识别可能有错字）</div>'+c.speech.map(x=>{const r=Math.max(0,x.t0-c.clip_start);
+ return `<div class="sl" data-t="${r}"><span class="st">${Math.floor(r/60)}:${String(Math.floor(r%60)).padStart(2,'0')}</span>${esc(x.text)}</div>`}).join('')+'</div>'}
 function show(){const c=data.candidates[cur];if(!c)return;const top=Object.entries(c.contrib||{}).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,v])=>`${k} ${v>0?'+':''}${v}`).join('，');
  const video=c.clip?`<video id="v" controls autoplay preload="auto" src="/clip/${encodeURIComponent(S)}/${encodeURIComponent(c.clip)}"></video>`
  :`<div class="empty">${c.flv_only?'这个片段是用 --fast 剪的 FLV，浏览器播不了，需要重新剪成 MP4。<br><br>':'这个片段还没剪。<br><br>'}<button id="cutbtn">剪切这个片段（720p）</button> <button id="cutbtn480">剪成 480p（加载更快）</button><div id="cutlog" class="keys"></div></div>`;
  $('#view').innerHTML=`${video}
  <div class="row"><button class="yes ${c.mark==='Y'?'on':''}" id="by">Y 有趣</button><button class="no ${c.mark==='N'?'on':''}" id="bn">N 不有趣</button>
  <button id="bc">清除</button><button id="bp">← 上一个</button><button id="bx">下一个 →</button><span class="saved" id="saved"></span></div>
- <div class="row"><input type="text" id="note" placeholder="备注：发生了什么 / 为什么不行（例如：舰长互动，笑点在 0:35；边界太早）" value="${(c.note||'').replace(/"/g,'&quot;')}"></div>
+ <div class="row"><input type="text" id="note" placeholder="备注：发生了什么 / 为什么不行（例如：舰长互动，笑点在 0:35；边界太早）" value="${esc(c.note||'')}"></div>
  <div class="meta"><span>序号</span><b>#${c.rank} / ${data.candidates.length}</b><span>高峰时间</span><b>${fmt(c.t)}（片段 ${fmt(c.clip_start)}–${fmt(c.clip_end)}）</b>
  <span>分数</span><b>${c.score.toFixed(2)}</b><span>主要信号</span><b>${top||'—'}</b><span>弹幕</span><b>${Math.round(c.danmaku_per_min)} 条/分，情绪词 ${c.emotion_hits}，礼物 ${Math.round(c.gift_value)}</b>
- <span>高频弹幕</span><b>${(c.top_danmaku||[]).join(' | ')||'—'}</b><span>本场</span><b>信号 ${data.signals}；弹幕延迟 ${data.delay} 秒</b></div>
- <details><summary>本场信号曲线</summary><img src="/curve/${encodeURIComponent(S)}" alt="信号曲线"></details>`;
+ <span>高频弹幕</span><b>${esc((c.top_danmaku||[]).join(' | '))||'—'}</b><span>本场</span><b>信号 ${data.signals}；弹幕延迟 ${data.delay} 秒</b></div>
+ ${speechHtml(c)}<details><summary>本场信号曲线</summary><img src="/curve/${encodeURIComponent(S)}" alt="信号曲线"></details>`;
  $('#by').onclick=()=>mark('Y');$('#bn').onclick=()=>mark('N');$('#bc').onclick=()=>mark('');$('#bp').onclick=()=>go(-1);$('#bx').onclick=()=>go(1);
+ document.querySelectorAll('.sl').forEach(el=>el.onclick=()=>{const v=$('#v');if(v){v.currentTime=+el.dataset.t;v.play()}});
  const n=$('#note');n.onchange=()=>saveNote(n.value);n.onkeydown=e=>{if(e.key==='Enter'){n.blur()}e.stopPropagation()};
  if($('#cutbtn')){$('#cutbtn').onclick=()=>cut(720);$('#cutbtn480').onclick=()=>cut(480)}}
 async function mark(m){const c=data.candidates[cur];const r=await api('/api/mark',{session:S,rank:c.rank,mark:m});if(!r.ok){alertMsg(r.error);return}

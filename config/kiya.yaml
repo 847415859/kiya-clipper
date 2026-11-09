@@ -27,6 +27,12 @@ weights:
   audio: 0.20        # 响度突增（相对前 5 分钟，dB）
   scene: 0.10        # 画面变化（关键帧差异）
 
+# 语音转写（阿里云百炼录音文件识别，不需要 GPU）。scripts/transcribe.py 使用
+asr:
+  model: paraformer-v2         # paraformer-v2（≈¥1.15/4 小时）或 fun-asr（≈¥3.17/4 小时），按 try_asr.py 对比结果选
+  language_hints: [zh, en, ja] # 仅 paraformer-v2 生效
+  vocabulary_id: ""            # 热词表 ID（阶段 2 用 lore 里的名字和梗创建后填这里）
+
 # 情绪词典：命中即计入“情绪词占比”。按 VTuber 圈和 kiya 粉丝的梗持续扩充
 emotion_words:
   laugh: [哈哈, hhh, "233", 草, 笑死, 绷, 蚌埠住, 乐, 好好笑, xswl, 笑不活]

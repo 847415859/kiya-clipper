@@ -13,6 +13,7 @@
   candidates.json   候选列表（含各信号贡献、弹幕延迟），供 cut.py / evaluate.py / try_llm.py 使用
   peaks.csv         同上的表格版，最后两列“是否有趣(Y/N)”“备注”给你人工标注
   curve.png         综合分数 + 各信号曲线，高峰标了序号
+如果已经用 transcribe.py 转写过（output/<场次>/transcript.json），每个候选会附上片段内的主播原话。
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from clipper.asr import format_speech, load_transcript, speech_between  # noqa: E402
 from clipper.danmaku import Segment, all_events  # noqa: E402
 from clipper.media import extract_session, load_features, save_features  # noqa: E402
 from clipper.peaks import find_top_peaks, hhmmss  # noqa: E402
@@ -65,22 +67,33 @@ def plot(sig: dict, peaks, title: str, path: Path) -> None:
 
 def write_outputs(name: str, segs: list[Segment], peaks, sig: dict, out_dir: Path, cfg: dict, used: str) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
+    tr = load_transcript(out_dir / "transcript.json")
+    sents = tr["sentences"] if tr else []
+    cands = []
+    for p in peaks:
+        d = p.to_dict()
+        if tr:
+            d["speech"] = [{"t0": s["t0"], "t1": s["t1"], "text": s["text"]}
+                           for s in speech_between(sents, p.clip_start, p.clip_end)]
+        cands.append(d)
     data = {
         "session": name, "signals_used": used, "delay_seconds": sig["delay"], "delay_note": sig["delay_note"],
         "weights": sig["weights"], "generated_at": time.strftime("%F %T"),
+        "transcript": tr["model"] if tr else None,
         "segments": [{"video": str(s.video_path), "offset": s.offset} for s in segs],
-        "candidates": [p.to_dict() for p in peaks],
+        "candidates": cands,
     }
     (out_dir / "candidates.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     with open(out_dir / "peaks.csv", "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(["序号", "高峰时间", "片段起", "片段止", "分数", "弹幕/分钟", "情绪词", "礼物价值",
-                    "主要信号", "高频弹幕", "视频文件", "文件内起点秒", "是否有趣(Y/N)", "备注"])
-        for p in peaks:
+                    "主要信号", "高频弹幕", "主播原话", "视频文件", "文件内起点秒", "是否有趣(Y/N)", "备注"])
+        for p, d in zip(peaks, cands):
             main = " ".join(f"{k}{v:+.1f}" for k, v in sorted(p.contrib.items(), key=lambda kv: -kv[1])[:2])
+            speech = format_speech(d.get("speech", []), p.clip_start, limit=400).replace("\n", " ")
             w.writerow([p.rank, hhmmss(p.t), hhmmss(p.clip_start), hhmmss(p.clip_end), f"{p.score:.2f}",
                         f"{p.danmaku_per_min:.0f}", p.emotion_hits, f"{p.gift_value:.0f}", main,
-                        " | ".join(p.top_danmaku), segs[p.file_index].video_path.name, f"{p.local_start:.1f}", "", ""])
+                        " | ".join(p.top_danmaku), speech, segs[p.file_index].video_path.name, f"{p.local_start:.1f}", "", ""])
     plot(sig, peaks, name, out_dir / "curve.png")
 
 
@@ -132,6 +145,8 @@ def main() -> int:
         peaks, sig = find_top_peaks(events, segs, cfg, feats)
         used = "+".join(sig["weights"].keys())
         write_outputs(name, segs, peaks, sig, out_dir, cfg, used)
+        if (out_dir / "transcript.json").exists():
+            print("  已附上主播原话（transcript.json）")
         print(f"  使用信号：{used}；弹幕延迟 {sig['delay']:.0f} 秒（{sig['delay_note']}）")
         for p in peaks:
             main = " ".join(f"{k}{v:+.1f}" for k, v in sorted(p.contrib.items(), key=lambda kv: -kv[1])[:2])

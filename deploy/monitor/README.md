@@ -67,6 +67,8 @@ crontab -e
 | `KIYA_AUTO_ANALYZE` | 1 | 下播后自动跑粗筛，0 关闭 |
 | `KIYA_ANALYZE_NO_VIDEO` | 0 | 1 = 自动粗筛时跳过画面特征（更快） |
 | `KIYA_ANALYZE_TIMEOUT` | 1800 | 自动粗筛超时秒数 |
+| `KIYA_ASR` | 0 | 1 = 下播后先做整场语音转写（百炼，每场约 ¥1–3），候选带上主播原话。`try_asr.py` 效果验证过再打开 |
+| `KIYA_ASR_TIMEOUT` | 3600 | 语音转写超时秒数 |
 | `KIYA_DISK_ALERT_PERCENT` | 80 | 硬盘告警阈值（%） |
 | `KIYA_DANMAKU_STALE_SECONDS` | 900 | 多久没新弹幕算异常；直播间很安静导致误报时调大 |
 | `KIYA_SYNC_STALE_HOURS` | 3 | 多久没同步成功算异常 |

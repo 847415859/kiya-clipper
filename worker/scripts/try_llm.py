@@ -11,7 +11,7 @@
   # 3) 还没录到直播时：用任意几张截图试
   python scripts/try_llm.py --images a.jpg b.jpg --danmaku "哈哈哈 | 草 | ？？？"
 
-可选：--transcript "主播说的话"（阶段 2 会由语音转写自动填）、--model、--dry-run（只抽帧不调用）。
+可选：--transcript "主播说的话"（--peaks 模式下，转写过的场次会自动带上）、--model、--dry-run（只抽帧不调用）。
 API Key 从环境变量 DASHSCOPE_API_KEY 或仓库根目录 .env 读取，不要写进代码或命令行历史。
 每次结果保存到 output/llm_trials/，方便比较不同模型和提示词。
 """
@@ -99,7 +99,16 @@ def from_peaks(csv_path: Path, rank: int, rec_dir: Path) -> dict:
     to_sec = lambda s: sum(int(x) * k for x, k in zip(s.split(":"), (3600, 60, 1)))
     start = float(row["文件内起点秒"])
     dur = to_sec(row["片段止"]) - to_sec(row["片段起"])
-    return {"video": matches[0], "start": start, "end": start + dur,
+    transcript = ""
+    cj = csv_path.parent / "candidates.json"
+    if cj.exists():   # transcribe.py 转写过的场次，screen.py 会把片段内的主播原话写进 candidates.json
+        c = next((c for c in json.loads(cj.read_text(encoding="utf-8")).get("candidates", [])
+                  if c.get("rank") == rank), None)
+        if c and c.get("speech"):
+            sys.path.insert(0, str(ROOT))
+            from clipper.asr import format_speech
+            transcript = format_speech(c["speech"], c["clip_start"])
+    return {"video": matches[0], "start": start, "end": start + dur, "transcript": transcript,
             "danmaku": row["高频弹幕"], "label": f"{csv_path.parent.name} #{rank} {row['高峰时间']}"}
 
 
@@ -120,7 +129,7 @@ def build_messages(cfg: dict, images: list[Path], danmaku: str, transcript: str,
         f"【主播资料】\n{profile}\n\n"
         f"【片段信息】\n共 {len(images)} 张画面截图，{timing}。\n"
         f"片段期间刷得最多的弹幕：{danmaku or '（无）'}\n"
-        f"主播原话：{transcript or '（暂无，阶段 2 接入语音转写后提供）'}\n\n"
+        f"主播原话（方括号是相对片段开头的秒数，语音识别可能有错字）：\n{transcript or '（暂无）'}\n\n"
         f"{OUTPUT_SPEC}"
     )
     content = []
@@ -198,6 +207,7 @@ def main() -> int:
         if args.peaks:
             info = from_peaks(Path(args.peaks), args.rank, Path(args.rec_dir))
             danmaku = danmaku or info["danmaku"]
+            args.transcript = args.transcript or info["transcript"]
             label = info["label"]
         else:
             if args.start is None or args.end is None:
