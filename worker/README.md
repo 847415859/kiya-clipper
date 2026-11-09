@@ -20,6 +20,7 @@ python scripts/cut.py output/<场次>/candidates.json --ranks 1 2 3      # 只�
 # 3. 人工标注后评测，并记录这次改动
 python scripts/evaluate.py
 python scripts/evaluate.py --log "情绪词加了草和绷"
+python scripts/evaluate.py --sweep          # 按标注试不同分数线，给出建议值
 ```
 
 | 输出（output/<场次>/） | 说明 |
@@ -34,7 +35,9 @@ python scripts/evaluate.py --log "情绪词加了草和绷"
 
 **弹幕延迟**：观众打字比画面慢几秒。有音频时自动用“响度起势 vs 弹幕起势”的互相关估计（终端会显示“弹幕延迟 X 秒（自动估计）”），不可靠时退回 `danmaku_delay_seconds`。
 
-**标注与评测**：把 `peaks.csv` 的“是否有趣”填好后复制到 `eval/reviews/<场次>.csv`，或者在 `eval/annotations.csv` 里手写有趣片段的起止时间；`evaluate.py` 会把两者合并作为标准答案。阶段 1 验收：3 场以上 Top10 命中率 ≥ 50%。
+**分数线，不硬凑**：`top_n` 只是上限；`analysis.min_score` 设了以后，低于分数线的高峰不进候选、不剪、不送审（记在 `candidates.json` 的 `below_threshold` 里备查，曲线图上是灰色 ×，红虚线是分数线）。一场没有片段过线时就是 0 个，监控推送“不用审核”。分数线用 `evaluate.py --sweep` 按你的标注定：它列出每条线送审几个、保住几个有趣片段，并建议一个保住全部有趣片段的值；攒到 3 场以上再定一次。
+
+**标注与评测**：标注页标好的结果在 `eval/reviews/<场次>.csv`；审核之外漏掉的有趣片段手写到 `eval/annotations.csv`（可以扫一遍 `transcript.txt` 找）。`evaluate.py` 把两者合并作为标准答案，输出送审数、精确率（送审里有趣的比例）、召回率（有趣片段被找到的比例）。阶段 1 验收：3 场以上召回率 ≥ 90%、精确率 ≥ 40%。
 
 **下播后自动运行**：监控脚本在下播后会自动跑 `screen.py`，把前 5 个候选推到微信。
 

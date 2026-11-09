@@ -7,6 +7,7 @@
 期望：前 3 名是三个真高光；弹幕延迟自动估计为约 7 秒；剪切、评测都能跑通。
 需要 ffmpeg；整个测试约 30 秒。
 """
+import csv
 import json
 import shutil
 import subprocess
@@ -134,3 +135,43 @@ def test_evaluate(screened, tmp_path):
                         "--annotations", str(ann), "--reviews", str(reviews)], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "3/3 = 100%" in r.stdout          # 召回率：3 个真高光都被覆盖
+
+
+def test_min_score_no_padding(screened, session, tmp_path):
+    """分数线：只留过线的候选，不硬凑；全都不过线时候选为空，剪切直接跳过。"""
+    d, _ = screened
+    subprocess.run([sys.executable, str(ROOT / "scripts" / "screen.py"), str(session.parent), "--latest",
+                    "--out", str(d.parent), "--top", "10"], check=True, capture_output=True)
+    scores = [c["score"] for c in json.loads((d / "candidates.json").read_text(encoding="utf-8"))["candidates"]]
+    line = (scores[2] + scores[3]) / 2           # 前 3 个是真高光，线划在第 3、4 名之间
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "screen.py"), str(session.parent), "--latest",
+                        "--out", str(d.parent), "--top", "10", "--min-score", f"{line:.4f}"], capture_output=True, text=True)
+    assert r.returncode == 0 and "3 个过线" in r.stdout, r.stdout + r.stderr
+    data = json.loads((d / "candidates.json").read_text(encoding="utf-8"))
+    assert [c["rank"] for c in data["candidates"]] == [1, 2, 3]
+    assert len(data["below_threshold"]) == 7 and all(b["score"] < line for b in data["below_threshold"])
+    with open(d / "peaks.csv", encoding="utf-8-sig") as f:
+        assert len(list(csv.DictReader(f))) == 3
+
+    # 标注：前 3 个 Y，其余 N → --sweep 建议的分数线保住 3 个有趣、少看 7 个
+    reviews = tmp_path / "reviews"
+    reviews.mkdir()
+    rows = [["序号", "片段起", "片段止", "分数", "是否有趣(Y/N)"]]
+    for i, s in enumerate(scores, 1):
+        rows.append([i, "00:00:00", "00:00:10", f"{s:.2f}", "Y" if i <= 3 else "N"])
+    with open(reviews / "20261110-2000.csv", "w", newline="", encoding="utf-8-sig") as f:
+        csv.writer(f).writerows(rows)
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "evaluate.py"), "--sweep", "--out", str(d.parent),
+                        "--annotations", str(tmp_path / "none.csv"), "--reviews", str(reviews)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0 and "建议分数线" in r.stdout and "保住全部 3 个有趣片段" in r.stdout, r.stdout + r.stderr
+    rec = float(r.stdout.split("建议分数线：")[1].split("（")[0])
+    assert scores[3] < rec + 0.5 and rec <= scores[2]
+
+    # 线划得比最高分还高：没有候选，提示不用审核，剪切也不报错
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "screen.py"), str(session.parent), "--latest",
+                        "--out", str(d.parent), "--top", "10", "--min-score", "999"], capture_output=True, text=True)
+    assert r.returncode == 0 and "没有达到分数线" in r.stdout
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "cut.py"), str(d / "candidates.json")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0 and "没有要剪的候选" in r.stdout

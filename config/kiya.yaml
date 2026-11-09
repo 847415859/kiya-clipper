@@ -12,7 +12,8 @@ analysis:
   baseline_seconds: 300       # 滑动基线窗口：用前 5 分钟均值做对比，避免开播“打招呼”刷屏干扰
   smooth_seconds: 30          # 平滑窗口
   min_peak_gap_seconds: 60    # 两个高峰至少间隔，太近的合并
-  top_n: 20                   # 输出前 N 个高峰
+  top_n: 20                   # 最多输出几个候选（只是上限，不会为了凑数硬塞）
+  min_score: null             # 分数线：低于它的高峰不剪、不送审。用 evaluate.py --sweep 按标注结果定，null = 不设线
   danmaku_delay_seconds: 5    # 观众反应比画面慢；delay_mode=auto 且有音频时自动估计，否则用这个值
   delay_mode: auto            # auto：用弹幕热度与响度的互相关估计；fixed：固定用上面的值
   delay_range_seconds: [1, 15]

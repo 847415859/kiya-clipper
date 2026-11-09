@@ -264,7 +264,7 @@ function esc(x){return String(x).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;'
 function speechHtml(c){if(!c.speech)return '';if(!c.speech.length)return '<div class="speech"><div class="keys">主播原话：这段没有识别到说话</div></div>';
  return '<div class="speech"><div class="keys">主播原话（点一句跳到那里；语音识别可能有错字）</div>'+c.speech.map(x=>{const r=Math.max(0,x.t0-c.clip_start);
  return `<div class="sl" data-t="${r}"><span class="st">${Math.floor(r/60)}:${String(Math.floor(r%60)).padStart(2,'0')}</span>${esc(x.text)}</div>`}).join('')+'</div>'}
-function show(){const c=data.candidates[cur];if(!c)return;const top=Object.entries(c.contrib||{}).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,v])=>`${k} ${v>0?'+':''}${v}`).join('，');
+function show(){const c=data.candidates[cur];if(!c){$('#view').innerHTML='<div class="empty">这场没有达到分数线的片段，不用审核。</div>';return}const top=Object.entries(c.contrib||{}).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,v])=>`${k} ${v>0?'+':''}${v}`).join('，');
  const video=c.clip?`<video id="v" controls autoplay preload="auto" src="/clip/${encodeURIComponent(S)}/${encodeURIComponent(c.clip)}"></video>`
  :`<div class="empty">${c.flv_only?'这个片段是用 --fast 剪的 FLV，浏览器播不了，需要重新剪成 MP4。<br><br>':'这个片段还没剪。<br><br>'}<button id="cutbtn">剪切这个片段（720p）</button> <button id="cutbtn480">剪成 480p（加载更快）</button><div id="cutlog" class="keys"></div></div>`;
  $('#view').innerHTML=`${video}

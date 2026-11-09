@@ -250,9 +250,12 @@ def run_analysis(env: dict, rec_dir: Path) -> str:
     tops = [l.strip() for l in out if re.match(r"\s*#\s*\d+\s", l)][:5]
     head = next((l.strip() for l in out if l.startswith("==")), "")
     extra = next((l.strip() for l in out if "使用信号" in l), "")
+    line = next((l.strip() for l in out if l.strip().startswith("分数线")), "")
+    if any("没有达到分数线" in l for l in out):
+        return "\n".join(x for x in [head, asr_note, line, "本场没有值得剪的片段，不用审核"] if x)
     if not tops:
         return "\n".join(x for x in [asr_note, "自动分析完成，但没有找到高峰", r.stdout[-300:]] if x)
-    return "\n".join(x for x in [head, extra, asr_note, "前 5 个候选："] + tops if x)
+    return "\n".join(x for x in [head, extra, asr_note, line, "前 5 个候选："] + tops if x)
 
 
 # ---------------------------------------------------------------- 主流程

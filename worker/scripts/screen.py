@@ -7,6 +7,11 @@
   python scripts/screen.py /data/rec                          # 所有场次
   python scripts/screen.py /data/rec --latest --no-video      # 只用弹幕 + 音频，跳过画面（更快）
   python scripts/screen.py /data/rec --latest --danmaku-only  # 只用弹幕（录像已被同步删掉时）
+  python scripts/screen.py /data/rec --latest --min-score 2.5 # 临时指定分数线（默认读配置 analysis.min_score）
+  python scripts/screen.py /data/rec --latest --all           # 忽略分数线，输出前 top_n 个
+
+分数线：低于 analysis.min_score 的高峰不进候选列表（不剪、不送审），只记在 candidates.json 的
+below_threshold 里备查。没有片段过线时候选为空，不会硬凑。分数线用 evaluate.py --sweep 按标注定。
 
 特征只提取一次，缓存在 output/<场次>/features.npz；之后改权重、词典重跑只需几秒。
 每场输出到 output/<场次>/：
@@ -38,7 +43,7 @@ from clipper.session import find_sessions  # noqa: E402
 DEFAULT_CONFIG = ROOT.parent / "config" / "kiya.yaml"
 
 
-def plot(sig: dict, peaks, title: str, path: Path) -> None:
+def plot(sig: dict, peaks, title: str, path: Path, min_score: float | None = None, dropped=()) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -54,6 +59,10 @@ def plot(sig: dict, peaks, title: str, path: Path) -> None:
         for p in peaks:
             ax.axvline(p.t / 60.0, color="#d9822b", lw=0.5, alpha=0.5)
         if name == "score":
+            if min_score is not None:
+                ax.axhline(min_score, color="#c0392b", lw=0.8, ls="--")
+            for p in dropped:
+                ax.plot(p.t / 60.0, p.score, "x", color="#8a8f98", ms=4)
             for p in peaks:
                 ax.annotate(str(p.rank), (p.t / 60.0, p.score), textcoords="offset points", xytext=(0, 3),
                             ha="center", fontsize=7, color="#b35c00")
@@ -65,7 +74,8 @@ def plot(sig: dict, peaks, title: str, path: Path) -> None:
     plt.close(fig)
 
 
-def write_outputs(name: str, segs: list[Segment], peaks, sig: dict, out_dir: Path, cfg: dict, used: str) -> None:
+def write_outputs(name: str, segs: list[Segment], peaks, sig: dict, out_dir: Path, cfg: dict, used: str,
+                  min_score: float | None = None, dropped=()) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     tr = load_transcript(out_dir / "transcript.json")
     sents = tr["sentences"] if tr else []
@@ -80,6 +90,9 @@ def write_outputs(name: str, segs: list[Segment], peaks, sig: dict, out_dir: Pat
         "session": name, "signals_used": used, "delay_seconds": sig["delay"], "delay_note": sig["delay_note"],
         "weights": sig["weights"], "generated_at": time.strftime("%F %T"),
         "transcript": tr["model"] if tr else None,
+        "min_score": min_score,
+        "below_threshold": [{"rank": p.rank, "t": p.t, "score": round(p.score, 3), "clip_start": p.clip_start,
+                             "clip_end": p.clip_end} for p in dropped],
         "segments": [{"video": str(s.video_path), "offset": s.offset} for s in segs],
         "candidates": cands,
     }
@@ -94,7 +107,7 @@ def write_outputs(name: str, segs: list[Segment], peaks, sig: dict, out_dir: Pat
             w.writerow([p.rank, hhmmss(p.t), hhmmss(p.clip_start), hhmmss(p.clip_end), f"{p.score:.2f}",
                         f"{p.danmaku_per_min:.0f}", p.emotion_hits, f"{p.gift_value:.0f}", main,
                         " | ".join(p.top_danmaku), speech, segs[p.file_index].video_path.name, f"{p.local_start:.1f}", "", ""])
-    plot(sig, peaks, name, out_dir / "curve.png")
+    plot(sig, peaks, name, out_dir / "curve.png", min_score, dropped)
 
 
 def main() -> int:
@@ -108,11 +121,15 @@ def main() -> int:
     ap.add_argument("--no-video", action="store_true", help="不提取画面变化（更快）")
     ap.add_argument("--danmaku-only", action="store_true", help="只用弹幕")
     ap.add_argument("--refresh", action="store_true", help="忽略缓存，重新提取特征")
+    ap.add_argument("--min-score", type=float, help="分数线，覆盖配置 analysis.min_score")
+    ap.add_argument("--all", action="store_true", help="忽略分数线")
     args = ap.parse_args()
 
     cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
     if args.top:
         cfg["analysis"]["top_n"] = args.top
+    min_score = None if args.all else (args.min_score if args.min_score is not None
+                                         else cfg["analysis"].get("min_score"))
     sessions = find_sessions(args.paths, latest=args.latest, name=args.session)
     if not sessions:
         print("没有找到场次（检查目录里是否有录播姬的 .xml 弹幕文件）", file=sys.stderr)
@@ -143,14 +160,22 @@ def main() -> int:
             else:
                 print(f"  使用缓存特征 {cache.name}")
         peaks, sig = find_top_peaks(events, segs, cfg, feats)
+        dropped = []
+        if min_score is not None:      # 按分数从高到低排好的，过线的一定是前面连续的一段，序号不断
+            dropped = [p for p in peaks if p.score < min_score]
+            peaks = [p for p in peaks if p.score >= min_score]
         used = "+".join(sig["weights"].keys())
-        write_outputs(name, segs, peaks, sig, out_dir, cfg, used)
+        write_outputs(name, segs, peaks, sig, out_dir, cfg, used, min_score, dropped)
         if (out_dir / "transcript.json").exists():
             print("  已附上主播原话（transcript.json）")
         print(f"  使用信号：{used}；弹幕延迟 {sig['delay']:.0f} 秒（{sig['delay_note']}）")
         for p in peaks:
             main = " ".join(f"{k}{v:+.1f}" for k, v in sorted(p.contrib.items(), key=lambda kv: -kv[1])[:2])
             print(f"  #{p.rank:>2} {hhmmss(p.t)}  分数 {p.score:5.2f}  [{main}]  {' | '.join(p.top_danmaku)[:36]}")
+        if min_score is not None:
+            print(f"  分数线 {min_score}：{len(peaks)} 个过线" + (f"，{len(dropped)} 个低于分数线未列出" if dropped else ""))
+            if not peaks:
+                print("  本场没有达到分数线的片段")
         print(f"  结果：{out_dir}/candidates.json、peaks.csv、curve.png")
         print(f"  下一步：python scripts/cut.py {out_dir}/candidates.json")
     return 0

@@ -106,6 +106,9 @@ def main() -> int:
     out_dir = path.parent / "clips"
     out_dir.mkdir(exist_ok=True)
     cands = [c for c in data["candidates"] if not args.ranks or c["rank"] in args.ranks]
+    if not cands:
+        print("没有要剪的候选（这场没有达到分数线的片段）" if not data["candidates"] else "没有匹配的序号")
+        return 0
     subs = None
     tr = None if args.no_subs else load_transcript(path.parent / "transcript.json")
     if tr:

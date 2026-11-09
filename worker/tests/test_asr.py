@@ -147,7 +147,7 @@ def run(script, *args, env):
 def test_transcribe_session(rec, env, api, tmp_path_factory):
     e, log, d = env
     out = tmp_path_factory.mktemp("out")
-    r = run("transcribe.py", rec, "--latest", "--out", out, env=e)
+    r = run("transcribe.py", rec, "--latest", "--out", out, "--model", "paraformer-v2", env=e)
     assert r.returncode == 0, r.stdout + r.stderr
     data = json.loads((out / "20261112-2000" / "transcript.json").read_text(encoding="utf-8"))
     assert data["model"] == "paraformer-v2" and abs(data["duration"] - 2 * SEG) < 3
