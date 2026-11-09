@@ -43,6 +43,32 @@ python scripts/analyze_danmaku.py /data/rec --latest --top 30 --out output
 4. 统计 Y 的比例：**超过一半 → 假设成立**，进入阶段 1；不到一半 → 看看漏掉的有趣片段有什么特征，调整 `config/kiya.yaml` 后重跑。
 5. 填好的 `peaks.csv` 复制到 `eval/reviews/`，它就是评测集的第一批数据。
 
+## 试用多模态大模型（阶段 0 第 0.3 步）
+
+用阿里云百炼的 Qwen-VL 看片段截图 + 弹幕，判断有不有趣、给出标题，提前感受阶段 2 的效果和成本。
+
+1. 百炼控制台开通服务，创建 API Key；在“模型广场”确认 `qwen3-vl-flash` 可用（没有就用 `qwen3-vl-plus` 等）。
+2. 仓库根目录 `cp .env.example .env`，填 `DASHSCOPE_API_KEY`。**Key 只放 .env，不要贴到聊天、截图或命令行里。**
+3. 运行：
+
+```bash
+# 直接测弹幕分析出的第 3 个高峰（自动抽 8 帧 + 带上高频弹幕）
+python scripts/try_llm.py --peaks output/<场次>/peaks.csv --rank 3 --rec-dir /data/rec
+
+# 还没录到直播时：随便几张直播截图
+python scripts/try_llm.py --images 1.jpg 2.jpg 3.jpg --danmaku "哈哈哈 | 草 | ？？？"
+
+# 先不花钱，只看抽帧和提示词
+python scripts/try_llm.py --peaks output/<场次>/peaks.csv --rank 3 --dry-run
+
+# 估算费用：填控制台上的单价（元 / 百万 tokens）
+python scripts/try_llm.py --peaks ... --rank 3 --price-in <输入单价> --price-out <输出单价>
+```
+
+输出：是否值得切、1–10 分、类型、发生了什么、为什么、笑点在第几张图、3 个候选标题，以及耗时和 token 数。每次结果存到 `output/llm_trials/<时间>/`（截图 + `result.json`）。
+
+建议把前 20 个高峰都跑一遍，和你自己在 `peaks.csv` 里填的“是否有趣”对比，看大模型判断得准不准。阶段 0 还没有主播原话（转写），准确率会偏低，这是正常的。
+
 ## 调参（config/kiya.yaml）
 
 - **情绪词**：看 `peaks.csv` 的“高频弹幕”列，把 kiya 粉丝常刷的梗、口头禅加进 `emotion_words` 或 `lore_words`。
@@ -59,5 +85,6 @@ worker/
 ├── clipper/danmaku.py   # 解析录播姬 XML；多个分段按真实时间拼成一场（断流也对得上）
 ├── clipper/peaks.py     # 分桶、滑动基线、稳健标准化、加权、平滑、峰值检测
 ├── scripts/analyze_danmaku.py   # 命令行入口：分场、输出 CSV / 曲线图 / 剪切脚本
+├── scripts/try_llm.py           # 试用百炼多模态大模型判断片段（阶段 0）
 └── tests/               # 用合成弹幕测试，不需要真实录像
 ```
