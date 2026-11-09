@@ -29,7 +29,7 @@ weights:
 
 # 语音转写（阿里云百炼录音文件识别，不需要 GPU）。scripts/transcribe.py 使用
 asr:
-  model: paraformer-v2         # paraformer-v2（≈¥1.15/4 小时）或 fun-asr（≈¥3.17/4 小时），按 try_asr.py 对比结果选
+  model: fun-asr               # 2026-11-09 实测 fun-asr 明显更准（舰长、舰礼认得对，断句短）；paraformer-v2 便宜约 2/3
   language_hints: [zh, en, ja] # 仅 paraformer-v2 生效
   vocabulary_id: ""            # 热词表 ID（阶段 2 用 lore 里的名字和梗创建后填这里）
 
