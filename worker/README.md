@@ -126,6 +126,27 @@ python scripts/try_llm.py --peaks ... --rank 3 --price-in <输入单价> --price
 
 建议把前 20 个高峰都跑一遍，和你自己在 `peaks.csv` 里填的“是否有趣”对比，看大模型判断得准不准。阶段 0 还没有主播原话（转写），准确率会偏低，这是正常的。
 
+## 试用语音转写（阶段 2 准备）
+
+用阿里云百炼的录音文件识别（Paraformer / Fun-ASR）把主播原话转成带时间戳的文字，**不需要 GPU**，2 核 2G 的录制机就能跑：脚本抽出 16k 单声道 MP3（约 0.24 MB/分钟）→ 走内网传到你的 OSS → 生成 6 小时有效的签名链接交给百炼 → 取回结果后删掉 OSS 上的临时文件。
+
+| 模型 | 单价（北京） | 4 小时一场 | 说明 |
+|---|---|---|---|
+| paraformer-v2 | ¥0.00008/秒 | ≈ ¥1.15 | 便宜，支持中英日混说 |
+| fun-asr | ¥0.00022/秒 | ≈ ¥3.17 | 更新、口语和方言更强 |
+
+前提：百炼控制台已开通这两个模型；`.env` 里有 `DASHSCOPE_API_KEY`、`OSS_BUCKET`；rclone 的 `oss` 远端可用（阶段 0 配好的）。
+
+```bash
+# 两个模型一起跑，对比效果
+python scripts/try_asr.py /tmp/kiya_test.mp4 --model paraformer-v2 fun-asr
+
+# 录像里的一段（秒）
+python scripts/try_asr.py /data/rec/<录像>.flv --start 600 --end 900
+```
+
+结果在 `output/asr_trials/<时间>/`：`<模型>.txt`（每句一行带时间）、`<模型>.json`（含词级时间戳）。重点看：人名 / 梗（kiya、ki由米、人类酱、律师函…）认得对不对，笑声、尖叫、BGM 下的句子有没有漏。专有名词错得多，阶段 2 再加热词表。
+
 ## 调参（config/kiya.yaml）
 
 - **情绪词**：看 `peaks.csv` 的“高频弹幕”列，把 kiya 粉丝常刷的梗、口头禅加进 `emotion_words` 或 `lore_words`。
@@ -149,5 +170,6 @@ worker/
 ├── scripts/review.py    # 网页标注工具（SSH 隧道访问）
 ├── scripts/analyze_danmaku.py   # 命令行入口：分场、输出 CSV / 曲线图 / 剪切脚本
 ├── scripts/try_llm.py           # 试用百炼多模态大模型判断片段（阶段 0）
+├── scripts/try_asr.py           # 试用百炼语音转写（Paraformer / Fun-ASR），不需要 GPU
 └── tests/               # 合成弹幕 + 合成录像的端到端测试，不需要真实录像（约 40 秒）
 ```
