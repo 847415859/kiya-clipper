@@ -217,22 +217,29 @@ def fmt_dur(sec: float) -> str:
 
 
 def run_analysis(env: dict, rec_dir: Path) -> str:
-    """下播后自动跑弹幕分析，返回前 5 个高峰的摘要。"""
+    """下播后自动粗筛（阶段 1：弹幕 + 音频 + 画面），返回前 5 个候选的摘要。"""
     worker = REPO / "worker"
     py = worker / ".venv" / "bin" / "python"
     if not py.exists():
         return "（worker/.venv 不存在，跳过自动分析）"
-    out_dir = worker / "output"
+    screen = worker / "scripts" / "screen.py"
+    script = screen if screen.exists() else worker / "scripts" / "analyze_danmaku.py"
+    args = [str(py), str(script), str(rec_dir), "--latest", "--top", "20", "--out", str(worker / "output")]
+    if cfg(env, "KIYA_ANALYZE_NO_VIDEO", "0") == "1" and script == screen:
+        args.append("--no-video")
     try:
-        r = subprocess.run([str(py), str(worker / "scripts" / "analyze_danmaku.py"), str(rec_dir), "--latest",
-                            "--top", "20", "--out", str(out_dir)], capture_output=True, text=True, timeout=600)
+        r = subprocess.run(args, capture_output=True, text=True, timeout=int(cfg(env, "KIYA_ANALYZE_TIMEOUT", "1800")))
     except Exception as e:
         return f"自动分析失败：{e}"
     if r.returncode != 0:
         return "自动分析失败：" + (r.stderr.strip().splitlines() or ["未知错误"])[-1][:200]
-    lines = [l for l in r.stdout.splitlines() if re.match(r"#\s*\d+\s", l)][:5]
-    head = next((l for l in r.stdout.splitlines() if l.startswith("==")), "")
-    return (head + "\n前 5 个弹幕高峰：\n" + "\n".join(lines)) if lines else ("自动分析完成，但没有高峰\n" + r.stdout[-300:])
+    out = r.stdout.splitlines()
+    tops = [l.strip() for l in out if re.match(r"\s*#\s*\d+\s", l)][:5]
+    head = next((l.strip() for l in out if l.startswith("==")), "")
+    extra = next((l.strip() for l in out if "使用信号" in l), "")
+    if not tops:
+        return "自动分析完成，但没有找到高峰\n" + r.stdout[-300:]
+    return "\n".join(x for x in [head, extra, "前 5 个候选："] + tops if x)
 
 
 # ---------------------------------------------------------------- 主流程

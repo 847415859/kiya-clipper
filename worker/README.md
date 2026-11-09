@@ -1,6 +1,42 @@
 # worker
 
-Python 处理程序。阶段 0 只有一个功能：**分析弹幕，找出前 20 个弹幕高峰**，用来验证“弹幕高峰 = 有趣片段”这个核心假设。
+Python 处理程序。
+
+- **阶段 1（当前）**：`screen.py` 用**弹幕 + 音频响度 + 画面变化**三类信号粗筛候选片段，`cut.py` 精确剪切，`evaluate.py` 对照人工标注算命中率。
+- 阶段 0：`analyze_danmaku.py` 只用弹幕找高峰（录像已被同步删掉时仍可用）；`try_llm.py` 试用多模态大模型。
+
+## 阶段 1：多信号粗筛
+
+```bash
+cd /opt/kiya-clipper/worker && source .venv/bin/activate
+
+# 1. 粗筛最近一场：首次会提取音频 / 画面特征（4 小时录像在 2 核机器上约几分钟），结果缓存
+python scripts/screen.py /data/rec --latest
+
+# 2. 剪出候选片段（默认重新编码成 720p，起点准确；--fast 不重新编码，快但起点可能偏 1–2 秒）
+python scripts/cut.py output/<场次>/candidates.json
+python scripts/cut.py output/<场次>/candidates.json --ranks 1 2 3      # 只剪前 3 个
+
+# 3. 人工标注后评测，并记录这次改动
+python scripts/evaluate.py
+python scripts/evaluate.py --log "情绪词加了草和绷"
+```
+
+| 输出（output/<场次>/） | 说明 |
+| --- | --- |
+| `candidates.json` | 候选列表：时间、分数、各信号贡献、弹幕延迟。cut / evaluate / try_llm 都读它 |
+| `peaks.csv` | 表格版，“主要信号”列显示是哪两路信号把它推上来的；最后两列给你标注 |
+| `curve.png` | 综合分数和每路信号的曲线，高峰标了序号 |
+| `features.npz` | 音频 / 画面特征缓存；改权重、词典后重跑只要几秒 |
+| `clips/` | cut.py 剪出的小视频 |
+
+**信号与权重**（`config/kiya.yaml` 的 `weights`）：弹幕密度 0.35、情绪词 0.20、礼物 0.15、响度突增 0.20、画面变化 0.10。录像不在本地时自动只用弹幕三项。
+
+**弹幕延迟**：观众打字比画面慢几秒。有音频时自动用“响度起势 vs 弹幕起势”的互相关估计（终端会显示“弹幕延迟 X 秒（自动估计）”），不可靠时退回 `danmaku_delay_seconds`。
+
+**标注与评测**：把 `peaks.csv` 的“是否有趣”填好后复制到 `eval/reviews/<场次>.csv`，或者在 `eval/annotations.csv` 里手写有趣片段的起止时间；`evaluate.py` 会把两者合并作为标准答案。阶段 1 验收：3 场以上 Top10 命中率 ≥ 50%。
+
+**下播后自动运行**：监控脚本在下播后会自动跑 `screen.py`，把前 5 个候选推到微信。
 
 ## 安装（服务器或你的电脑都行，Python 3.10+）
 
@@ -83,8 +119,13 @@ python scripts/try_llm.py --peaks ... --rank 3 --price-in <输入单价> --price
 ```
 worker/
 ├── clipper/danmaku.py   # 解析录播姬 XML；多个分段按真实时间拼成一场（断流也对得上）
-├── clipper/peaks.py     # 分桶、滑动基线、稳健标准化、加权、平滑、峰值检测
+├── clipper/session.py   # 按开播时间把分段分成一场一场
+├── clipper/media.py     # 音频响度（每秒）、关键帧画面变化，按整场时间轴拼接与缓存
+├── clipper/peaks.py     # 多信号分桶、滑动基线、稳健标准化、弹幕延迟估计、加权、峰值检测
+├── scripts/screen.py    # 阶段 1 粗筛入口
+├── scripts/cut.py       # 精确剪切（跨分段自动拼接）
+├── scripts/evaluate.py  # 命中率 / 召回率评测，记录到 eval/results.csv
 ├── scripts/analyze_danmaku.py   # 命令行入口：分场、输出 CSV / 曲线图 / 剪切脚本
 ├── scripts/try_llm.py           # 试用百炼多模态大模型判断片段（阶段 0）
-└── tests/               # 用合成弹幕测试，不需要真实录像
+└── tests/               # 合成弹幕 + 合成录像的端到端测试，不需要真实录像（约 40 秒）
 ```

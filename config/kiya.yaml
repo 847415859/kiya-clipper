@@ -13,15 +13,19 @@ analysis:
   smooth_seconds: 30          # 平滑窗口
   min_peak_gap_seconds: 60    # 两个高峰至少间隔，太近的合并
   top_n: 20                   # 输出前 N 个高峰
-  danmaku_delay_seconds: 5    # 观众反应比画面慢，候选起点往前挪
+  danmaku_delay_seconds: 5    # 观众反应比画面慢；delay_mode=auto 且有音频时自动估计，否则用这个值
+  delay_mode: auto            # auto：用弹幕热度与响度的互相关估计；fixed：固定用上面的值
+  delay_range_seconds: [1, 15]
   clip_before_seconds: 30     # 候选片段：峰值前取多少秒
   clip_after_seconds: 30      # 候选片段：峰值后取多少秒
 
-# 信号权重（只用弹幕时的版本；阶段 1 加入音频和画面后再调）
+# 信号权重。没有录像特征（只跑弹幕分析）时只用前三项，自动按比例归一化
 weights:
-  density: 0.55      # 弹幕密度
-  emotion: 0.35      # 情绪词占比
-  gift: 0.10         # 礼物、SC、上舰金额
+  density: 0.35      # 弹幕密度（相对前 5 分钟）
+  emotion: 0.20      # 情绪词 / 专属梗占比
+  gift: 0.15         # 礼物、SC、上舰金额
+  audio: 0.20        # 响度突增（相对前 5 分钟，dB）
+  scene: 0.10        # 画面变化（关键帧差异）
 
 # 情绪词典：命中即计入“情绪词占比”。按 VTuber 圈和 kiya 粉丝的梗持续扩充
 emotion_words:

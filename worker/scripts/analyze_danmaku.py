@@ -17,7 +17,6 @@ import argparse
 import csv
 import shlex
 import sys
-from datetime import timedelta
 from pathlib import Path
 
 import yaml
@@ -25,45 +24,11 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from clipper.danmaku import Segment, all_events, load_session, parse_xml  # noqa: E402
+from clipper.danmaku import Segment, all_events, load_session  # noqa: E402
+from clipper.session import collect_xml, group_sessions, session_name  # noqa: E402
 from clipper.peaks import find_top_peaks, hhmmss  # noqa: E402
 
 DEFAULT_CONFIG = ROOT.parent / "config" / "kiya.yaml"
-
-
-def collect_xml(paths: list[str]) -> list[Path]:
-    files: list[Path] = []
-    for p in map(Path, paths):
-        if p.is_dir():
-            files += sorted(p.rglob("*.xml"))
-        elif p.suffix.lower() == ".xml":
-            files.append(p)
-    return files
-
-
-def group_sessions(files: list[Path], gap_hours: float) -> list[list[Path]]:
-    """按分段开始时间分场：相邻分段开始时间相差超过 gap_hours 视为新的一场。"""
-    metas = []
-    for f in files:
-        seg = parse_xml(f)
-        metas.append((seg.start_time, f))
-    with_time = sorted([m for m in metas if m[0]], key=lambda m: m[0])
-    no_time = [m[1] for m in metas if not m[0]]
-    sessions: list[list[Path]] = []
-    prev = None
-    for st, f in with_time:
-        if prev is None or st - prev > timedelta(hours=gap_hours):
-            sessions.append([])
-        sessions[-1].append(f)
-        prev = st
-    if no_time:  # 没有开始时间的文件：无法分场，整体当作一场
-        sessions.append(sorted(no_time))
-    return sessions
-
-
-def session_name(segs: list[Segment]) -> str:
-    st = segs[0].start_time
-    return st.strftime("%Y%m%d-%H%M") if st else segs[0].xml_path.stem[:40]
 
 
 def plot_curve(sig: dict, peaks, title: str, path: Path) -> None:
