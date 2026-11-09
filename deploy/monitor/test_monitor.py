@@ -152,3 +152,32 @@ def test_api_failures_alert_after_five(env):
     FakeLive.fail = False
     out = run(env)
     assert len(out) == 1 and "开播状态查询已恢复" in out[0]
+
+
+def test_run_cut(tmp_path, monkeypatch):
+    """下播自动剪切：找到刚粗筛完的场次、调用 cut.py、把结果整理成推送；没有候选时不推送。"""
+    sys.path.insert(0, str(HERE))
+    import kiya_monitor as km
+    worker = tmp_path / "worker"
+    (worker / ".venv" / "bin").mkdir(parents=True)
+    (worker / "scripts").mkdir()
+    (worker / "scripts" / "cut.py").write_text("")
+    log = tmp_path / "args.txt"
+    py = worker / ".venv" / "bin" / "python"
+    py.write_text(f'#!/bin/sh\necho "$@" > "{log}"\necho "字幕：样式 default（标准白字黑边）"\n'
+                  'echo "  # 1 00:01:00–00:02:00 → 01_00-01-30.mp4"\necho "完成 3/3 段，输出在 x"\n')
+    py.chmod(0o755)
+    monkeypatch.setattr(km, "REPO", tmp_path)
+    assert km.run_cut({}) is None                                   # 还没有粗筛结果
+    sess = worker / "output" / "20261112-2000"
+    sess.mkdir(parents=True)
+    (sess / "candidates.json").write_text(json.dumps({"candidates": [{"rank": 1}, {"rank": 2}, {"rank": 3}]}))
+    msg = km.run_cut({"KIYA_CUT_HEIGHT": "480"})
+    assert "20261112-2000：完成 3/3 段" in msg and "字幕：样式 default" in msg and "review.py" in msg
+    assert "--height 480" in log.read_text() and str(sess / "candidates.json") in log.read_text()
+    (sess / "candidates.json").write_text(json.dumps({"candidates": []}))   # 分数线以下全没过：不剪不推
+    assert km.run_cut({}) is None
+    old = time.time() - 7200                                        # 很久以前的场次不会被误剪
+    (sess / "candidates.json").write_text(json.dumps({"candidates": [{"rank": 1}]}))
+    os.utime(sess / "candidates.json", (old, old))
+    assert km.run_cut({}) is None

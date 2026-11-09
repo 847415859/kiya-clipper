@@ -95,8 +95,9 @@ def build_params(model: str, asr_cfg: dict | None = None) -> dict:
     p: dict = {"timestamp_alignment_enabled": True}
     if model.startswith("paraformer"):
         p["language_hints"] = [str(x) for x in c.get("language_hints") or ["zh", "en", "ja"]]
-    if c.get("vocabulary_id"):
-        p["vocabulary_id"] = str(c["vocabulary_id"])
+    vid, _ = resolve_vocabulary(model, c)
+    if vid and not c.get("no_hotwords"):
+        p["vocabulary_id"] = vid
     return p
 
 
@@ -205,3 +206,62 @@ def format_speech(sentences: list[dict], start: float, limit: int = 1200) -> str
             break
         parts.append(line)
     return "\n".join(parts)
+
+
+# ---------------------------------------------------------------- 热词表（百炼定制热词，免费）
+VOCAB_MODEL = "speech-biasing"
+
+
+def vocab_call(key: str, action: str, host: str | None = None, **inp) -> dict:
+    """定制热词接口：create_vocabulary / list_vocabulary / query_vocabulary / update_vocabulary / delete_vocabulary。"""
+    host = (host or os.environ.get("DASHSCOPE_API_HOST") or DEFAULT_HOST).rstrip("/")
+    body = {"model": VOCAB_MODEL, "input": {"action": action, **inp}}
+    return _post(f"{host}/api/v1/services/audio/asr/customization", key, body)
+
+
+def _valid_hotword(text: str) -> bool:
+    if not text or text.isdigit() or len(text) < 2:      # 纯数字、单字容易误伤其他词
+        return False
+    if text.isascii():
+        return len(text.split()) <= 7                    # 官方限制：纯英文最多 7 个空格分隔的词
+    return len(text) <= 15                               # 含中文最多 15 个字
+
+
+def build_hotwords(streamer_cfg: dict) -> list[dict]:
+    """热词 = 主播资料（昵称、粉丝名、观众称呼、世界观、口头禅、常见话题、专属梗）+ asr.hotwords 里手写的。"""
+    lore = streamer_cfg.get("lore") or {}
+    asr = streamer_cfg.get("asr") or {}
+    weight = int(asr.get("hotword_weight", 4))
+    words: list[tuple[str, int]] = []
+    for item in asr.get("hotwords") or []:
+        if isinstance(item, dict):
+            words.append((str(item.get("text", "")), int(item.get("weight", weight))))
+        else:
+            words.append((str(item), weight))
+    for k in ("nicknames", "world", "catchphrases", "recurring_topics"):
+        words += [(str(w), weight) for w in lore.get(k) or []]
+    words += [(str(lore[k]), weight) for k in ("fan_name", "audience_call") if lore.get(k)]
+    words += [(str(w), weight) for w in streamer_cfg.get("lore_words") or []]
+    seen, out = set(), []
+    for text, w in words:
+        text = text.strip()
+        if text.lower() in seen or not _valid_hotword(text):
+            continue
+        seen.add(text.lower())
+        out.append({"text": text, "weight": max(1, min(5, w))})
+    return out
+
+
+def resolve_vocabulary(model: str, asr_cfg: dict | None) -> tuple[str | None, str]:
+    """本次识别用哪个热词表：配置里手写的 vocabulary_id 优先；否则用 hotwords.py 同步时记在 .env 里的，
+    但热词表是按识别模型创建的，模型对不上就不用（换模型后重新运行 hotwords.py sync）。"""
+    vid = str((asr_cfg or {}).get("vocabulary_id") or "").strip()
+    if vid:
+        return vid, "配置 asr.vocabulary_id"
+    vid = os.environ.get("ASR_VOCABULARY_ID", "").strip()
+    if not vid:
+        return None, "未设置热词表"
+    vm = os.environ.get("ASR_VOCABULARY_MODEL", "").strip()
+    if vm and vm != model:
+        return None, f"热词表是给 {vm} 建的，和 {model} 不匹配，未使用（运行 hotwords.py sync 重建）"
+    return vid, "热词表"

@@ -9,6 +9,7 @@
   python scripts/try_asr.py /tmp/kiya_test.mp4 --model fun-asr              # 换模型对比
   python scripts/try_asr.py /data/rec/xxx.flv --start 600 --end 900         # 录像里的一段
   python scripts/try_asr.py /tmp/kiya_test.mp4 --model paraformer-v2 fun-asr  # 两个模型一起跑，便于对比
+  python scripts/try_asr.py /tmp/kiya_test.mp4 --no-hotwords                # 不用热词表，和默认结果对比
 
 前提：
   - 仓库根目录 .env 里有 DASHSCOPE_API_KEY；控制台已开通所用模型
@@ -32,8 +33,8 @@ ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
-from clipper.asr import (AsrError, delete_object, estimate_cost, extract_audio,  # noqa: E402
-                         sentences_from_result, transcribe_urls, upload_and_sign)
+from clipper.asr import (AsrError, build_params, delete_object, estimate_cost, extract_audio,  # noqa: E402
+                         resolve_vocabulary, sentences_from_result, transcribe_urls, upload_and_sign)
 
 
 def load_env() -> None:
@@ -58,6 +59,7 @@ def main() -> int:
     ap.add_argument("--end", type=float)
     ap.add_argument("--bucket", help="OSS bucket，默认读 .env 的 OSS_BUCKET")
     ap.add_argument("--keep", action="store_true", help="识别后保留 OSS 上的临时音频")
+    ap.add_argument("--no-hotwords", action="store_true", help="不用热词表（和用热词表的结果对比）")
     ap.add_argument("--out", default=str(ROOT / "output" / "asr_trials"))
     args = ap.parse_args()
 
@@ -78,7 +80,10 @@ def main() -> int:
             for model in args.model:
                 print(f"\n== {model} ==")
                 t0 = time.time()
-                result = transcribe_urls([url], model, key)[0]
+                asr_cfg = {"no_hotwords": args.no_hotwords}
+                vid, note = resolve_vocabulary(model, asr_cfg)
+                print("热词：" + ("不使用（--no-hotwords）" if args.no_hotwords else (f"{note} {vid}" if vid else note)))
+                result = transcribe_urls([url], model, key, params=build_params(model, asr_cfg))[0]
                 if result is None:
                     continue
                 secs = time.time() - t0

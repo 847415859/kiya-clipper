@@ -237,7 +237,7 @@ def run_analysis(env: dict, rec_dir: Path) -> str:
                 "语音转写失败：" + ((r.stderr or r.stdout).strip().splitlines() or ["未知错误"])[-1][:200]
         except Exception as e:
             asr_note = f"语音转写失败：{e}"
-    args = [str(py), str(script), str(rec_dir), "--latest", "--top", "20", "--out", str(worker / "output")]
+    args = [str(py), str(script), str(rec_dir), "--latest", "--out", str(worker / "output")]   # 候选数按 config 的 top_n
     if cfg(env, "KIYA_ANALYZE_NO_VIDEO", "0") == "1" and script == screen:
         args.append("--no-video")
     try:
@@ -256,6 +256,45 @@ def run_analysis(env: dict, rec_dir: Path) -> str:
     if not tops:
         return "\n".join(x for x in [asr_note, "自动分析完成，但没有找到高峰", r.stdout[-300:]] if x)
     return "\n".join(x for x in [head, extra, asr_note, line, "前 5 个候选："] + tops if x)
+
+
+def latest_candidates(worker: Path, max_age: float = 3600) -> Path | None:
+    """刚粗筛完的场次（最近一小时写出的 candidates.json）。"""
+    files = [p for p in (worker / "output").glob("*/candidates.json") if time.time() - p.stat().st_mtime < max_age]
+    return max(files, key=lambda p: p.stat().st_mtime) if files else None
+
+
+def run_cut(env: dict) -> str | None:
+    """粗筛后自动把候选剪成带字幕的小视频，打开标注页就能直接审。返回推送内容；没东西可剪时返回 None。"""
+    worker = REPO / "worker"
+    py = worker / ".venv" / "bin" / "python"
+    cut = worker / "scripts" / "cut.py"
+    cands = latest_candidates(worker)
+    if not (py.exists() and cut.exists() and cands):
+        return None
+    try:
+        n = len(json.loads(cands.read_text(encoding="utf-8")).get("candidates", []))
+    except (OSError, ValueError):
+        return None
+    if not n:
+        return None
+    height = cfg(env, "KIYA_CUT_HEIGHT", "480")
+    t0 = time.time()
+    # nice：降低优先级，万一主播马上又开播，不和录制抢 CPU
+    args = ["nice", "-n", "10", str(py), str(cut), str(cands), "--height", height]
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=int(cfg(env, "KIYA_CUT_TIMEOUT", "5400")))
+    except Exception as e:
+        return f"自动剪切失败：{e}"
+    out = r.stdout.splitlines()
+    done = next((l.strip() for l in reversed(out) if l.startswith("完成")), "")
+    sub = next((l.strip() for l in out if l.startswith("字幕：") or l.startswith("提示：")), "没有字幕")
+    if r.returncode != 0 and not done:
+        return "自动剪切失败：" + ((r.stderr or r.stdout).strip().splitlines() or ["未知错误"])[-1][:200]
+    return "\n".join([f"场次 {cands.parent.name}：{done.split('，')[0] if done else '已完成'}，"
+                      f"用时 {fmt_dur(time.time() - t0)}", sub,
+                      "审核：cd /opt/kiya-clipper/worker && .venv/bin/python scripts/review.py，电脑上建隧道后打开 "
+                      "http://localhost:8765"])
 
 
 # ---------------------------------------------------------------- 主流程
@@ -309,6 +348,10 @@ def check(env: dict, dry: bool = False) -> int:
             if cfg(env, "KIYA_AUTO_ANALYZE", "1") == "1":
                 st.save()  # 分析可能较慢，先存状态，避免下一轮重复触发
                 notify(env, f"📈 {name} 弹幕分析", run_analysis(env, rec_dir), dry)
+                if cfg(env, "KIYA_AUTO_CUT", "1") == "1" and not dry:
+                    msg = run_cut(env)
+                    if msg:
+                        notify(env, f"✂️ {name} 片段已剪好", msg, dry)
 
         if is_live:
             since = st.data.get("live_since", now)

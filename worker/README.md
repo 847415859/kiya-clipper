@@ -160,7 +160,23 @@ python scripts/screen.py /data/rec --latest                 # 再粗筛一次，
 
 - 模型在 `config/kiya.yaml` 的 `asr.model` 里选；一场的所有分段放在一个识别任务里，时间自动拼成整场时间轴。
 - 转写过的场次：`peaks.csv` 多一列“主播原话”；标注页显示原话，点一句跳到那里；`try_llm.py --peaks` 自动把原话带进提示词。
-- 录像 2 天后会被同步脚本移走，要在下播后尽快转写。验证完效果后，在 `.env` 加 `KIYA_ASR=1`，监控脚本下播后会自动“转写 → 粗筛”。
+- 录像 2 天后会被同步脚本移走，要在下播后尽快转写。在 `.env` 加 `KIYA_ASR=1`，监控脚本下播后会自动“转写 → 粗筛 → 剪成带字幕的 480p 片段”（剪切由 `KIYA_AUTO_CUT` 控制，默认开），收到“片段已剪好”的推送就能直接开标注页。
+
+### 热词表（减少名字、梗的错字）
+
+把主播的名字、粉丝名、梗、B站常用词（舰长、舰礼、上舰…）交给百炼，识别时优先认这些词。热词功能免费，只按识别时长计费。
+
+```bash
+python scripts/hotwords.py show                                  # 看会提交哪些词（不调接口）
+python scripts/hotwords.py sync                                  # 创建 / 更新热词表，ID 自动写进 .env
+python scripts/try_asr.py /tmp/kiya_test.mp4                     # 用热词表识别
+python scripts/try_asr.py /tmp/kiya_test.mp4 --no-hotwords       # 不用热词表，对比效果
+```
+
+- 词表 = `config/kiya.yaml` 里 `asr.hotwords` 手写的 + 主播资料 `lore`（昵称、粉丝名、观众称呼、世界观、口头禅、常见话题）+ `lore_words`，自动去重；纯数字和单字会跳过（容易误伤）。
+- 看 `transcript.txt` 发现总认错的词，加到 `asr.hotwords`，再 `sync` 一次。
+- 热词表跟识别模型绑定；改了 `asr.model` 要重新 `sync`（会自动删旧建新），否则转写时会提示“不匹配，未使用”。
+- 权重默认 4（1–5），不要随便调高，太高会把发音相近的普通词也认成热词。
 
 ## 字幕
 
@@ -214,6 +230,7 @@ worker/
 ├── scripts/subtitle.py  # 字幕样式列表 / 预览图 / 只生成字幕文件
 ├── clipper/asr.py       # 百炼录音文件识别：抽音频、OSS 签名链接、异步任务、整场时间轴
 ├── scripts/transcribe.py        # 整场语音转写 → transcript.json
+├── scripts/hotwords.py          # 百炼热词表：从主播资料生成、创建 / 更新 / 删除
 ├── scripts/try_asr.py           # 试用百炼语音转写（Paraformer / Fun-ASR），不需要 GPU
 └── tests/               # 合成弹幕 + 合成录像 + 假百炼接口的端到端测试，不需要真实录像（约 1 分钟）
 ```

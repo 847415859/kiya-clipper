@@ -32,7 +32,12 @@ weights:
 asr:
   model: fun-asr               # 2026-11-09 实测 fun-asr 明显更准（舰长、舰礼认得对，断句短）；paraformer-v2 便宜约 2/3
   language_hints: [zh, en, ja] # 仅 paraformer-v2 生效
-  vocabulary_id: ""            # 热词表 ID（阶段 2 用 lore 里的名字和梗创建后填这里）
+  vocabulary_id: ""            # 一般留空：hotwords.py sync 会把热词表 ID 写进 .env；这里填了则优先用这里的
+  hotword_prefix: kiya         # 热词表名前缀（小写字母 / 数字，最多 10 位）
+  hotword_weight: 4            # 默认权重 1–5，太高会把别的词也认成热词
+  # 热词 = 下面这些 + lore 里的昵称、粉丝名、观众称呼、世界观、口头禅、常见话题 + lore_words（自动合并去重）
+  # 看 transcript.txt 发现总认错的词就加在这里，然后运行 python scripts/hotwords.py sync
+  hotwords: [舰长, 舰礼, 上舰, 提督, 总督, 大航海, 醒目留言, 粉丝牌, 直播间, 切片, 录播, 歌回, 杂谈, QQ糖]
 
 # 情绪词典：命中即计入“情绪词占比”。按 VTuber 圈和 kiya 粉丝的梗持续扩充
 emotion_words:

@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
-from clipper.asr import AsrError, estimate_cost, extract_audio, transcribe_files  # noqa: E402
+from clipper.asr import AsrError, estimate_cost, extract_audio, resolve_vocabulary, transcribe_files  # noqa: E402
 from clipper.session import find_sessions  # noqa: E402
 
 
@@ -72,6 +72,8 @@ def main() -> int:
         print("没有 OSS bucket：用 --bucket 指定，或在 .env 填 OSS_BUCKET", file=sys.stderr)
         return 1
 
+    vid, vnote = resolve_vocabulary(model, asr_cfg)
+    print(f"模型 {model}；热词：" + (f"{vnote} {vid}" if vid else vnote))
     sessions = find_sessions(args.paths, latest=args.latest, name=args.session)
     if not sessions:
         print("没有找到场次", file=sys.stderr)
@@ -112,7 +114,7 @@ def main() -> int:
                 continue
         data = {
             "session": name, "model": model, "created_at": time.strftime("%F %T"),
-            "duration": round(total, 1), "cost": cost,
+            "duration": round(total, 1), "cost": cost, "vocabulary_id": vid,
             "segments": [{"video": str(s.video_path), "offset": s.offset, "ok": o} for s, o in zip(segs_v, ok)],
             "sentences": sents,
         }

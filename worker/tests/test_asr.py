@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -35,6 +36,7 @@ class Api:
 
     def __init__(self):
         self.requests, self.tasks, self.fail_index = [], {}, None
+        self.vocabs, self.vocab_calls, self.vocab_seq = {}, [], 0
         handler = self._handler()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.host = f"http://127.0.0.1:{self.server.server_address[1]}"
@@ -59,6 +61,30 @@ class Api:
                 body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 if self.headers.get("Authorization") != f"Bearer {KEY}":
                     return self._send({"code": "InvalidApiKey"}, 401)
+                if self.path.endswith("/services/audio/asr/customization"):
+                    req = json.loads(body)
+                    assert req["model"] == "speech-biasing"
+                    inp = req["input"]
+                    api.vocab_calls.append(inp["action"])
+                    if inp["action"] == "create_vocabulary":
+                        api.vocab_seq += 1
+                        vid = f"vocab-{inp['prefix']}-{api.vocab_seq:04d}"
+                        api.vocabs[vid] = {"target_model": inp["target_model"], "vocabulary": inp["vocabulary"]}
+                        return self._send({"output": {"vocabulary_id": vid}})
+                    vid = inp.get("vocabulary_id")
+                    if inp["action"] == "list_vocabulary":
+                        return self._send({"output": {"vocabulary_list": [
+                            {"vocabulary_id": k, "status": "OK", "gmt_modified": "2026-11-10"} for k in api.vocabs]}})
+                    if vid not in api.vocabs:
+                        return self._send({"code": "NotFound", "message": "vocabulary not found"}, 400)
+                    if inp["action"] == "query_vocabulary":
+                        return self._send({"output": {"status": "OK", **api.vocabs[vid]}})
+                    if inp["action"] == "update_vocabulary":
+                        api.vocabs[vid]["vocabulary"] = inp["vocabulary"]
+                        return self._send({"output": {}})
+                    if inp["action"] == "delete_vocabulary":
+                        del api.vocabs[vid]
+                        return self._send({"output": {}})
                 if self.path.endswith("/services/audio/asr/transcription"):
                     assert self.headers.get("X-DashScope-Async") == "enable"
                     req = json.loads(body)
@@ -118,7 +144,8 @@ esac
 """)
     fake.chmod(0o755)
     e = dict(os.environ, RCLONE=str(fake), DASHSCOPE_API_KEY=KEY, OSS_BUCKET="kiya-clipper-rec",
-             OSS_ENDPOINT_INTERNAL="oss-cn-beijing-internal.aliyuncs.com", DASHSCOPE_API_HOST=api.host)
+             OSS_ENDPOINT_INTERNAL="oss-cn-beijing-internal.aliyuncs.com", DASHSCOPE_API_HOST=api.host,
+             ASR_VOCABULARY_ID="", ASR_VOCABULARY_MODEL="")     # 不受服务器上真实 .env 里热词表的影响
     return e, log, d
 
 
@@ -212,3 +239,55 @@ def test_bad_key(rec, env, tmp_path):
     e, _, _ = env
     r = run("transcribe.py", rec, "--latest", "--out", tmp_path, env=dict(e, DASHSCOPE_API_KEY="wrong"))
     assert r.returncode == 1 and "401" in r.stderr
+
+
+def test_hotwords_sync_and_use(rec, env, api, tmp_path):
+    e, _, _ = env
+    envf = tmp_path / ".env"
+    envf.write_text("DASHSCOPE_API_KEY=keep-me\nOTHER=1\n", encoding="utf-8")
+    e = dict(e, KIYA_ENV_FILE=str(envf))
+    e.pop("ASR_VOCABULARY_ID"), e.pop("ASR_VOCABULARY_MODEL")
+    cfg = tmp_path / "kiya.yaml"
+    base = yaml.safe_load((ROOT.parent / "config" / "kiya.yaml").read_text(encoding="utf-8"))
+
+    def write_cfg(model, extra=()):
+        c = dict(base, asr=dict(base["asr"], model=model, hotwords=list(base["asr"]["hotwords"]) + list(extra)))
+        cfg.write_text(yaml.safe_dump(c, allow_unicode=True), encoding="utf-8")
+
+    write_cfg("fun-asr")
+    r = run("hotwords.py", "show", "--config", cfg, env=e)
+    assert r.returncode == 0 and "人类酱" in r.stdout and "ki由米" in r.stdout and "、72" not in r.stdout
+    assert api.vocab_calls == []                                        # show 不调用接口
+
+    r = run("hotwords.py", "sync", "--config", cfg, env=e)
+    assert r.returncode == 0 and "已创建热词表" in r.stdout, r.stdout + r.stderr
+    text = envf.read_text(encoding="utf-8")
+    vid = next(iter(api.vocabs))
+    assert f"ASR_VOCABULARY_ID={vid}" in text and "ASR_VOCABULARY_MODEL=fun-asr" in text
+    assert "DASHSCOPE_API_KEY=keep-me" in text and "OTHER=1" in text  # 其他配置原样保留
+    words = {w["text"]: w["weight"] for w in api.vocabs[vid]["vocabulary"]}
+    assert words["舰礼"] == 4 and "人类酱" in words and all(len(t) <= 15 for t in words)
+
+    write_cfg("fun-asr", ["发舰礼"])                                    # 加词后再 sync：原表更新
+    r = run("hotwords.py", "sync", "--config", cfg, env=e)
+    assert "已更新热词表" in r.stdout and len(api.vocabs) == 1
+    assert any(w["text"] == "发舰礼" for w in api.vocabs[vid]["vocabulary"])
+
+    write_cfg("paraformer-v2")                                         # 换模型：删旧建新
+    r = run("hotwords.py", "sync", "--config", cfg, env=e)
+    assert "删掉重建" in r.stdout and vid not in api.vocabs and len(api.vocabs) == 1
+    vid2 = next(iter(api.vocabs))
+    assert api.vocabs[vid2]["target_model"] == "paraformer-v2"
+
+    # 识别时带上热词表；模型对不上时不带
+    e2 = dict(e, ASR_VOCABULARY_ID=vid2, ASR_VOCABULARY_MODEL="paraformer-v2")
+    r = run("transcribe.py", rec, "--latest", "--out", tmp_path / "o1", "--model", "paraformer-v2", env=e2)
+    assert r.returncode == 0 and api.requests[-1]["parameters"]["vocabulary_id"] == vid2, r.stdout + r.stderr
+    r = run("transcribe.py", rec, "--latest", "--out", tmp_path / "o2", "--model", "fun-asr", env=e2)
+    assert r.returncode == 0 and "vocabulary_id" not in api.requests[-1]["parameters"] and "不匹配" in r.stdout
+    video = next(rec.rglob("*.flv"))
+    r = run("try_asr.py", video, "--end", 20, "--model", "paraformer-v2", "--no-hotwords", "--out", tmp_path / "o3", env=e2)
+    assert r.returncode == 0 and "vocabulary_id" not in api.requests[-1]["parameters"], r.stdout + r.stderr
+
+    r = run("hotwords.py", "delete", "--config", cfg, env=e)
+    assert "已删除" in r.stdout and not api.vocabs and "ASR_VOCABULARY_ID=\n" in envf.read_text(encoding="utf-8")
