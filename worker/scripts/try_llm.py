@@ -169,7 +169,7 @@ def main() -> int:
     ap.add_argument("--transcript", default="", help="主播原话（可选）")
     ap.add_argument("--frames", type=int, default=8, help="抽几张图，默认 8")
     ap.add_argument("--width", type=int, default=640, help="截图宽度，越大越清楚也越贵")
-    ap.add_argument("--model", default=os.environ.get("DASHSCOPE_MODEL", "qwen3-vl-flash"))
+    ap.add_argument("--model", help="模型名，默认读 .env 的 DASHSCOPE_MODEL，再默认 qwen3-vl-flash")
     ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"))
     ap.add_argument("--price-in", type=float, help="输入单价（元 / 百万 tokens），填了就估算费用")
     ap.add_argument("--price-out", type=float, help="输出单价（元 / 百万 tokens）")
@@ -178,6 +178,7 @@ def main() -> int:
     args = ap.parse_args()
 
     load_env()
+    args.model = args.model or os.environ.get("DASHSCOPE_MODEL") or "qwen3-vl-flash"
     cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
     out_root = Path(args.out)
     run_dir = out_root / datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -185,6 +186,9 @@ def main() -> int:
 
     label, danmaku, spf = "images", args.danmaku, None
     if args.images:
+        missing = [p for p in args.images if not Path(p).is_file()]
+        if missing:
+            sys.exit(f"找不到图片：{', '.join(missing)}（请先把截图上传到服务器，再写实际路径）")
         images = []
         for i, p in enumerate(args.images):
             dst = run_dir / f"frame_{i:02d}{Path(p).suffix.lower() or '.jpg'}"
