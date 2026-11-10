@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import { ensureAuth } from './auth'
+import { api } from './api'
 import Layout from './views/Layout.vue'
 import Login from './views/Login.vue'
 import Sessions from './views/Sessions.vue'
@@ -21,6 +22,20 @@ const router = createRouter({
       children: [
         { path: '', redirect: '/sessions' },
         { path: 'sessions', component: Sessions, meta: { title: '场次' } },
+        {
+          // 顶部菜单“审核”：直接打开最近一场有候选片段的审核页；还没有就回场次页
+          path: 'review',
+          component: Sessions,
+          beforeEnter: async () => {
+            try {
+              const list = await api.sessions()
+              const s = list.find((x) => x.hasCandidates && x.candidateCount > 0)
+              return s ? `/sessions/${s.name}/review` : '/sessions'
+            } catch (e) {
+              return '/sessions'
+            }
+          }
+        },
         { path: 'sessions/:name/review', component: Review, meta: { title: '审核' } },
         { path: 'sessions/:name/edit/:rank', component: Editor, meta: { title: '成片编辑' } },
         { path: 'jobs', component: Jobs, meta: { title: '任务' } },
