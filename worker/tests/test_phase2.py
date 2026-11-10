@@ -245,11 +245,14 @@ def test_rerank_autoedit_evaluate(llm, tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     e = json.loads((sess / "edits" / "02.json").read_text(encoding="utf-8"))
     assert [(i["type"], i["start"]) for i in e["items"]] == [("zoom", 19.8), ("text", 20.0), ("sticker", 30.0)]
-    assert e["trim"] == {"start": 2.0, "end": 50.0} and e["generated_by"].startswith("edit-v1")
+    assert e["trim"] == {"start": 2.0, "end": 50.0} and e["generated_by"].startswith("edit-v2")
     assert not density_problems(e)
     r = run(ROOT / "scripts" / "autoedit.py", sess / "candidates.json", "--rank", 2)
     assert r.returncode == 1 and "不覆盖" in r.stderr                   # 已有脚本不覆盖
     assert run(ROOT / "scripts" / "autoedit.py", sess / "candidates.json", "--rank", 2, "--force").returncode == 0
+    ai = json.loads((sess / "edits" / "02.ai.json").read_text(encoding="utf-8"))          # AI 原稿另存
+    assert [(i["type"], i["start"]) for i in ai["edit"]["items"]] == [(i["type"], i["start"]) for i in e["items"]] and ai["prompt"].startswith("edit-v2") and not ai["taste_used"]
+    assert "【剪辑师的习惯】\n（还没有积累）" in json.dumps(llm.calls[-1], ensure_ascii=False).replace("\\n", "\n")
 
     reviews = tmp_path / "reviews"
     reviews.mkdir()

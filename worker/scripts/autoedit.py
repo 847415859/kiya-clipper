@@ -19,16 +19,17 @@ import sys
 import time
 from pathlib import Path
 
-import yaml
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
+from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.context import danmaku_lines, load_events, profile, speech_lines  # noqa: E402
 from clipper.edit import EditError, enforce_density, suggest_window, validate_edit, validate_item  # noqa: E402
+from clipper.editdiff import edit_taste, taste_text  # noqa: E402
 from clipper.llm import LLMClient, fill, load_prompt  # noqa: E402
 
 COLORS = "#FFE14D|#FFFFFF|#FF7EB6|#7FE3FF"
@@ -60,8 +61,9 @@ def main() -> int:
     ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"))
     args = ap.parse_args()
 
-    cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    cfg = load_cfg(Path(args.config))
     ac = {"prompt": "edit_v1", "model": "", "max_items": 8, **(cfg.get("autoedit") or {})}
+    mc = cfg.get("memory") or {}
     cpath = Path(args.candidates)
     sess = cpath.parent
     data = json.loads(cpath.read_text(encoding="utf-8"))
@@ -94,7 +96,10 @@ def main() -> int:
     dm, _ = danmaku_lines(load_events(data["segments"]), a, b, a, float(data.get("delay_seconds") or 0), limit=40)
     version, system, user = load_prompt(ac["prompt"])
     system = fill(system, max_items=ac["max_items"])
-    text = fill(user, profile=profile(cfg), window=f"{clip_len:.0f}", trim_start=f"{t_start:.1f}", trim_end=f"{t_end:.1f}",
+    # 剪辑师口味：人改过 AI 初稿的记录攒够了才生效（clipper/editdiff.py）；提示词用 edit_v2 才有这一块
+    taste = edit_taste(sess.parent, int(mc.get("min_edits", 5)), int(mc.get("min_edit_sessions", 2)))
+    extra = {"taste": taste_text(taste) or "（还没有积累）"} if "{{taste}}" in user else {}
+    text = fill(user, profile=profile(cfg), **extra, window=f"{clip_len:.0f}", trim_start=f"{t_start:.1f}", trim_end=f"{t_end:.1f}",
                 what_happened=llm.get("what_happened") or "（没有精排结论）",
                 punch=(f"{ca + llm['punch_time'] - a:.1f}" if llm.get("punch_time", -1) >= 0 else "（未知）"),
                 setup=story.get("setup") or "—", punchline=story.get("punch") or "—", reaction=story.get("reaction") or "—",
@@ -135,6 +140,10 @@ def main() -> int:
     edit.update(session=sess.name, rank=args.rank, updated_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
     dst.parent.mkdir(exist_ok=True)
     dst.write_text(json.dumps(edit, ensure_ascii=False, indent=1), encoding="utf-8")
+    # 原稿另存一份：之后和人工终稿对比，剪辑口味才能积累下来
+    (dst.parent / f"{args.rank:02d}.ai.json").write_text(json.dumps(
+        {"edit": edit, "prompt": version, "model": client.model, "taste_used": bool(extra and taste["active"]),
+         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S")}, ensure_ascii=False, indent=1), encoding="utf-8")
     kinds = {}
     for i in edit["items"]:
         kinds[i["type"]] = kinds.get(i["type"], 0) + 1

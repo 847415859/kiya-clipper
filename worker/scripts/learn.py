@@ -22,17 +22,18 @@ import sys
 import time
 from pathlib import Path
 
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
+from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.bili import Bili, BiliError  # noqa: E402
 from clipper.context import load_events  # noqa: E402
+from clipper.editdiff import edit_taste  # noqa: E402
 from clipper.env import load_env  # noqa: E402
 from clipper.memory import (DEFAULT_WEIGHTS, active_weights, build_examples, calibrate, load_marks,  # noqa: E402
-                            mine_lore, session_ngrams, type_stats, version_of)
+                            mine_lore, review_stats, session_ngrams, type_stats, version_of)
 
 MEM_DEFAULTS = {"min_sessions": 2, "lore_max": 30, "streamer_uploads": 20, "my_uploads": 30, "min_published": 5,
                 "min_label_sessions": 3, "examples_yes": 3, "examples_no": 3}
@@ -89,7 +90,7 @@ def main() -> int:
     args = ap.parse_args()
 
     load_env()
-    cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    cfg = load_cfg(Path(args.config))
     mc = {**MEM_DEFAULTS, **(cfg.get("memory") or {})}
     out_dir = Path(args.out)
     mem_file = out_dir / "_memory" / "memory.json"
@@ -158,10 +159,13 @@ def main() -> int:
     # 3. 例子 + 权重
     examples = build_examples(out_dir, marks, set(dec.get("excluded_examples") or []))
     active = active_weights(cfg, dec)
-    cal = calibrate(out_dir, marks, active, int(mc["min_label_sessions"]))
+    cal = calibrate(out_dir, load_marks(Path(args.reviews), trusted_only=True), active, int(mc["min_label_sessions"]))
+    an = cfg.get("analysis") or {}
+    rv = review_stats(marks, mc, float(an.get("clip_before_seconds", 30)), float(an.get("clip_after_seconds", 30)))
 
     mem = {"generated_at": time.strftime("%F %T"), "sessions": sorted(per), "lore": lore,
            "examples": examples, "streamer_uploads": su, "my_uploads": my_uploads, "my_uploads_raw": mine,
+           "review": rv, "edit_taste": edit_taste(out_dir, int(mc.get("min_edits", 5)), int(mc.get("min_edit_sessions", 2))),
            "type_stats": ts, "my_top_titles": top_titles if len(my_uploads) >= int(mc["min_published"]) else [],
            "weights": {"active": active, "default": DEFAULT_WEIGHTS, **{k: v for k, v in cal.items() if k != "active"}},
            "errors": errors}
@@ -181,7 +185,14 @@ def main() -> int:
     print(f"审核例子 {len(examples)} 个（有趣 {ny} / 不有趣 {len(examples) - ny}）；切片号已绑定 "
           f"{sum(1 for u in my_uploads if u.get('session'))}/{len(my_uploads)} 条"
           + ("；类型表现已启用" if ts else f"（绑定满 {mc['min_published']} 条后按类型汇总）"))
-    print(f"权重：{cal['status']}")
+    print(f"权重：{cal['status']}（只用盲审的标注）")
+    print(f"剪辑口味：{mem['edit_taste']['status']}")
+    if rv["marked"]:
+        top = "、".join(f"{k} {v}" for k, v in sorted(rv["reasons"].items(), key=lambda kv: -kv[1])[:4])
+        print(f"审核：{rv['marked']} 条已标" + (f"，平均 {rv['avg_seconds']} 秒/条" if rv["avg_seconds"] else "")
+              + (f"；常见原因：{top}" if top else ""))
+        for sug in rv["boundary"]["suggestions"]:
+            print(f"  边界建议：{sug}")
     for e in errors:
         print(f"注意：{e}")
     print(f"记忆版本 {mem['version']}，用时 {time.time() - t0:.0f} 秒 → {mem_file}")

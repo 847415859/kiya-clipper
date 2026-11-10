@@ -32,6 +32,18 @@ STOP = set("""这个 那个 什么 就是 我们 你们 他们 然后 一个 没
 PUNCT = re.compile(r"[^0-9A-Za-z一-鿿]+")
 TYPES_ORDER = ["破防", "口胡", "互动", "金句", "高能", "整活", "反差", "其他"]
 
+# 审核页一键原因（代码和后台 SessionService.REASONS 一致）。content = 说明片段本身的内容，会给大模型看；
+# boundary = 说明边界切得不对，只做统计和建议
+REASON_LABELS = {
+    "not_funny": "不好笑", "need_context": "要有前情才看得懂", "read_sc": "只是在念醒目留言 / 弹幕",
+    "repeat_meme": "重复的梗（已经发过类似的）", "taboo": "主播不想发 / 敏感话题", "gem": "特别好笑",
+    "start_early": "开头切得太早（废话多）", "start_late": "开头切得太晚（铺垫被切掉）",
+    "end_early": "结尾切得太早（反应被切掉）", "end_late": "结尾拖得太长",
+}
+CONTENT_REASONS = ("not_funny", "need_context", "read_sc", "repeat_meme", "gem")
+BOUNDARY_REASONS = ("start_early", "start_late", "end_early", "end_late")
+TRUSTED_MODES = ("", "blind")          # 盲审（没看 AI）的标注才拿来评测 / 校准权重；快审看着 AI 判的会被带偏；confirm 只是采纳 AI
+
 
 # ---------------------------------------------------------------- 梗 / 口头禅挖掘
 def grams(text: str) -> set[str]:
@@ -135,18 +147,50 @@ def to_sec(s: str) -> float:
     return parts[0] * 3600 + parts[1] * 60 + parts[2]
 
 
-def load_marks(reviews: Path) -> dict[str, dict[int, dict]]:
-    """eval/reviews/<场次>.csv → {场次: {序号: {mark, note}}}（只要 Y / N）。"""
+def load_marks(reviews: Path, trusted_only: bool = False) -> dict[str, dict[int, dict]]:
+    """eval/reviews/<场次>.csv → {场次: {序号: {mark, note, reasons, mode, seconds}}}（只要 Y / N）。
+    trusted_only：只要盲审（或旧数据没有“模式”列）的，用于评测 / 校准权重。"""
     out: dict[str, dict[int, dict]] = {}
     for p in sorted(reviews.glob("*.csv")) if reviews.exists() else []:
         with open(p, encoding="utf-8-sig") as f:
             for r in csv.DictReader(f):
                 m = (r.get("是否有趣(Y/N)") or "").strip().upper()
                 if m in ("Y", "N") and str(r.get("序号", "")).strip().isdigit():
+                    mode = (r.get("模式") or "").strip()
+                    if trusted_only and mode not in TRUSTED_MODES:
+                        continue
+                    reasons = [x for x in (r.get("原因") or "").split("|") if x in REASON_LABELS]
+                    sec = (r.get("耗时(秒)") or "").strip()
                     out.setdefault(p.stem, {})[int(r["序号"])] = {
-                        "mark": m, "note": (r.get("备注") or "").strip()[:200],
+                        "mark": m, "note": (r.get("备注") or "").strip()[:200], "reasons": reasons, "mode": mode,
+                        "seconds": int(sec) if sec.isdigit() else None,
                         "clip_start": to_sec(r["片段起"]) if r.get("片段起") else None}
     return out
+
+
+def review_stats(marks: dict, cfg_mem: dict, clip_before: float = 30, clip_after: float = 30) -> dict:
+    """审核习惯和边界反馈。边界只做统计和“建议”，攒够票数且一边倒才提示（不会自动改配置）。"""
+    rows = [m for rs in marks.values() for m in rs.values()]
+    reasons = Counter(r for m in rows for r in m.get("reasons") or [])
+    modes = Counter((m.get("mode") or "blind") for m in rows)
+    secs = sorted(m["seconds"] for m in rows if m.get("seconds"))
+    need = int(cfg_mem.get("min_boundary_votes", 8))
+    rep = {"marked": len(rows), "reasons": dict(reasons), "modes": dict(modes),
+           "avg_seconds": round(sum(secs) / len(secs)) if secs else None,
+           "median_seconds": secs[len(secs) // 2] if secs else None,
+           "boundary": {"needed": need, "votes": {k: reasons.get(k, 0) for k in BOUNDARY_REASONS}, "suggestions": []}}
+    for edge, early, late, key, cur in (("开头", "start_early", "start_late", "clip_before_seconds", clip_before),
+                                        ("结尾", "end_early", "end_late", "clip_after_seconds", clip_after)):
+        a, b = reasons.get(early, 0), reasons.get(late, 0)
+        if a + b < need:
+            continue
+        # start_early = 开头多切了 → 缩短；start_late = 铺垫被切 → 加长。结尾同理（end_early = 反应被切 → 加长）
+        shrink, grow = (a, b) if edge == "开头" else (b, a)
+        if shrink >= 0.7 * (a + b):
+            rep["boundary"]["suggestions"].append(f"{edge}多数反馈偏长（{shrink}/{a + b}）：analysis.{key} 可以从 {cur:g} 调到 {max(10, cur - 5):g}")
+        elif grow >= 0.7 * (a + b):
+            rep["boundary"]["suggestions"].append(f"{edge}多数反馈偏短（{grow}/{a + b}）：analysis.{key} 可以从 {cur:g} 调到 {cur + 5:g}")
+    return rep
 
 
 def build_examples(out_dir: Path, marks: dict, excluded: set[str], limit: int = 200) -> list[dict]:
@@ -163,6 +207,8 @@ def build_examples(out_dir: Path, marks: dict, excluded: set[str], limit: int = 
             c = cands.get(rank)
             if c and m.get("clip_start") is not None and abs(c["clip_start"] - m["clip_start"]) > 1:
                 continue                                              # 标注对应的是旧片段
+            if m.get("mode") == "confirm":
+                continue                                              # 直接采纳 AI 的，没有新信息
             r = llm.get(rank, {})
             o = r.get("llm") or {}
             speech = ""
@@ -170,6 +216,7 @@ def build_examples(out_dir: Path, marks: dict, excluded: set[str], limit: int = 
                 speech = "".join(s["text"] for s in tr.get("sentences", [])
                                  if s["t1"] > c["clip_start"] and s["t0"] < c["clip_end"])[:120]
             ex.append({"id": eid, "session": sess, "rank": rank, "mark": m["mark"], "note": m["note"],
+                       "reasons": m.get("reasons") or [], "veto": "taboo" in (m.get("reasons") or []),
                        "what_happened": o.get("what_happened", ""), "type": o.get("type", ""),
                        "llm_score": o.get("score"), "speech": speech, "excluded": eid in excluded})
     return ex[:limit]
@@ -178,7 +225,7 @@ def build_examples(out_dir: Path, marks: dict, excluded: set[str], limit: int = 
 def pick_examples(examples: list[dict], session: str | None, n_yes: int, n_no: int) -> list[dict]:
     """给某一场精排挑例子：排除这一场本身、排除后台标记不用的；有备注的优先，越新越优先。"""
     pool = [e for e in examples if not e.get("excluded") and e["session"] != session and (e["note"] or e["what_happened"] or e["speech"])]
-    key = lambda e: (bool(e["note"]), e["session"], -e["rank"])
+    key = lambda e: (bool(e["note"] or e.get("reasons")), e["session"], -e["rank"])
     yes = sorted((e for e in pool if e["mark"] == "Y"), key=key, reverse=True)[:n_yes]
     no = sorted((e for e in pool if e["mark"] == "N"), key=key, reverse=True)[:n_no]
     return yes + no
@@ -206,7 +253,9 @@ def type_stats(my_uploads: list[dict], min_n: int) -> dict:
 DEFAULT_WEIGHTS = {"llm": 0.8, "screen": 0.2, "not_funny": 0.6}
 
 
-def final_score(llm: dict | None, rank: int, n_total: int, w: dict) -> float:
+def final_score(llm: dict | None, rank: int, n_total: int, w: dict, taboo: bool = False) -> float:
+    if taboo:
+        return 0.0                                  # 命中禁区话题：判不切，排到最后
     screen = 1 - (rank - 1) / max(1, n_total - 1)
     if llm:
         f = w["llm"] * llm["score"] / 10 + w["screen"] * screen
@@ -281,8 +330,15 @@ def context_text(mem: dict | None, session: str | None, cfg: dict, decisions: di
         lines = []
         for e in ex:
             desc = e["what_happened"] or e["speech"]
-            lines.append(f"- {'值得切' if e['mark'] == 'Y' else '不值得切'}：{desc}" + (f"（审核备注：{e['note']}）" if e["note"] else ""))
+            why = "、".join(REASON_LABELS[r] for r in e.get("reasons") or [] if r in CONTENT_REASONS)
+            lines.append(f"- {'值得切' if e['mark'] == 'Y' else '不值得切'}：{desc}" + (f"（原因：{why}）" if why else "")
+                         + (f"（审核备注：{e['note']}）" if e["note"] else ""))
         parts.append("【过去的人工审核结果（按这个口味判断）】\n" + "\n".join(lines))
+    vetoes = [e for e in mem.get("examples") or [] if e.get("veto") and not e.get("excluded") and e["id"] not in excluded
+              and e["session"] != session and (e["what_happened"] or e["speech"])]
+    if vetoes:
+        parts.append("【主播明确不想发的内容（遇到同类话题，哪怕好笑也判不值得切）】\n"
+                     + "\n".join(f"- {e['what_happened'] or e['speech']}" for e in sorted(vetoes, key=lambda e: e["session"], reverse=True)[:5]))
     ts = mem.get("type_stats") or {}
     if ts:
         lines = [f"- {t}：{v['n']} 条，播放中位数 {v['median_view']}（是整体的 {v['relative']} 倍）" for t, v in ts.items()]

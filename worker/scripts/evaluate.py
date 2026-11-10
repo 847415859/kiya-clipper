@@ -85,7 +85,7 @@ def load_review_scores(reviews: Path) -> list[tuple[str, float, str]]:
             for r in csv.DictReader(f):
                 m = (r.get("是否有趣(Y/N)") or "").strip().upper()
                 try:
-                    if m in ("Y", "N"):
+                    if m in ("Y", "N") and (r.get("模式") or "").strip() in ("", "blind"):
                         rows.append((p.stem, float(r["分数"]), m))
                 except (KeyError, ValueError):
                     pass
@@ -134,7 +134,7 @@ def rerank_report(reviews: Path, out: Path) -> int:
         with open(p, encoding="utf-8-sig") as f:
             for r in csv.DictReader(f):
                 m = (r.get("是否有趣(Y/N)") or "").strip().upper()
-                if m in ("Y", "N") and (r.get("序号") or "").isdigit():
+                if m in ("Y", "N") and (r.get("序号") or "").isdigit() and (r.get("模式") or "").strip() in ("", "blind"):
                     marks.setdefault(p.stem, {})[int(r["序号"])] = m
     rows = []
     agree = {"TP": 0, "FP": 0, "FN": 0, "TN": 0}

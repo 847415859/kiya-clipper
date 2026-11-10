@@ -71,6 +71,9 @@ memory:
   min_label_sessions: 3      # 几场“精排 + 标注”后才开始建议新权重
   examples_yes: 3            # 提示词里放几个“值得切”的审核例子（不含正在精排的这一场）
   examples_no: 3
+  min_boundary_votes: 8      # 审核时点“开头 / 结尾太早 / 太晚”的票数攒够，且一边倒才提示调 clip_before / clip_after_seconds
+  min_edits: 5               # 人工改过的 AI 初稿攒够几条才影响 AI 初稿（且来自 min_edit_sessions 场以上）
+  min_edit_sessions: 2
 
 # 发布包（scripts/publish_pack.py）：B站投稿用的封面、标题、简介、标签，后台成片编辑页“发布”卡片里改和复制
 publish:
@@ -90,7 +93,7 @@ publish:
 
 # 剪辑脚本初稿（scripts/autoedit.py）
 autoedit:
-  prompt: edit_v1
+  prompt: edit_v2            # v2 = v1 + 剪辑师口味（人工改过的初稿攒够 memory.min_edits 条才生效）
   model: ""
   max_items: 8               # 一条切片最多几个效果
 

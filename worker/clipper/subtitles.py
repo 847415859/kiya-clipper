@@ -107,7 +107,7 @@ def lore_keywords(streamer_cfg: dict | None) -> list[str]:
     words = [str(w) for w in (lore.get("nicknames") or []) + (lore.get("world") or [])]
     words += [str(lore[k]) for k in ("fan_name", "audience_call") if lore.get(k)]
     words += [str(w) for w in streamer_cfg.get("lore_words") or []]
-    words += [str(w) for w in lore.get("recurring_topics") or []]
+    words += [str(w) for w in (lore.get("recurring_topics") or []) + (lore.get("memes") or [])]
     # 纯数字 / 单字容易误伤（例如 “72” 出现在数字里），只留 2 个字以上、不是纯数字的词
     return sorted({w for w in words if len(w) >= 2 and not w.isdigit()}, key=len, reverse=True)
 

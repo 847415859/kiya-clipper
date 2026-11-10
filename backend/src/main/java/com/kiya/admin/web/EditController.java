@@ -40,11 +40,11 @@ public class EditController {
         return edits.get(name, rank);
     }
 
-    public record SaveReq(Map<String, Object> edit, Long styleId) {}
+    public record SaveReq(Map<String, Object> edit, Long styleId, Boolean restoredAi) {}
 
     @PutMapping("/api/sessions/{name}/edits/{rank}")
     public Map<String, Object> save(@PathVariable String name, @PathVariable int rank, @RequestBody SaveReq req) {
-        return edits.save(name, rank, req.edit(), req.styleId());
+        return edits.save(name, rank, req.edit(), req.styleId(), Boolean.TRUE.equals(req.restoredAi()));
     }
 
     @GetMapping("/api/sessions/{name}/finals")

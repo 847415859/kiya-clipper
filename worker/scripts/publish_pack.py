@@ -21,13 +21,13 @@ import sys
 import time
 from pathlib import Path
 
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from clipper.kcfg import find_taboo, load_cfg  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.edit import edit_window  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
@@ -87,7 +87,7 @@ def main() -> int:
     ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"))
     args = ap.parse_args()
 
-    cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    cfg = load_cfg(Path(args.config))
     pc = cfg.get("publish") or {}
     cpath = Path(args.candidates)
     sess = cpath.parent
@@ -112,7 +112,8 @@ def main() -> int:
     tr = load_transcript(sess / "transcript.json")
     speech = "".join(s["text"] for s in (tr or {}).get("sentences", []) if s["t1"] > a and s["t0"] < b)
     lore_cfg = cfg.get("lore") or {}
-    lore = [*(cfg.get("lore_words") or []), *(lore_cfg.get("catchphrases") or []), *(lore_cfg.get("recurring_topics") or [])]
+    lore = [*(cfg.get("lore_words") or []), *(lore_cfg.get("catchphrases") or []), *(lore_cfg.get("recurring_topics") or []),
+            *(lore_cfg.get("memes") or [])]
     mem = read(sess.parent / "_memory" / "memory.json", {}) or {}
     dec = read(Path(os.environ.get("KIYA_MEMORY_DECISIONS") or REPO / "config" / "memory_decisions.json"), {}) or {}
     rejected = {str(x).lower() for x in dec.get("rejected_lore") or []}
@@ -130,6 +131,7 @@ def main() -> int:
     for k, v in defaults.items():
         if args.refresh or not pack.get(k):
             pack[k] = v
+    pack["taboo_hits"] = find_taboo(" ".join([pack.get("title", ""), pack.get("description", ""), speech]), cfg.get("taboo") or [])
     pack.update(session=sess.name, rank=args.rank, title_candidates=titles,
                 source=streamer.get("live_url", ""), copyright="转载",
                 range={"start": round(a, 1), "end": round(b, 1)})

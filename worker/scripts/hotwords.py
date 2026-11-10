@@ -22,12 +22,12 @@ import re
 import sys
 from pathlib import Path
 
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
+from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.asr import AsrError, build_hotwords, vocab_call  # noqa: E402
 
 
@@ -70,7 +70,7 @@ def main() -> int:
     args = ap.parse_args()
 
     load_env()
-    cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    cfg = load_cfg(Path(args.config))
     asr = cfg.get("asr") or {}
     model = asr.get("model") or "fun-asr"
     prefix = str(asr.get("hotword_prefix") or "kiya")

@@ -16,13 +16,13 @@ import sys
 import time
 from pathlib import Path
 
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.edit import EditError, suggest_window, validate_window  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
@@ -90,7 +90,7 @@ def main() -> int:
         try:
             sub_cfg = load_config()
             _, style = get_style(None, sub_cfg)
-            streamer = yaml.safe_load(Path(args.config).read_text(encoding="utf-8")) if Path(args.config).exists() else {}
+            streamer = load_cfg(Path(args.config)) if Path(args.config).exists() else {}
             events = build_events(tr["sentences"], a, b, style, sub_cfg.get("corrections") or {})
             if events:
                 w, h = probe_size(parts[0][0])

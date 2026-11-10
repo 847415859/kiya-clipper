@@ -48,11 +48,11 @@ public class SessionController {
         return sessions.candidates(name);
     }
 
-    public record MarkReq(String mark, String note) {}
+    public record MarkReq(String mark, String note, List<String> reasons, String mode, Long ms) {}
 
     @PutMapping("/{name}/candidates/{rank}/mark")
     public Map<String, Object> mark(@PathVariable String name, @PathVariable int rank, @RequestBody MarkReq req) {
-        sessions.mark(name, rank, req.mark(), req.note());
+        sessions.mark(name, rank, req.mark(), req.note(), req.reasons(), req.mode(), req.ms());
         return Map.of("ok", true);
     }
 

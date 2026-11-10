@@ -241,7 +241,7 @@ def build_hotwords(streamer_cfg: dict) -> list[dict]:
             words.append((str(item.get("text", "")), int(item.get("weight", weight))))
         else:
             words.append((str(item), weight))
-    for k in ("nicknames", "world", "catchphrases", "recurring_topics"):
+    for k in ("nicknames", "world", "catchphrases", "recurring_topics", "memes"):
         words += [(str(w), weight) for w in lore.get(k) or []]
     words += [(str(lore[k]), weight) for k in ("fan_name", "audience_call") if lore.get(k)]
     words += [(str(w), weight) for w in streamer_cfg.get("lore_words") or []]

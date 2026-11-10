@@ -22,7 +22,7 @@ def profile(cfg: dict) -> str:
             f"人设：{j('persona')}\n"
             f"昵称：{j('nicknames')}；观众被称为“{lore.get('audience_call', '')}”；粉丝名 {lore.get('fan_name', '')}\n"
             f"世界观：{j('world')}\n常见话题：{j('recurring_topics')}\n口头禅：{j('catchphrases')}\n"
-            f"专属梗：{'、'.join(str(x) for x in cfg.get('lore_words') or [])}\n"
+            f"专属梗：{'、'.join(str(x) for x in [*(cfg.get('lore_words') or []), *(lore.get('memes') or [])])}\n"
             f"她的高播放切片标题示例：{'；'.join('《' + t + '》' for t in titles)}")
 
 

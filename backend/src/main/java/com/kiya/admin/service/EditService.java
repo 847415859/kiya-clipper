@@ -63,6 +63,25 @@ public class EditService {
         }
     }
 
+    /** AI 初稿的原稿（autoedit.py 另存的 <序号>.ai.json 里的 edit）；没有就是 null。 */
+    private Map<String, Object> aiDraft(String session, int rank) {
+        Path f = paths.sessionDir(session).resolve("edits").resolve(String.format("%02d.ai.json", rank));
+        if (!Files.exists(f)) {
+            return null;
+        }
+        try {
+            Map<String, Object> m = om.readValue(f.toFile(), new TypeReference<Map<String, Object>>() {});
+            return m.get("edit") instanceof Map<?, ?> em ? new LinkedHashMap<>(castMap(em)) : null;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> castMap(Map<?, ?> m) {
+        return (Map<String, Object>) m;
+    }
+
     private JsonNode candidate(String session, int rank) {
         Path f = paths.sessionDir(session).resolve("candidates.json");
         try {
@@ -167,11 +186,12 @@ public class EditService {
         out.put("finals", finals(session, rank));
         out.put("llm", llm);
         out.put("exists", Files.exists(f));
+        out.put("aiDraft", aiDraft(session, rank));
         return out;
     }
 
     /** 保存：选了字幕样式就把样式整份写进脚本（以后改样式不影响已编排好的片段）；校验交给 worker。 */
-    public Map<String, Object> save(String session, int rank, Map<String, Object> edit, Long styleId) {
+    public Map<String, Object> save(String session, int rank, Map<String, Object> edit, Long styleId, boolean restoredAi) {
         JsonNode c = candidate(session, rank);
         double clipLen = c.path("clip_end").asDouble() - c.path("clip_start").asDouble();   // 有 window 时 worker 按它校验
         Map<String, Object> e = new LinkedHashMap<>(edit == null ? Map.of() : edit);
@@ -222,6 +242,10 @@ public class EditService {
             norm.put("session", session);
             norm.put("rank", rank);
             norm.put("updated_at", LocalDateTime.now().toString());
+            // 人工保存的标记：worker 把它和 AI 原稿（<序号>.ai.json）对比，得到剪辑口味。“还原为 AI 原稿”那次保存不算人工修改
+            if (!restoredAi) {
+                norm.put("human_saved_at", LocalDateTime.now().withNano(0).toString());
+            }
             Path f = editFile(session, rank);
             Path part = f.resolveSibling(f.getFileName() + ".tmp");
             Files.writeString(part, om.writerWithDefaultPrettyPrinter().writeValueAsString(norm), StandardCharsets.UTF_8);

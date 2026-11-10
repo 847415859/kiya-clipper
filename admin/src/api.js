@@ -52,7 +52,7 @@ export const api = {
   previewStyle: (body) => http.post('/api/styles/preview', body, { responseType: 'blob', timeout: 90000, quiet: true }),
 
   getEdit: (name, rank) => http.get(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}`),
-  saveEdit: (name, rank, edit, styleId) => http.put(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}`, { edit, styleId }),
+  saveEdit: (name, rank, edit, styleId, restoredAi = false) => http.put(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}`, { edit, styleId, restoredAi }),
   finalUrl: (name, file) => `/api/sessions/${encodeURIComponent(name)}/finals/${encodeURIComponent(file)}`,
   stickers: () => http.get('/api/stickers'),
   stickerUrl: (n) => `/api/stickers/${encodeURIComponent(n)}`,

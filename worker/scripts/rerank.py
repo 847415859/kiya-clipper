@@ -20,13 +20,13 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import yaml
 from pydantic import BaseModel, Field, field_validator
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
+from clipper.kcfg import find_taboo, load_cfg  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.boundary import refine_bounds  # noqa: E402
 from clipper.context import danmaku_lines, extract_frames, load_events, profile, speech_lines  # noqa: E402
@@ -99,7 +99,7 @@ def main() -> int:
     ap.add_argument("--rescore", action="store_true", help="不调大模型，按当前权重重算已有 rerank.json 的排序")
     args = ap.parse_args()
 
-    cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    cfg = load_cfg(Path(args.config))
     rc = {"prompt": "rerank_v1", "model": "", "frames": 8, "width": 640, "context_before": 60, "workers": 3,
           "min_len": 30, "max_len": 180, "price_in": None, "price_out": None,
           **(cfg.get("rerank") or {})}
@@ -113,8 +113,10 @@ def main() -> int:
         decisions = {}
     w = active_weights(cfg, decisions)
     n_total = len(data["candidates"])
+    taboo = cfg.get("taboo") or []
     if args.rescore:
-        return rescore(sess / "rerank.json", w, n_total)
+        tr0 = load_transcript(sess / "transcript.json")
+        return rescore(sess / "rerank.json", w, n_total, taboo, tr0["sentences"] if tr0 else [])
     mem_file = Path(os.environ.get("KIYA_MEMORY_FILE") or sess.parent / "_memory" / "memory.json")
     memory, mem_version = context_text(load_memory(mem_file), sess.name, cfg, decisions)
     cands = [c for c in data["candidates"] if not args.ranks or c["rank"] in args.ranks]
@@ -136,7 +138,8 @@ def main() -> int:
         msgs, version, nframes = build_messages(c, segs, sents, events, delay, cfg, rc,
                                                 sess / "rerank_frames" / f"{c['rank']:02d}", memory)
         rec = {"rank": c["rank"], "t": c["t"], "clip_start": c["clip_start"], "clip_end": c["clip_end"],
-               "screen_score": c["score"], "frames": nframes, "prompt_version": version, "memory_version": mem_version}
+               "screen_score": c["score"], "frames": nframes, "prompt_version": version, "memory_version": mem_version,
+               "taboo": taboo_hits(sents, c["clip_start"], c["clip_end"], taboo)}
         if args.dry_run:
             prev = [m if isinstance(m["content"], str) else {"role": m["role"], "content": [
                 x if x["type"] == "text" else {"type": "image_url", "image_url": "<图片省略>"} for x in m["content"]]}
@@ -167,7 +170,7 @@ def main() -> int:
         return 0
 
     for r in recs:
-        r["final"] = round(final_score(r.get("llm"), r["rank"], n_total, w), 4)
+        r["final"] = round(final_score(r.get("llm"), r["rank"], n_total, w, bool(r.get("taboo"))), 4)
     recs.sort(key=lambda r: -r["final"])
     for i, r in enumerate(recs, 1):
         r["new_rank"] = i
@@ -190,6 +193,9 @@ def main() -> int:
     print(f"{'新':>3} {'原':>3}  {'高峰':<9}{'分':>5}  {'有趣':<4}{'类型':<5}{'修正后起止':<20}  一句话")
     for r in out["candidates"]:
         o = r.get("llm")
+        if r.get("taboo"):
+            print(f"{r['new_rank']:>3} #{r['rank']:<2}  {hhmmss(r['t']):<9}  命中禁区话题：{'、'.join(r['taboo'])}（排到最后）")
+            continue
         if not o:
             print(f"{r['new_rank']:>3} #{r['rank']:<2}  {hhmmss(r['t']):<9}{'—':>5}  失败：{r.get('error', '')[:60]}")
             continue
@@ -203,7 +209,14 @@ def main() -> int:
     return 0
 
 
-def rescore(path: Path, w: dict, n_total: int) -> int:
+def taboo_hits(sents: list[dict], a: float, b: float, words: list[str]) -> list[str]:
+    """片段范围内主播原话里命中的禁区词。"""
+    if not words or not sents:
+        return []
+    return find_taboo("".join(s["text"] for s in sents if s["t1"] > a and s["t0"] < b), words)
+
+
+def rescore(path: Path, w: dict, n_total: int, taboo: list[str] | None = None, sents: list[dict] | None = None) -> int:
     """后台确认新权重后：不重新请求大模型，只按新权重重排。"""
     if not path.exists():
         print("这场还没有精排结果", file=sys.stderr)
@@ -211,7 +224,8 @@ def rescore(path: Path, w: dict, n_total: int) -> int:
     d = json.loads(path.read_text(encoding="utf-8"))
     before = [c["rank"] for c in sorted(d["candidates"], key=lambda c: c.get("new_rank", 999))]
     for c in d["candidates"]:
-        c["final"] = round(final_score(c.get("llm"), c["rank"], n_total, w), 4)
+        c["taboo"] = taboo_hits(sents or [], c.get("clip_start", 0), c.get("clip_end", -1), taboo or [])     # 禁区词改了，这里一并刷新
+        c["final"] = round(final_score(c.get("llm"), c["rank"], n_total, w, bool(c["taboo"])), 4)
     d["candidates"].sort(key=lambda c: -c["final"])
     for i, c in enumerate(d["candidates"], 1):
         c["new_rank"] = i

@@ -256,6 +256,26 @@ python scripts/autoedit.py output/<场次>/candidates.json --rank 3
 - B站接口：投稿列表要 WBI 签名，还要带监控用的那份 Cookie（`KIYA_COOKIE_FILE`，默认 `/root/bili_cookies.txt`），否则机房 IP 容易被风控。拉取失败时沿用上次拉到的数据，后台页面顶部会提示。
 - 梗是按字符片段统计出来的，不做分词，难免有半截词或常用说法，在后台删掉就行。删得越多，以后越干净。
 
+### 审核反馈、剪辑口味、梗转正和禁区
+
+**审核页的一键原因 + 两种模式。** Y/N 下面有一排原因（开头太早 / 太晚、结尾太早 / 太晚、不好笑、要前情才懂、只是念SC、重复的梗、主播不想发、特别好笑），点一下或按 1–0；选了“不好笑”这类会顺手标 N，“特别好笑”标 Y。原因、模式、耗时存在 `output/<场次>/review_meta.json`，并导出到 `eval/reviews/<场次>.csv` 新增的三列（原因、模式、耗时）。
+
+| 模式 | 看不看 AI | 标注用在哪 |
+| --- | --- | --- |
+| 盲审（评测） | 标注前不显示 | 评测精排（`evaluate.py --rerank`）、校准排序权重、审核例子 |
+| 快审（生产） | 始终显示，AI ≥8 分或 ≤3 分时可按 A 直接采纳 | 只做审核例子（看过 AI 再判，会被带偏，不进评测和校准） |
+| 采纳 AI | — | 什么都不进（只是复述 AI） |
+
+- 原因里“内容类”（不好笑、要前情才懂、只是念SC、重复的梗、特别好笑）会写进精排提示词的审核例子；“主播不想发”作为明确否决单独列出。
+- “边界类”原因只做统计：攒够 `memory.min_boundary_votes` 票（默认 8）且 70% 以上偏向一边，才在“精排记忆”页提示调 `analysis.clip_before_seconds` / `clip_after_seconds`，不会自动改配置。
+- 审核耗时只算页面可见的时间，记录每条从打开到下决定用了多久，记忆页汇总平均值。
+
+**AI 初稿 vs 人工终稿 = 剪辑口味。** `autoedit.py` 生成初稿时另存一份原稿 `edits/<序号>.ai.json`；后台保存（或渲染 1080p 确认）时终稿里记 `human_saved_at`。两份都在才算一条人工修改，`clipper/editdiff.py` 算出删了哪些效果、改了哪些花字、裁剪挪了多少。攒够 `memory.min_edits` 条（默认 5）且来自至少 `memory.min_edit_sessions` 场（默认 2）才写进 `prompts/edit_v2.md` 的“剪辑师的习惯”；编辑器里“还原 AI 原稿”那次保存不计入。
+
+**梗转正。** “精排记忆”页点一个自动发现的梗，选类型（梗 / 口头禅 / 常聊话题）转正：它并入主播档案，热词表（点“同步热词表”后生效）、字幕关键词、投稿标签、提示词都会固定使用。存在 `config/memory_decisions.json` 的 `promoted_lore`，不会改写 `kiya.yaml`（`clipper/kcfg.py` 读取时合并）。
+
+**禁区话题。** 在同一页添加禁区词（至少 2 个字）。切片范围内主播原话命中时，精排把它的综合分置 0、排到最后，审核页标红并高亮命中的词，发布包的 `taboo_hits` 会提示标题 / 简介 / 原话里有禁区词。加删禁区词后后台自动对已精排的场次跑一次 `rerank.py --rescore`（不请求大模型，不花钱）。
+
 ### 音频事件（不需要额外模型）
 
 粗筛多了三个音频信号，都缓存在特征文件里（升级后第一次粗筛会重新提取）：
@@ -329,6 +349,8 @@ worker/
 ├── clipper/bili.py      # B站公开接口：投稿列表（WBI 签名）、视频数据
 ├── clipper/memory.py    # 精排记忆：梗挖掘、审核例子、切片号类型表现、权重校准、填进提示词的文字
 ├── scripts/learn.py     # 更新精排记忆 → output/_memory/memory.json
+├── clipper/editdiff.py  # AI 初稿 vs 人工终稿的差别 → 剪辑口味
+├── clipper/kcfg.py      # 读 kiya.yaml 并合并后台决定（梗转正、禁区话题）
 ├── clipper/publish.py   # 发布包：封面绘制、简介模板、标签
 ├── scripts/publish_pack.py      # 发布包 → output/<场次>/publish/<序号>.json + 封面
 ├── scripts/edit_preview.py      # 编辑器预览视频（素材范围超出审核片段时）

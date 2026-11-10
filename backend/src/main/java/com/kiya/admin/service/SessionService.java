@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -41,17 +43,28 @@ public class SessionService {
     private static final Logger log = LoggerFactory.getLogger(SessionService.class);
     static final String MARK_COL = "是否有趣(Y/N)";
     static final String NOTE_COL = "备注";
+    static final String REASON_COL = "原因";
+    static final String MODE_COL = "模式";
+    static final String SECONDS_COL = "耗时(秒)";
     static final List<String> CSV_HEADER = List.of("序号", "高峰时间", "片段起", "片段止", "分数", "主要信号", "高频弹幕",
-            MARK_COL, NOTE_COL);
+            MARK_COL, NOTE_COL, REASON_COL, MODE_COL, SECONDS_COL);
+    /** 审核时一键选的原因（代码固定，worker 的 clipper/memory.py 里有对应的中文说明）。 */
+    static final Set<String> REASONS = Set.of("start_early", "start_late", "end_early", "end_late",
+            "not_funny", "need_context", "read_sc", "repeat_meme", "taboo", "gem");
+    /** blind 盲审（没看 AI，用于评测）；fast 看着 AI 审；confirm 直接采纳 AI 判断（不进评测和校准）。 */
+    static final Set<String> MODES = Set.of("blind", "fast", "confirm");
+    static final long MAX_REVIEW_MS = 10 * 60 * 1000L;
 
     private final LiveSessionMapper sessions;
     private final CandidateMapper candidates;
     private final WorkerPaths paths;
     private final ProcessRunner runner;
     private final ObjectMapper om;
+    private final MemoryService memory;
 
     public SessionService(LiveSessionMapper sessions, CandidateMapper candidates, WorkerPaths paths,
-                          ProcessRunner runner, ObjectMapper om) {
+                          ProcessRunner runner, ObjectMapper om, MemoryService memory) {
+        this.memory = memory;
         this.sessions = sessions;
         this.candidates = candidates;
         this.paths = paths;
@@ -165,9 +178,10 @@ public class SessionService {
         paths.checkSession(session);
         JsonNode cj = sync(session);
         List<Map<String, Object>> list = new ArrayList<>();
+        Map<String, Map<String, Object>> meta0 = readMeta(session);
         for (Candidate c : candidates.selectList(new QueryWrapper<Candidate>()
                 .eq("session_name", session).orderByAsc("rnk"))) {
-            list.add(toMap(c));
+            list.add(toMap(c, meta0.get(String.valueOf(c.getRnk()))));
         }
         JsonNode rr = readJson(paths.sessionDir(session).resolve("rerank.json"));
         Map<Integer, Map<String, Object>> llm = rerankByRank(rr);
@@ -196,6 +210,7 @@ public class SessionService {
             out.put("belowThreshold", cj.path("below_threshold").size());
             out.put("transcript", cj.path("transcript").isTextual() ? cj.path("transcript").asText() : null);
         }
+        out.put("taboo", memory.tabooWords());
         out.put("hasCurve", Files.exists(paths.sessionDir(session).resolve("curve.png")));
         return out;
     }
@@ -212,6 +227,7 @@ public class SessionService {
         existing.forEach(c -> byRank.put(c.getRnk(), c));
         boolean hadMarks = existing.stream().anyMatch(c -> c.getMark() != null || c.getNote() != null);
         Set<Integer> seen = new HashSet<>();
+        Set<Integer> reset = new HashSet<>();
         Path clips = dir.resolve("clips");
         for (JsonNode n : cj.path("candidates")) {
             int rank = n.path("rank").asInt();
@@ -225,6 +241,7 @@ public class SessionService {
             } else if (c.getClipStart() != null && Math.abs(c.getClipStart() - n.path("clip_start").asDouble()) > 1) {
                 c.setMark(null);
                 c.setNote(null);
+                reset.add(rank);
             }
             c.setT(n.path("t").asDouble());
             c.setScore(n.path("score").asDouble());
@@ -248,24 +265,30 @@ public class SessionService {
                 candidates.deleteById(c.getId());
             }
         }
+        if (!reset.isEmpty()) {
+            clearMeta(session, reset);
+        }
         if (!hadMarks) {
             importMarks(session);
         }
         return cj;
     }
 
-    public void mark(String session, int rank, String mark, String note) {
+    public synchronized void mark(String session, int rank, String mark, String note, List<String> reasons,
+                                  String mode, Long ms) {
         paths.checkSession(session);
         Candidate c = candidates.selectOne(new QueryWrapper<Candidate>().eq("session_name", session).eq("rnk", rank));
         if (c == null) {
             throw ApiException.notFound("没有这个候选");
         }
+        boolean cleared = false;
         if (mark != null) {
             String m = mark.trim().toUpperCase();
             if (!m.isEmpty() && !m.equals("Y") && !m.equals("N")) {
                 throw ApiException.badRequest("标注只能是 Y、N 或空");
             }
             c.setMark(m.isEmpty() ? null : m);
+            cleared = m.isEmpty();
         }
         if (note != null) {
             if (note.length() > 500) {
@@ -274,18 +297,96 @@ public class SessionService {
             c.setNote(note.isBlank() ? null : note.trim());
         }
         candidates.updateById(c);
+        if (cleared) {
+            clearMeta(session, Set.of(rank));               // 清除标注时，原因 / 模式 / 耗时一起清
+        } else if (reasons != null || mode != null || (ms != null && ms > 0)) {
+            Map<String, Map<String, Object>> all = readMeta(session);
+            Map<String, Object> e = all.computeIfAbsent(String.valueOf(rank), k -> new LinkedHashMap<>());
+            if (reasons != null) {
+                List<String> clean = new ArrayList<>();
+                for (String r : reasons) {
+                    if (!REASONS.contains(r)) {
+                        throw ApiException.badRequest("不认识的原因：" + r);
+                    }
+                    if (!clean.contains(r)) {
+                        clean.add(r);
+                    }
+                }
+                e.put("reasons", clean);
+            }
+            if (mode != null && !mode.isBlank()) {
+                if (!MODES.contains(mode)) {
+                    throw ApiException.badRequest("不认识的审核模式：" + mode);
+                }
+                e.put("mode", mode);
+            }
+            if (ms != null && ms > 0) {
+                long add = Math.min(ms, MAX_REVIEW_MS);              // 一次最多算 10 分钟，挂机不算数
+                e.put("ms", ((Number) e.getOrDefault("ms", 0L)).longValue() + add);
+            }
+            e.put("at", LocalDateTime.now().withNano(0).toString());
+            writeMeta(session, all);
+        }
         exportCsv(session);
+    }
+
+    // ------------------------------------------------------------------ 审核附加信息（原因 / 模式 / 耗时）
+    private Path metaFile(String session) {
+        return paths.sessionDir(session).resolve("review_meta.json");
+    }
+
+    Map<String, Map<String, Object>> readMeta(String session) {
+        Path f = metaFile(session);
+        if (!Files.exists(f)) {
+            return new LinkedHashMap<>();
+        }
+        try {
+            return om.readValue(f.toFile(), new TypeReference<LinkedHashMap<String, Map<String, Object>>>() {});
+        } catch (IOException e) {
+            log.warn("读取失败：{}", f, e);
+            return new LinkedHashMap<>();
+        }
+    }
+
+    private void writeMeta(String session, Map<String, Map<String, Object>> all) {
+        Path f = metaFile(session);
+        Path tmp = f.resolveSibling(f.getFileName() + ".tmp");
+        try {
+            Files.createDirectories(f.getParent());
+            Files.writeString(tmp, om.writerWithDefaultPrettyPrinter().writeValueAsString(all), StandardCharsets.UTF_8);
+            Files.move(tmp, f, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    private void clearMeta(String session, Set<Integer> ranks) {
+        Map<String, Map<String, Object>> all = readMeta(session);
+        boolean changed = false;
+        for (Integer r : ranks) {
+            changed |= all.remove(String.valueOf(r)) != null;
+        }
+        if (changed) {
+            writeMeta(session, all);
+        }
     }
 
     /** 导出 eval/reviews/<场次>.csv（evaluate.py 和旧的 review.py 都读这个文件）。 */
     public void exportCsv(String session) {
         List<List<String>> rows = new ArrayList<>();
+        Map<String, Map<String, Object>> meta = readMeta(session);
         for (Candidate c : candidates.selectList(new QueryWrapper<Candidate>()
                 .eq("session_name", session).orderByAsc("rnk"))) {
+            Map<String, Object> e = meta.getOrDefault(String.valueOf(c.getRnk()), Map.of());
+            Object rs = e.get("reasons");
+            String reasons = rs instanceof List<?> l ? String.join("|", l.stream().map(String::valueOf).toList()) : "";
+            long ms = e.get("ms") instanceof Number n ? n.longValue() : 0;
             rows.add(List.of(String.valueOf(c.getRnk()), TimeFmt.hhmmss(c.getT()), TimeFmt.hhmmss(c.getClipStart()),
                     TimeFmt.hhmmss(c.getClipEnd()), String.format("%.2f", c.getScore()), mainSignals(c.getContrib()),
                     joinJsonArray(c.getTopDanmaku()), c.getMark() == null ? "" : c.getMark(),
-                    c.getNote() == null ? "" : c.getNote()));
+                    c.getNote() == null ? "" : c.getNote(), reasons,
+                    e.get("mode") == null ? "" : String.valueOf(e.get("mode")),
+                    ms > 0 ? String.valueOf(Math.round(ms / 1000.0)) : ""));
         }
         try {
             Csv.write(paths.reviews().resolve(session + ".csv"), CSV_HEADER, rows);
@@ -300,6 +401,7 @@ public class SessionService {
         if (!Files.exists(f)) {
             return;
         }
+        Map<String, Map<String, Object>> imported = readMeta(session);
         try {
             for (Map<String, String> r : Csv.readMaps(f)) {
                 String rank = r.getOrDefault("序号", "").trim();
@@ -314,12 +416,39 @@ public class SessionService {
                     c.setMark(mark.equals("Y") || mark.equals("N") ? mark : null);
                     c.setNote(note.isEmpty() ? null : note.substring(0, Math.min(500, note.length())));
                     candidates.updateById(c);
+                    importMeta(imported, rank, r);
                 }
             }
+            writeMeta(session, imported);
             log.info("已从 {} 导入标注", f);
         } catch (IOException e) {
             log.warn("导入标注失败：{}", f, e);
         }
+    }
+
+    private static void importMeta(Map<String, Map<String, Object>> into, String rank, Map<String, String> row) {
+        List<String> reasons = new ArrayList<>();
+        for (String x : row.getOrDefault(REASON_COL, "").split("\\|")) {
+            if (REASONS.contains(x.trim())) {
+                reasons.add(x.trim());
+            }
+        }
+        String mode = row.getOrDefault(MODE_COL, "").trim();
+        String sec = row.getOrDefault(SECONDS_COL, "").trim();
+        if (reasons.isEmpty() && !MODES.contains(mode) && !sec.matches("\\d+")) {
+            return;
+        }
+        Map<String, Object> e = new LinkedHashMap<>();
+        if (!reasons.isEmpty()) {
+            e.put("reasons", reasons);
+        }
+        if (MODES.contains(mode)) {
+            e.put("mode", mode);
+        }
+        if (sec.matches("\\d+")) {
+            e.put("ms", Long.parseLong(sec) * 1000);
+        }
+        into.put(rank, e);
     }
 
     // ------------------------------------------------------------------ 工具
@@ -360,7 +489,7 @@ public class SessionService {
         return out;
     }
 
-    private Map<String, Object> toMap(Candidate c) {
+    private Map<String, Object> toMap(Candidate c, Map<String, Object> meta) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("rank", c.getRnk());
         m.put("t", c.getT());
@@ -376,6 +505,9 @@ public class SessionService {
         m.put("mark", c.getMark());
         m.put("note", c.getNote());
         m.put("clip", c.getClipFile());
+        m.put("reasons", meta != null && meta.get("reasons") != null ? meta.get("reasons") : List.of());
+        m.put("mode", meta == null ? null : meta.get("mode"));
+        m.put("reviewMs", meta != null && meta.get("ms") instanceof Number n ? n.longValue() : 0L);
         return m;
     }
 

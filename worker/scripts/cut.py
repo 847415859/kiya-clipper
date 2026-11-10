@@ -25,11 +25,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.media import probe_duration  # noqa: E402
 from clipper.subtitles import (StyleError, ass_filter, build_events, font_available, get_style,  # noqa: E402
@@ -122,7 +122,7 @@ def main() -> int:
         except (StyleError, OSError, json.JSONDecodeError) as e:
             print(f"字幕配置有误，本次不加字幕：{e}")
         else:
-            streamer = yaml.safe_load(Path(args.config).read_text(encoding="utf-8")) if Path(args.config).exists() else {}
+            streamer = load_cfg(Path(args.config)) if Path(args.config).exists() else {}
             subs = {"style": style, "corrections": sub_cfg.get("corrections") or {}, "keywords": lore_keywords(streamer)}
             print(f"字幕：样式 {style_name}（{style['name']}）" + ("，--fast 模式只生成字幕文件不烧录" if args.fast else ""))
             if not font_available(style["font"]):

@@ -25,13 +25,13 @@ import sys
 import time
 from pathlib import Path
 
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.edit import EditError, default_edit, edit_window, validate_edit  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
@@ -165,7 +165,7 @@ def main() -> int:
         except StyleError as e:
             print(f"字幕样式有误：{e}", file=sys.stderr)
             return 1
-        streamer = yaml.safe_load(Path(args.config).read_text(encoding="utf-8")) if Path(args.config).exists() else {}
+        streamer = load_cfg(Path(args.config)) if Path(args.config).exists() else {}
         keywords = sorted({*(lore_keywords(streamer) if style["highlight_lore"] else []), *style["highlight_words"]},
                           key=len, reverse=True)
         events = subtitle_events(tr["sentences"], t_start, t_end, style, sub_cfg.get("corrections") or {})

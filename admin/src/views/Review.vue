@@ -7,11 +7,19 @@
       <span v-if="data.signals" class="muted">信号 {{ data.signals }}；弹幕延迟 {{ data.delay }} 秒</span>
       <span v-if="data.minScore != null" class="muted">分数线 {{ data.minScore }}，另有 {{ data.belowThreshold }} 个未过线</span>
       <span class="spacer" />
-      <el-tooltip v-if="data.rerank" placement="bottom"
-                  content="先自己判断再看 AI，标注才能用来评测精排；已标过的片段总是显示">
-        <el-switch v-model="showAi" active-text="显示 AI 精排" />
+      <span v-if="done && avgSec" class="muted">平均 {{ avgSec }} 秒/条</span>
+      <el-tooltip v-if="data.rerank" placement="bottom">
+        <template #content>
+          盲审：先自己判断，标注才能用来评测精排、校准权重。<br />
+          快审：边看 AI 边审，AI 很有把握的（≥{{ HI }} 分或 ≤{{ LO }} 分）可以按 A 直接采纳；快审的标注不进评测。
+        </template>
+        <el-radio-group v-model="reviewMode" size="small">
+          <el-radio-button value="blind">盲审（评测）</el-radio-button>
+          <el-radio-button value="fast">快审（生产）</el-radio-button>
+        </el-radio-group>
       </el-tooltip>
-      <span class="muted keys">Y 有趣 · N 不有趣 · ←/→ 切换 · 空格 播放 · J/L ±5 秒 · E 备注</span>
+      <el-checkbox v-if="data.rerank && reviewMode === 'fast'" v-model="sortAi" size="small">按 AI 排序</el-checkbox>
+      <span class="muted keys">Y 有趣 · N 不有趣 · {{ reviewMode === 'fast' ? 'A 采纳 AI · ' : '' }}1–0 原因 · ←/→ 切换 · 空格 播放 · J/L ±5 秒 · E 备注</span>
     </div>
 
     <div v-if="!list.length && !loading" class="empty-all">
@@ -23,6 +31,7 @@
         <div v-for="(c, i) in list" :key="c.rank" :class="['item', { cur: i === cur }]" @click="select(i)">
           <span class="r">#{{ c.rank }}</span>
           <span>{{ hms(c.t) }}</span>
+          <span v-if="tabooHits(c).length" class="taboo-mark" title="命中禁区话题">禁</span>
           <span v-if="aiVisible(c) && c.llm && !c.llm.error" class="ai" :class="{ hot: c.llm.funny }">AI {{ c.llm.score }}</span>
           <el-tag size="small" :type="c.mark === 'Y' ? 'success' : c.mark === 'N' ? 'danger' : 'info'" class="badge">
             {{ c.mark === 'Y' ? '有趣' : c.mark === 'N' ? '不有趣' : c.clip ? '未标' : '未剪' }}
@@ -38,6 +47,13 @@
           <p v-if="cutting" class="muted">2 核服务器上 1 分钟片段约需 30–60 秒，前面有任务时要先排队…</p>
         </div>
 
+        <div v-if="tabooHits(c).length" class="taboo-bar">
+          命中禁区话题：{{ tabooHits(c).join('、') }}。精排会把它排到最后；确定不发的话直接标 N。
+        </div>
+        <div v-if="adoptable(c)" class="adopt">
+          AI 很有把握：{{ adoptable(c) === 'Y' ? '有趣' : '不值得切' }}（{{ c.llm.score }} 分）
+          <el-button size="small" type="primary" plain @click="adopt">采纳 (A)</el-button>
+        </div>
         <div class="row">
           <el-button :type="c.mark === 'Y' ? 'success' : ''" :plain="c.mark !== 'Y'" @click="mark('Y')">Y 有趣</el-button>
           <el-button :type="c.mark === 'N' ? 'danger' : ''" :plain="c.mark !== 'N'" @click="mark('N')">N 不有趣</el-button>
@@ -46,6 +62,13 @@
           <el-button @click="go(1)">下一个 →</el-button>
           <el-button type="primary" plain @click="$router.push(`/sessions/${name}/edit/${c.rank}`)">编辑成片 →</el-button>
           <span class="saved">{{ saved }}</span>
+        </div>
+        <div class="reasons">
+          <span class="muted">原因（点一下就行，1–0 快捷键）</span>
+          <el-check-tag v-for="(r, i) in REASONS" :key="r.code" :checked="(c.reasons || []).includes(r.code)"
+                        :class="['rtag', r.group]" @change="toggleReason(r.code)">
+            <kbd>{{ (i + 1) % 10 }}</kbd>{{ r.label }}
+          </el-check-tag>
         </div>
         <el-input ref="noteInput" v-model="note" placeholder="备注：为什么有趣 / 为什么不行（例如：舰长互动，笑点在 0:35；只是在念 SC；边界太早）"
                   maxlength="500" @change="saveNote" @keydown.stop @keyup.enter="blurNote" />
@@ -83,7 +106,7 @@
           <div class="muted">主播原话（点一句跳到那里；语音识别可能有错字）</div>
           <div v-if="!c.speech.length" class="muted">这段没有识别到说话</div>
           <div v-for="(s, i) in c.speech" :key="i" class="sl" @click="seek(s.t0 - c.clipStart)">
-            <span class="st">{{ mmss(s.t0 - c.clipStart) }}</span>{{ s.text }}
+            <span class="st">{{ mmss(s.t0 - c.clipStart) }}</span><template v-for="(p, k) in pieces(s.text)" :key="k"><mark v-if="p.hit" class="tb">{{ p.t }}</mark><template v-else>{{ p.t }}</template></template>
           </div>
         </div>
 
@@ -106,13 +129,52 @@ import { api, hms } from '../api'
 const route = useRoute()
 const name = computed(() => route.params.name)
 const data = ref({})
-const list = ref([])
+const all = ref([])
+const HI = 8                       // AI 评分 ≥ HI 且判有梗 → 很有把握是“有趣”
+const LO = 3                       // AI 评分 ≤ LO → 很有把握是“不值得切”
+const REASONS = [
+  { code: 'start_early', label: '开头太早', group: 'edge' }, { code: 'start_late', label: '开头太晚', group: 'edge' },
+  { code: 'end_early', label: '结尾太早', group: 'edge' }, { code: 'end_late', label: '结尾太晚', group: 'edge' },
+  { code: 'not_funny', label: '不好笑', group: 'no' }, { code: 'need_context', label: '要前情才懂', group: 'no' },
+  { code: 'read_sc', label: '只是念SC', group: 'no' }, { code: 'repeat_meme', label: '重复的梗', group: 'no' },
+  { code: 'taboo', label: '主播不想发', group: 'no' }, { code: 'gem', label: '特别好笑', group: 'yes' },
+]
+const NEG = new Set(['not_funny', 'need_context', 'read_sc', 'repeat_meme', 'taboo'])
+const store = {
+  get(k, d) { try { return localStorage.getItem(k) ?? d } catch { return d } },
+  set(k, v) { try { localStorage.setItem(k, v) } catch { /* 隐私模式下存不了就算了 */ } },
+}
+const reviewMode = ref(store.get('kiya.reviewMode', 'blind') === 'fast' ? 'fast' : 'blind')
+const sortAi = ref(store.get('kiya.sortAi', '') === '1')
+watch(reviewMode, (v) => store.set('kiya.reviewMode', v))
+watch(sortAi, (v) => store.set('kiya.sortAi', v ? '1' : ''))
+const list = computed(() => {
+  if (reviewMode.value === 'fast' && sortAi.value) {
+    return [...all.value].sort((a, b) => ((a.llm && a.llm.newRank) || 999) - ((b.llm && b.llm.newRank) || 999) || a.rank - b.rank)
+  }
+  return all.value
+})
+// 审核耗时：只算页面可见的时间，换一条重新计
+let spent = 0
+let since = Date.now()
+function spentNow() {
+  return Math.round(spent + (since ? Date.now() - since : 0))
+}
+function resetSpent() {
+  spent = 0
+  since = document.hidden ? 0 : Date.now()
+}
+function onVisible() {
+  if (document.hidden) {
+    if (since) spent += Date.now() - since
+    since = 0
+  } else if (!since) since = Date.now()
+}
 const cur = ref(0)
 const note = ref('')
 const saved = ref('')
 const loading = ref(true)
 const cutting = ref(false)
-const showAi = ref(false)
 const video = ref(null)
 const noteInput = ref(null)
 let savedTimer = null
@@ -120,12 +182,16 @@ let savedTimer = null
 const c = computed(() => list.value[cur.value])
 const done = computed(() => list.value.filter((x) => x.mark).length)
 const yes = computed(() => list.value.filter((x) => x.mark === 'Y').length)
+const avgSec = computed(() => {
+  const t = all.value.filter((x) => x.mark && x.reviewMs > 0)
+  return t.length ? Math.round(t.reduce((a, x) => a + x.reviewMs, 0) / t.length / 1000) : 0
+})
 
 async function load(keep) {
   loading.value = true
   try {
     data.value = await api.candidates(name.value)
-    list.value = data.value.candidates || []
+    all.value = data.value.candidates || []
     if (!keep) {
       const first = list.value.findIndex((x) => !x.mark)
       cur.value = first < 0 ? 0 : first
@@ -135,10 +201,33 @@ async function load(keep) {
   }
 }
 
-watch(c, (v) => { note.value = (v && v.note) || '' })
+watch(c, (v) => { note.value = (v && v.note) || ''; resetSpent() })
 
-// 没标注前默认不显示 AI 判断，免得先入为主，标注就没法用来评测精排
-const aiVisible = (x) => showAi.value || !!x.mark
+// 盲审：没标注前不显示 AI 判断，免得先入为主，标注才能用来评测精排；快审始终显示
+const aiVisible = (x) => reviewMode.value === 'fast' || !!x.mark
+
+// 'Y' / 'N' = AI 很有把握（只在快审里给“采纳”按钮）；否则 ''
+function adoptable(x) {
+  if (reviewMode.value !== 'fast' || !x || !x.llm || x.llm.error || x.mark) return ''
+  if (x.llm.funny && x.llm.score >= HI) return 'Y'
+  if (x.llm.score <= LO) return 'N'
+  return ''
+}
+
+// 禁区话题：命中的词（后台“精排记忆”页管理）
+function tabooHits(x) {
+  const words = data.value.taboo || []
+  if (!x || !words.length) return []
+  const text = ((x.speech || []).map((s) => s.text).join('')).toLowerCase()
+  return words.filter((w) => text.includes(w.toLowerCase()))
+}
+
+function pieces(text) {
+  const words = (data.value.taboo || []).filter(Boolean)
+  if (!words.length) return [{ t: text, hit: false }]
+  const re = new RegExp('(' + words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'gi')
+  return text.split(re).filter((t) => t !== '').map((t) => ({ t, hit: words.some((w) => w.toLowerCase() === t.toLowerCase()) }))
+}
 
 function mmss(sec) {
   const s = Math.max(0, Math.round(sec))
@@ -164,13 +253,58 @@ function go(d) {
   select(cur.value + d)
 }
 
-async function mark(m) {
+async function mark(m, adopted = false) {
   const x = c.value
   if (!x) return
-  await api.mark(name.value, x.rank, { mark: m })
+  const body = { mark: m }
+  if (m) {
+    body.mode = adopted ? 'confirm' : reviewMode.value === 'fast' && !x.mark ? 'fast' : x.mode || 'blind'
+    body.ms = spentNow()
+  }
+  await api.mark(name.value, x.rank, body)
   x.mark = m || null
+  if (m) {
+    x.mode = body.mode
+    x.reviewMs = (x.reviewMs || 0) + body.ms
+    resetSpent()
+  } else {
+    x.mode = null
+    x.reviewMs = 0
+    x.reasons = []
+  }
   flash()
   if (m) setTimeout(() => go(1), 250)
+}
+
+function adopt() {
+  const v = adoptable(c.value)
+  if (v) mark(v, true)
+}
+
+async function toggleReason(code) {
+  const x = c.value
+  if (!x) return
+  const cur = new Set(x.reasons || [])
+  const on = !cur.has(code)
+  on ? cur.add(code) : cur.delete(code)
+  const reasons = REASONS.map((r) => r.code).filter((k) => cur.has(k))
+  const body = { reasons }
+  // 选了“不好笑”这类原因，还没标注的话顺手标 N；“特别好笑”标 Y（不自动跳下一条，可以继续补原因）
+  const implied = on && !x.mark ? (NEG.has(code) ? 'N' : code === 'gem' ? 'Y' : '') : ''
+  if (implied) {
+    body.mark = implied
+    body.mode = reviewMode.value === 'fast' ? 'fast' : 'blind'
+    body.ms = spentNow()
+  }
+  await api.mark(name.value, x.rank, body)
+  x.reasons = reasons
+  if (implied) {
+    x.mark = implied
+    x.mode = body.mode
+    x.reviewMs = (x.reviewMs || 0) + body.ms
+    resetSpent()
+  }
+  flash()
 }
 
 async function saveNote() {
@@ -221,6 +355,8 @@ function onKey(e) {
   const k = e.key.toLowerCase()
   if (k === 'y') mark('Y')
   else if (k === 'n') mark('N')
+  else if (k === 'a') adopt()
+  else if (/^[0-9]$/.test(e.key) && REASONS[(Number(e.key) + 9) % 10]) toggleReason(REASONS[(Number(e.key) + 9) % 10].code)
   else if (e.key === 'ArrowRight') go(1)
   else if (e.key === 'ArrowLeft') go(-1)
   else if (k === 'e') { e.preventDefault(); nextTick(() => noteInput.value && noteInput.value.focus()) }
@@ -233,9 +369,11 @@ function onKey(e) {
 onMounted(() => {
   load(false)
   window.addEventListener('keydown', onKey)
+  document.addEventListener('visibilitychange', onVisible)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
+  document.removeEventListener('visibilitychange', onVisible)
   clearTimeout(savedTimer)
 })
 </script>
@@ -273,4 +411,11 @@ video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; dis
 .ai.hot { color: var(--el-color-success); font-weight: 600; }
 .aibox { margin: 10px 0; padding: 8px 12px; border-left: 3px solid var(--el-color-primary-light-5); background: var(--el-fill-color-light); display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .aibox .el-tag { margin-right: 6px; }
+.adopt { margin: 8px 0 0; padding: 6px 10px; border-radius: 6px; background: var(--el-color-primary-light-9); font-size: 13px; display: flex; gap: 10px; align-items: center; }
+.reasons { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.rtag kbd { font-size: 10px; opacity: .55; margin-right: 4px; font-family: inherit; }
+.taboo-bar { margin: 8px 0 0; padding: 6px 10px; border-radius: 6px; background: var(--el-color-danger-light-9); color: var(--el-color-danger); font-size: 13px; }
+.taboo-mark { font-size: 11px; color: #fff; background: var(--el-color-danger); border-radius: 3px; padding: 0 3px; margin-left: auto; }
+.taboo-mark + .ai { margin-left: 4px; }
+mark.tb { background: var(--el-color-danger-light-7); color: var(--el-color-danger); border-radius: 2px; }
 </style>

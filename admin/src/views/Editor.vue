@@ -9,6 +9,9 @@
       <el-tooltip content="让大模型按精排结果写一版花字 / 运镜 / 贴图，再手动微调" placement="bottom">
         <el-button :loading="drafting" @click="aiDraft">AI 初稿</el-button>
       </el-tooltip>
+      <el-tooltip v-if="info.aiDraft" content="丢掉手动修改，回到 AI 刚生成的版本（这次保存不计入“剪辑口味”）" placement="bottom">
+        <el-button @click="restoreAi">还原 AI 原稿</el-button>
+      </el-tooltip>
       <el-button type="primary" :disabled="!dirty" :loading="saving" @click="save()">保存</el-button>
       <el-dropdown split-button type="success" :disabled="rendering" @click="render(480)" @command="render">
         {{ rendering ? '渲染中…' : '渲染 480p 预览' }}
@@ -307,7 +310,8 @@ let coverT = null
 const warnings = ref([])
 const generatedBy = ref('')
 const aiNote = ref('')
-const info = reactive({ clipLen: 60, clip: null, preview: null, t: 0, finals: [], llm: null, exists: false,
+let restoredAi = false           // 刚点了“还原 AI 原稿”：下一次保存不算人工修改
+const info = reactive({ aiDraft: null, clipLen: 60, clip: null, preview: null, t: 0, finals: [], llm: null, exists: false,
   candidate: { start: 0, end: 60 }, videoWindow: null })
 const edit = reactive({ window: { start: 0, end: 60 }, trim: { start: 0, end: 60 }, subtitles: { enabled: true }, items: [] })
 const styleId = ref(null)
@@ -548,7 +552,7 @@ async function load() {
   try {
     const r = await api.getEdit(name.value, rank.value)
     Object.assign(info, { clipLen: r.clipLen, clip: r.clip, preview: r.preview || null, t: r.t, finals: r.finals || [],
-      llm: r.llm || null, exists: !!r.exists, candidate: r.candidate || { start: 0, end: r.clipLen } })
+      llm: r.llm || null, exists: !!r.exists, aiDraft: r.aiDraft || null, candidate: r.candidate || { start: 0, end: r.clipLen } })
     info.videoWindow = null
     videoSrc.value = ''
     pickVideo()
@@ -573,7 +577,8 @@ async function save(quiet) {
   try {
     const body = { version: 1, window: { ...edit.window }, trim: { ...edit.trim }, subtitles: { enabled: edit.subtitles.enabled }, items: edit.items }
     if (generatedBy.value) Object.assign(body, { generated_by: generatedBy.value, note: aiNote.value })
-    const r = await api.saveEdit(name.value, rank.value, body, edit.subtitles.enabled ? styleId.value : null)
+    const r = await api.saveEdit(name.value, rank.value, body, edit.subtitles.enabled ? styleId.value : null, restoredAi)
+    restoredAi = false
     warnings.value = r.warnings || []
     info.exists = true
     loaded = false
@@ -590,8 +595,16 @@ async function save(quiet) {
   }
 }
 
+async function restoreAi() {
+  await ElMessageBox.confirm('丢掉现在的修改，回到 AI 刚生成的版本？', '还原 AI 原稿', { type: 'warning', confirmButtonText: '还原' })
+  apply(info.aiDraft)
+  restoredAi = true
+  await nextTick()
+  dirty.value = true
+}
+
 async function render(height) {
-  if (dirty.value) await save(true)
+  if (dirty.value || height >= 1080) await save(true)          // 渲染发布用的 1080p 也算“确认这版”
   const j = await api.submitJob('RENDER', name.value, { rank: rank.value, height })
   renderJob.value = j.id
   rendering.value = true
