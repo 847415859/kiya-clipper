@@ -12,6 +12,8 @@ export default defineConfig({
   },
   server: {
     // 本地开发：npm run dev，接口转发到本机运行的后端
-    proxy: { '/api': 'http://127.0.0.1:8080' }
+    proxy: { '/api': 'http://127.0.0.1:8080' },
+    // 成片编辑器直接引用渲染器的动画代码（../renderer/src/anim.js），开发服务器要允许访问上一级目录
+    fs: { allow: ['..'] }
   }
 })

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kiya-clipper/edit_script",
+  "title": "剪辑脚本（成片包装）",
+  "description": "一个候选片段的成片编排。存放在 output/<场次>/edits/<序号>.json，由后台编辑器生成，worker/scripts/render.py 渲染。时间都是相对候选片段开头的秒数。校验以 worker/clipper/edit.py 为准，本文件是说明文档。",
+  "type": "object",
+  "properties": {
+    "version": {"const": 1},
+    "trim": {
+      "type": "object", "description": "成片取片段里的哪一段（至少 1 秒）",
+      "properties": {"start": {"type": "number", "minimum": 0}, "end": {"type": "number", "minimum": 0}}
+    },
+    "subtitles": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean", "default": true},
+        "style": {"$ref": "../config/schema/subtitle_style.schema.json", "description": "后台保存时写入所选样式的完整配置；没有则用默认样式"},
+        "style_name": {"type": "string"}
+      }
+    },
+    "items": {
+      "type": "array", "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": ["type", "start"],
+        "properties": {
+          "id": {"type": "string"},
+          "type": {"enum": ["text", "zoom", "sticker"]},
+          "start": {"type": "number", "minimum": 0},
+          "duration": {"type": "number", "minimum": 0.2, "maximum": 30, "default": 2},
+          "text": {"type": "string", "maxLength": 40, "description": "花字内容（text）"},
+          "preset": {"enum": ["pop", "slam", "shake", "bounce", "fade", "slide"], "description": "入场动画：弹出 / 砸下 / 抖动 / 弹跳 / 淡入 / 右侧滑入（slide 仅贴图）"},
+          "x": {"type": "number", "minimum": 0, "maximum": 1, "description": "中心横向位置（画面比例）；zoom 为放大焦点"},
+          "y": {"type": "number", "minimum": 0, "maximum": 1},
+          "size": {"type": "number", "minimum": 24, "maximum": 300, "description": "花字字号（1080p 基准）"},
+          "color": {"type": "string", "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"},
+          "stroke": {"type": "string", "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"},
+          "stroke_width": {"type": "number", "minimum": 0, "maximum": 30},
+          "rotate": {"type": "number", "minimum": -45, "maximum": 45},
+          "font": {"type": "string"},
+          "scale": {"type": "number", "description": "zoom：放大倍数 1.05–3；sticker：宽度占画面比例 0.03–1"},
+          "shake": {"type": "number", "minimum": 0, "maximum": 1, "description": "zoom：震动强度"},
+          "ease_in": {"type": "number", "minimum": 0.05, "maximum": 2},
+          "ease_out": {"type": "number", "minimum": 0.05, "maximum": 2},
+          "asset": {"type": "string", "description": "sticker：assets/stickers/ 里的文件名"}
+        }
+      }
+    }
+  }
+}

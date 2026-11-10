@@ -12,7 +12,7 @@
 字幕：场次已用 transcribe.py 转写过时，自动把主播原话烧录进视频，样式见 config/subtitles.yaml；
 同时在旁边生成同名 .srt（可作为 B 站 CC 字幕上传）和 .ass。--fast 模式不烧录，只生成字幕文件。
 
-精确模式：片段跨两个录像分段时会自动拼接；重新编码保证起点准确、开头不花屏。
+精确模式：片段跨两个录像分段时会自动拼接；重新编码、逐帧定位，起止时间准确到帧（字幕才对得上）。
 2 核服务器上 720p、veryfast 编码大约 1–2 倍实时速度：20 段 × 1 分钟约 10–20 分钟。
 输出到 output/<场次>/clips/，文件名 序号_高峰时间.mp4
 """
@@ -23,7 +23,6 @@ import json
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import yaml
@@ -76,17 +75,18 @@ def cut_one(parts: list[tuple[Path, float, float]], dst: Path, fast: bool, heigh
                "-c", "copy", str(dst)]
         subprocess.run(cmd, check=True)
         return
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
-        for v, a, b in parts:
-            f.write(f"file '{v.as_posix()}'\ninpoint {a:.3f}\noutpoint {b:.3f}\n")
-        lst = f.name
-    cmd = [ff, "-nostdin", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", lst,
-           "-vf", f"scale=-2:'min({height},ih)'" + (f",{ass_filter(ass)}" if ass else ""), "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-           "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(dst)]
-    try:
-        subprocess.run(cmd, check=True)
-    finally:
-        Path(lst).unlink(missing_ok=True)
+    # 每段用输入端 -ss 精确定位（重新编码时 ffmpeg 会解码到准确的帧），再用 concat 滤镜拼接。
+    # 不用 concat 分离器的 inpoint：那样会从起点前最近的关键帧开始，片段会多出 1–2 秒，字幕就对不上了。
+    inputs, chains = [], []
+    for i, (v, a, b) in enumerate(parts):
+        inputs += ["-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-i", str(v)]
+        chains.append(f"[{i}:v:0][{i}:a:0]")
+    vf = f"scale=-2:'min({height},ih)'" + (f",{ass_filter(ass)}" if ass else "")
+    fc = "".join(chains) + f"concat=n={len(parts)}:v=1:a=1[cv][ca];[cv]{vf}[v]"
+    cmd = [ff, "-nostdin", "-loglevel", "error", "-y", *inputs, "-filter_complex", fc, "-map", "[v]", "-map", "[ca]",
+           "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-b:a", "128k",
+           "-movflags", "+faststart", str(dst)]
+    subprocess.run(cmd, check=True)
 
 
 def main() -> int:

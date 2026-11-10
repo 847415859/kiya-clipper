@@ -50,6 +50,18 @@ export const api = {
   defaultStyle: (id) => http.post(`/api/styles/${id}/default`),
   previewStyle: (body) => http.post('/api/styles/preview', body, { responseType: 'blob', timeout: 90000, quiet: true }),
 
+  getEdit: (name, rank) => http.get(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}`),
+  saveEdit: (name, rank, edit, styleId) => http.put(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}`, { edit, styleId }),
+  finalUrl: (name, file) => `/api/sessions/${encodeURIComponent(name)}/finals/${encodeURIComponent(file)}`,
+  stickers: () => http.get('/api/stickers'),
+  stickerUrl: (n) => `/api/stickers/${encodeURIComponent(n)}`,
+  uploadSticker: (file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return http.post('/api/stickers', fd)
+  },
+  deleteSticker: (n) => http.delete(`/api/stickers/${encodeURIComponent(n)}`),
+
   words: () => http.get('/api/config/words'),
   saveWords: (body) => http.put('/api/config/words', body),
   hotwordsPreview: () => http.get('/api/config/hotwords-preview'),

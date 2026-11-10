@@ -115,7 +115,7 @@ def test_cut_precise_and_fast(screened, session):
     assert len(clips) == 2
     dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
                                 "default=nw=1:nk=1", str(clips[0])], capture_output=True, text=True).stdout)
-    assert 55 <= dur <= 62
+    assert 59.5 <= dur <= 60.5                  # 逐帧定位：不会因为关键帧多出一两秒
     r = subprocess.run([sys.executable, str(ROOT / "scripts" / "cut.py"), str(d / "candidates.json"),
                         "--ranks", "3", "--fast"], capture_output=True, text=True)
     assert r.returncode == 0 and list((d / "clips").glob("03_*.flv"))

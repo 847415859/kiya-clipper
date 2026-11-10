@@ -203,6 +203,16 @@ python scripts/subtitle.py make output/<场次>/candidates.json              # �
 - **错字修正**：识别固定出错的词（比如“发件礼”→“发舰礼”）加到 `config/subtitles.yaml` 的 `corrections`，下次剪切生效。
 - **已经剪好的片段**要加字幕或换样式，重新运行 `cut.py` 就会覆盖。
 
+## 成片渲染（花字 / 放大运镜 / 贴图）
+
+在后台审核页点“编辑成片 →”编排效果，再点“渲染”；也可以命令行：
+
+```bash
+python scripts/render.py output/<场次>/candidates.json --rank 3 --height 480   # 先 480p 看效果
+```
+
+剪辑脚本在 `output/<场次>/edits/<序号>.json`（字段见 `schema/edit_script.schema.json`，校验在 `clipper/edit.py`），成片在 `output/<场次>/final/`。渲染器安装与性能说明见 [renderer/README.md](../renderer/README.md)。
+
 ## 调参（config/kiya.yaml）
 
 - **情绪词**：看 `peaks.csv` 的“高频弹幕”列，把 kiya 粉丝常刷的梗、口头禅加进 `emotion_words` 或 `lore_words`。
@@ -228,6 +238,9 @@ worker/
 ├── scripts/try_llm.py           # 试用百炼多模态大模型判断片段（阶段 0）
 ├── clipper/subtitles.py # 字幕：样式校验（按 schema）、分条、ASS/SRT 生成、烧录参数
 ├── scripts/subtitle.py  # 字幕样式列表 / 预览图 / 只生成字幕文件
+├── clipper/edit.py      # 剪辑脚本（成片包装）校验
+├── scripts/render.py    # 成片渲染：剪源视频、算字幕、调用 renderer（Remotion）
+├── scripts/edit_check.py # 后台保存剪辑脚本时调用的校验
 ├── clipper/asr.py       # 百炼录音文件识别：抽音频、OSS 签名链接、异步任务、整场时间轴
 ├── scripts/transcribe.py        # 整场语音转写 → transcript.json
 ├── scripts/hotwords.py          # 百炼热词表：从主播资料生成、创建 / 更新 / 删除

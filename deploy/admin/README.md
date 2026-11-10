@@ -40,24 +40,23 @@ java -version && mvn -v && node -v       # node 需要 18 以上
 
 密码只在终端里输入，不要写进命令历史或截图；用字母和数字，不要带引号。
 
-```bash
-read -rsp "给数据库用户 kiya 设一个密码：" DBPW; echo
-mysql <<SQL
-CREATE DATABASE IF NOT EXISTS kiya_admin DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
-CREATE USER IF NOT EXISTS 'kiya'@'127.0.0.1' IDENTIFIED BY '${DBPW}';
-GRANT ALL PRIVILEGES ON kiya_admin.* TO 'kiya'@'127.0.0.1';
-FLUSH PRIVILEGES;
-SQL
+**先单独运行这一行**，输入密码后回车（不要和下面的命令一起粘贴，否则 `read` 会把粘贴的下一行当成密码）：
 
-# 后台的配置文件（只有 root 能读）
+```bash
+read -rsp "数据库密码：" DBPW; echo; echo "长度 ${#DBPW}"
+```
+
+再粘贴下面这段（每条命令一行）：
+
+```bash
+mysql -e "CREATE DATABASE IF NOT EXISTS kiya_admin DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; CREATE USER IF NOT EXISTS 'kiya'@'127.0.0.1' IDENTIFIED BY '${DBPW}'; ALTER USER 'kiya'@'127.0.0.1' IDENTIFIED BY '${DBPW}'; GRANT ALL PRIVILEGES ON kiya_admin.* TO 'kiya'@'127.0.0.1'; FLUSH PRIVILEGES;"
 install -m 600 /dev/null /etc/kiya-admin.env
-cat >> /etc/kiya-admin.env <<EOF
-DB_PASSWORD=${DBPW}
-KIYA_REPO_DIR=/opt/kiya-clipper
-REC_DIR=/data/rec
-EOF
+printf 'DB_PASSWORD=%s\nKIYA_REPO_DIR=/opt/kiya-clipper\nREC_DIR=/data/rec\n' "$DBPW" > /etc/kiya-admin.env
+MYSQL_PWD="$DBPW" mysql -h127.0.0.1 -ukiya kiya_admin -e "SELECT '数据库连接正常' AS ok"
 unset DBPW
 ```
+
+看到“数据库连接正常”即可。`/etc/kiya-admin.env` 只有 root 能读，后台从这里拿数据库密码。
 
 表结构在后台第一次启动时自动创建（`backend/src/main/resources/schema.sql`）。
 
@@ -107,6 +106,12 @@ nginx -t && systemctl reload nginx
 - 用了 8443 端口和 IP 访问。以后想用域名 + 80/443 端口 + 免费正式证书（Let's Encrypt），在阿里云国内服务器上需要先做 ICP 备案。
 - 安全措施：密码 BCrypt 存储；同一 IP 连续输错 5 次锁 15 分钟，同一用户名被试 20 次锁 15 分钟；会话 Cookie 只走 HTTPS、SameSite=Strict；所有写操作有 CSRF 校验；后台进程只监听本机，外部只能经过 nginx；能执行的 worker 命令是固定的几种，参数逐个校验，不经过 shell。
 - 想临时不开公网：安全组关掉 8443，改用 SSH 隧道 `ssh -N -L 8080:127.0.0.1:8080 root@<服务器IP>`，并在 `/etc/kiya-admin.env` 加 `KIYA_COOKIE_SECURE=false` 后重启，浏览器开 `http://localhost:8080`。
+
+## 6.5 成片渲染（可选）
+
+后台的“成片编辑”需要渲染器（Remotion）：按 [renderer/README.md](../../renderer/README.md) 安装 Node 依赖和浏览器。不装也不影响其他功能，只是“渲染”任务会失败并提示安装。
+
+如果之前已经配置过 nginx，把 `/etc/nginx/conf.d/kiya-admin.conf` 里的 `client_max_body_size` 改成 `8m`（上传贴图用），然后 `nginx -t && systemctl reload nginx`。
 
 ## 7. 更新
 

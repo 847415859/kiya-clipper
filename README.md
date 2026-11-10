@@ -12,6 +12,7 @@ VTuber 直播自动切片系统。首位主播：娜由纪雅kiya（B站 UID 646
 | 监控告警：开播 / 漏录 / 硬盘 / 同步推送到微信 | [deploy/monitor/README.md](deploy/monitor/README.md) |
 | 阶段 1 粗筛：弹幕 + 音频 + 画面，转写、字幕、剪切与评测 | [worker/README.md](worker/README.md) |
 | 后台管理：场次、审核、任务、字幕样式、评测、配置 | [deploy/admin/README.md](deploy/admin/README.md) |
+| 成片包装：花字、放大运镜、贴图（Remotion 渲染） | [renderer/README.md](renderer/README.md) |
 | 主播合作与授权沟通 | [docs/合作邀请与授权说明.md](docs/合作邀请与授权说明.md) |
 | 评测集标注 | [eval/README.md](eval/README.md) |
 | 主播档案与梗百科 | [docs/主播档案-娜由纪雅kiya.md](docs/主播档案-娜由纪雅kiya.md) |
@@ -23,7 +24,8 @@ kiya-clipper/
 ├── backend/     # Spring Boot 后台：场次、审核、任务编排、字幕样式、评测
 ├── admin/       # 后台前端（Vue 3 + Element Plus），打包进 backend 的 jar
 ├── worker/      # Python：预处理、粗筛、转写、大模型、剪辑脚本（阶段 0 起）
-├── renderer/    # Remotion：视频模板（阶段 3）
+├── renderer/    # Remotion：成片渲染（运镜、字幕、花字、贴图）
+├── assets/      # 贴图库等素材（不进 git）
 ├── schema/      # 剪辑脚本、任务消息的 JSON Schema（阶段 2）
 ├── prompts/     # 版本化的大模型提示词（阶段 2）
 ├── deploy/      # 部署：录播姬、监控、后台（MySQL / nginx / systemd）

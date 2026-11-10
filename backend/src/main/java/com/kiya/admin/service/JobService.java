@@ -50,7 +50,8 @@ public class JobService {
             "HOTWORDS_SYNC", "同步热词表",
             "EVALUATE", "评测",
             "EVAL_SWEEP", "分数线扫描",
-            "EVAL_LOG", "评测并记录");
+            "EVAL_LOG", "评测并记录",
+            "RENDER", "渲染成片");
 
     private final JobMapper mapper;
     private final WorkerPaths paths;
@@ -205,7 +206,7 @@ public class JobService {
     // ------------------------------------------------------------------ 执行
     private static boolean needsSession(String type) {
         return switch (type) {
-            case "TRANSCRIBE", "SCREEN", "CUT", "PIPELINE" -> true;
+            case "TRANSCRIBE", "SCREEN", "CUT", "PIPELINE", "RENDER" -> true;
             default -> false;
         };
     }
@@ -223,6 +224,7 @@ public class JobService {
                 steps.add(screen(rec, session, p));
                 steps.add(cut(session, p));
             }
+            case "RENDER" -> steps.add(render(session, p));
             case "HOTWORDS_SYNC" -> steps.add(runner.command("hotwords.py", List.of("sync")));
             case "EVALUATE" -> steps.add(runner.command("evaluate.py", List.of()));
             case "EVAL_SWEEP" -> steps.add(runner.command("evaluate.py", List.of("--sweep")));
@@ -291,6 +293,19 @@ public class JobService {
             a.addAll(List.of("--sub-style-json", "@style:" + styleId));
         }
         return runner.command("cut.py", a);
+    }
+
+    private List<String> render(String session, Map<String, Object> p) {
+        int rank = intParam(p, "rank", 0);
+        if (rank < 1 || rank > 999) {
+            throw ApiException.badRequest("请指定要渲染的序号");
+        }
+        int height = intParam(p, "height", 720);
+        if (height != 360 && height != 480 && height != 720 && height != 1080) {
+            throw ApiException.badRequest("分辨率只能是 360 / 480 / 720 / 1080");
+        }
+        String cand = paths.sessionDir(session).resolve("candidates.json").toString();
+        return runner.command("render.py", List.of(cand, "--rank", String.valueOf(rank), "--height", String.valueOf(height)));
     }
 
     private static int intParam(Map<String, Object> p, String k, int def) {

@@ -42,3 +42,6 @@ config/admin_overrides.json
 
 # 后台：前端打包产物（由 admin/ 前端构建生成）
 backend/src/main/resources/static/
+# 贴图库（后台上传，不进 git）
+assets/stickers/*
+!assets/stickers/README.md

@@ -8,6 +8,7 @@ import Jobs from './views/Jobs.vue'
 import Styles from './views/Styles.vue'
 import Eval from './views/Eval.vue'
 import Settings from './views/Settings.vue'
+import Editor from './views/Editor.vue'
 
 // hash 路由：刷新页面不需要后端做路由回退
 const router = createRouter({
@@ -21,6 +22,7 @@ const router = createRouter({
         { path: '', redirect: '/sessions' },
         { path: 'sessions', component: Sessions, meta: { title: '场次' } },
         { path: 'sessions/:name/review', component: Review, meta: { title: '审核' } },
+        { path: 'sessions/:name/edit/:rank', component: Editor, meta: { title: '成片编辑' } },
         { path: 'jobs', component: Jobs, meta: { title: '任务' } },
         { path: 'styles', component: Styles, meta: { title: '字幕样式' } },
         { path: 'eval', component: Eval, meta: { title: '评测' } },

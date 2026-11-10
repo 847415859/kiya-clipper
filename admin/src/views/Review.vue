@@ -39,6 +39,7 @@
           <el-button @click="mark('')">清除</el-button>
           <el-button @click="go(-1)">← 上一个</el-button>
           <el-button @click="go(1)">下一个 →</el-button>
+          <el-button type="primary" plain @click="$router.push(`/sessions/${name}/edit/${c.rank}`)">编辑成片 →</el-button>
           <span class="saved">{{ saved }}</span>
         </div>
         <el-input ref="noteInput" v-model="note" placeholder="备注：为什么有趣 / 为什么不行（例如：舰长互动，笑点在 0:35；只是在念 SC；边界太早）"

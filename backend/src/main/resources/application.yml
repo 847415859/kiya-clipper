@@ -25,6 +25,10 @@ spring:
       schema-locations: classpath:schema.sql
   jackson:
     time-zone: Asia/Shanghai
+  servlet:
+    multipart:
+      max-file-size: 5MB      # 贴图上传
+      max-request-size: 6MB
 
 mybatis-plus:
   configuration:
