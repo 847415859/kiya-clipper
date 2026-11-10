@@ -22,6 +22,11 @@ analysis:
   clip_before_seconds: 30     # 候选片段：峰值前取多少秒
   clip_after_seconds: 30      # 候选片段：峰值后取多少秒
 
+# 边播边筛（监控脚本 KIYA_LIVE_SCREEN=1 时，直播中每 30 分钟对已录完的分段粗筛一次）
+live_screen:
+  quiet_seconds: 120          # 文件最近这么多秒内改过的分段算“还在录”，不参与
+  min_seconds: 900            # 已录完的部分不到这么久先不筛（样本太少，分数不稳）
+
 # 信号权重。没有录像特征（只跑弹幕分析）时只用前三项，自动按比例归一化
 weights:
   density: 0.35      # 弹幕密度（相对前 5 分钟）
@@ -58,6 +63,15 @@ rerank:
   max_len: 180
   price_in: null             # 单价（元 / 百万 tokens），填了就估算费用
   price_out: null
+
+# 主播周报（scripts/weekly_report.py）：只是统计，不调大模型
+weekly:
+  days: 7                    # 统计最近几天的场次
+  memes_top: 5               # 最火的梗 / 说法列几个
+  highlights_top: 5          # 高光场面列几个
+  words_top: 40              # 词云放多少个词
+  min_mentions: 5            # 一个说法本周至少出现几次（主播说 + 观众刷）才算梗，不够就少列，不凑数
+  min_type_items: 5          # 本周高光片段攒够几个才出“哪类内容更出效果”的占比
 
 # 精排记忆（scripts/learn.py）：从录制、审核、投稿里自动积累，填进提示词 rerank_v2 的【积累】
 memory:

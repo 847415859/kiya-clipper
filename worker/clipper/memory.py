@@ -86,6 +86,25 @@ def session_ngrams(sess_dir: Path, sentences: list[dict], danmaku: list[tuple[fl
     return d
 
 
+def ngrams_of_session(d: Path, log=print) -> dict | None:
+    """一场的 n-gram 计数（转写 + 弹幕 + 高峰片段内的原话）；没有转写也没有候选的场次返回 None。
+    learn.py 和主播周报共用，结果缓存在 output/<场次>/ngrams.json。"""
+    from .context import load_events
+    tr = _read(d / "transcript.json")
+    cj = _read(d / "candidates.json")
+    if not tr and not cj:
+        return None
+    sents = (tr or {}).get("sentences") or []
+    danmaku, windows = [], []
+    if cj:
+        windows = [(c["clip_start"], c["clip_end"]) for c in cj.get("candidates", [])]
+        try:
+            danmaku = [(e.t, e.text) for e in load_events(cj.get("segments") or []) if e.kind == "danmaku" and e.text]
+        except Exception as e:                      # noqa: BLE001  弹幕文件坏了不影响其他场
+            log(f"  {d.name}：弹幕读取失败（{e}）")
+    return session_ngrams(d, sents, danmaku, windows)
+
+
 def _boring(g: str) -> bool:
     if g in STOP or len(set(g)) == 1 or g.isdigit():
         return True

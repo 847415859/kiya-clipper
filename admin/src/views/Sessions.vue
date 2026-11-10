@@ -32,6 +32,7 @@
             <el-tag size="small" :type="row.hasCandidates ? 'success' : 'info'">
               {{ row.hasCandidates ? `候选 ${row.candidateCount}` : '未粗筛' }}
             </el-tag>
+            <el-tag v-if="row.live" size="small" type="warning">边播边筛·临时</el-tag>
             <el-tag size="small" :type="row.clipCount ? 'success' : 'info'">片段 {{ row.clipCount }}</el-tag>
             <el-tag v-if="row.hasRerank" size="small" type="success">已精排</el-tag>
             <el-tag v-if="row.hasCandidates" size="small" :type="row.reviewed >= row.candidateCount && row.candidateCount ? 'success' : 'warning'">

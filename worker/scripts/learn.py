@@ -29,11 +29,10 @@ sys.path.insert(0, str(ROOT))
 
 from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.bili import Bili, BiliError  # noqa: E402
-from clipper.context import load_events  # noqa: E402
 from clipper.editdiff import edit_taste  # noqa: E402
 from clipper.env import load_env  # noqa: E402
 from clipper.memory import (DEFAULT_WEIGHTS, active_weights, build_examples, calibrate, load_marks,  # noqa: E402
-                            mine_lore, review_stats, session_ngrams, type_stats, version_of)
+                            mine_lore, ngrams_of_session, review_stats, type_stats, version_of)
 
 MEM_DEFAULTS = {"min_sessions": 2, "lore_max": 30, "streamer_uploads": 20, "my_uploads": 30, "min_published": 5,
                 "min_label_sessions": 3, "examples_yes": 3, "examples_no": 3}
@@ -65,19 +64,9 @@ def known_words(cfg: dict) -> set[str]:
 def collect_ngrams(out_dir: Path) -> dict[str, dict]:
     per = {}
     for d in sorted(p for p in out_dir.iterdir() if p.is_dir() and not p.name.startswith("_")):
-        tr = read_json(d / "transcript.json", None)
-        cj = read_json(d / "candidates.json", None)
-        if not tr and not cj:
-            continue
-        sents = (tr or {}).get("sentences") or []
-        danmaku, windows = [], []
-        if cj:
-            windows = [(c["clip_start"], c["clip_end"]) for c in cj.get("candidates", [])]
-            try:
-                danmaku = [(e.t, e.text) for e in load_events(cj.get("segments") or []) if e.kind == "danmaku" and e.text]
-            except Exception as e:                      # noqa: BLE001  弹幕文件坏了不影响其他场
-                print(f"  {d.name}：弹幕读取失败（{e}）")
-        per[d.name] = session_ngrams(d, sents, danmaku, windows)
+        g = ngrams_of_session(d)
+        if g is not None:
+            per[d.name] = g
     return per
 
 

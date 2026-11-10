@@ -22,6 +22,13 @@
       <span class="muted keys">Y 有趣 · N 不有趣 · {{ reviewMode === 'fast' ? 'A 采纳 AI · ' : '' }}1–0 原因 · ←/→ 切换 · 空格 播放 · J/L ±5 秒 · E 备注</span>
     </div>
 
+    <div v-if="data.live" class="live-bar">
+      <b>边播边筛（临时结果）</b>
+      只筛了已录完的前 {{ Math.floor(data.live.coveredSeconds / 60) }} 分钟（{{ data.live.segmentsDone }}/{{ data.live.segmentsTotal }} 段），
+      更新于 {{ data.live.generatedAt }}。下播后会整场重新筛一遍，序号和分数可能变；已经标的 Y/N 会按片段时间位置对应过去，
+      对不上的才会丢。直播中不转写、不精排，编辑成片和发布包等下播后再做。
+    </div>
+
     <div v-if="!list.length && !loading" class="empty-all">
       这场没有候选片段（没有过分数线，或还没粗筛）。
     </div>
@@ -44,6 +51,7 @@
         <div v-else class="empty">
           <p>这个片段还没剪。</p>
           <el-button :loading="cutting" type="primary" @click="cutOne">剪切这个片段（480p，默认字幕样式）</el-button>
+          <p v-if="data.live" class="muted">直播还在进行，剪切会和录制抢 CPU，建议下播后再剪；现在可以先看弹幕和分数判断。</p>
           <p v-if="cutting" class="muted">2 核服务器上 1 分钟片段约需 30–60 秒，前面有任务时要先排队…</p>
         </div>
 
@@ -60,7 +68,7 @@
           <el-button @click="mark('')">清除</el-button>
           <el-button @click="go(-1)">← 上一个</el-button>
           <el-button @click="go(1)">下一个 →</el-button>
-          <el-button type="primary" plain @click="$router.push(`/sessions/${name}/edit/${c.rank}`)">编辑成片 →</el-button>
+          <el-button type="primary" plain :disabled="!!data.live" @click="$router.push(`/sessions/${name}/edit/${c.rank}`)">编辑成片 →</el-button>
           <span class="saved">{{ saved }}</span>
         </div>
         <div class="reasons">
@@ -391,6 +399,8 @@ onBeforeUnmount(() => {
 .main { padding: 16px; overflow: auto; }
 video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; display: block; }
 .empty { padding: 40px; border: 1px dashed var(--el-border-color); border-radius: 8px; text-align: center; color: var(--muted); }
+.live-bar { margin: 0 0 8px; padding: 8px 12px; border-radius: 6px; background: var(--el-color-warning-light-9); color: var(--el-color-warning-dark-2); font-size: 13px; line-height: 1.6; }
+.live-bar b { margin-right: 6px; }
 .empty-all { padding: 60px; text-align: center; color: var(--muted); }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
 .saved { color: var(--el-color-success); font-size: 12px; }

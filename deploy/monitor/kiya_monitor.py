@@ -9,6 +9,7 @@
 通知项
   - 开播（并附录制是否正常）、下播（本场时长、录像大小、弹幕数）
   - 下播后自动跑弹幕分析，把前 5 个高峰推送过来
+  - KIYA_LIVE_SCREEN=1：直播中每 30 分钟对已录完的分段粗筛一次（边播边筛），审核页提前有候选
 
 同一个问题只推送一次，持续未恢复则每 6 小时提醒一次；恢复时再推一条“已恢复”。
 只用 Python 标准库，不依赖 worker 的虚拟环境（自动分析那一步除外）。
@@ -258,6 +259,33 @@ def run_analysis(env: dict, rec_dir: Path) -> str:
     return "\n".join(x for x in [head, extra, asr_note, line, "前 5 个候选："] + tops if x)
 
 
+def run_live_screen(env: dict, rec_dir: Path) -> tuple[str, str]:
+    """KIYA_LIVE_SCREEN=1：直播中只对已录完的分段做一次粗筛（screen.py --live），让审核页提前有候选。
+    不转写、不精排、不剪辑（2 核机器录制时 CPU 吃紧）；下播后正式粗筛会整体覆盖这次的结果。
+    返回 (状态, 说明)：ok 有候选 / empty 筛了但没有过线的 / skip 还没有可筛的（录完的分段不够）/ error 出错了。"""
+    worker = REPO / "worker"
+    py = worker / ".venv" / "bin" / "python"
+    screen = worker / "scripts" / "screen.py"
+    if not (py.exists() and screen.exists()):
+        return "error", "worker/.venv 或 screen.py 不存在"
+    args = ["nice", "-n", "10", str(py), str(screen), str(rec_dir), "--latest", "--live",
+            "--out", str(worker / "output")]
+    if cfg(env, "KIYA_ANALYZE_NO_VIDEO", "0") == "1":
+        args.append("--no-video")
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=int(cfg(env, "KIYA_LIVE_SCREEN_TIMEOUT", "900")))
+    except Exception as e:
+        return "error", str(e)[:200]
+    if r.returncode != 0:
+        return "error", ((r.stderr or r.stdout).strip().splitlines() or ["未知错误"])[-1][:200]
+    out = r.stdout.splitlines()
+    cov = next((l.strip() for l in out if "边播边筛：覆盖前" in l), "")
+    if not cov:
+        return "skip", next((l.strip() for l in out if "先不筛" in l or "还没有录完" in l or "跳过" in l), "没有可筛的分段")
+    tops = [l.strip() for l in out if re.match(r"\s*#\s*\d+\s", l)]
+    return ("ok" if tops else "empty"), f"{cov.split('，')[0].replace('边播边筛：', '')}，{len(tops)} 个候选"
+
+
 def latest_candidates(worker: Path, max_age: float = 3600) -> Path | None:
     """刚粗筛完的场次（最近一小时写出的 candidates.json）。"""
     files = [p for p in (worker / "output").glob("*/candidates.json") if time.time() - p.stat().st_mtime < max_age]
@@ -389,7 +417,8 @@ def check(env: dict, dry: bool = False) -> int:
             body = (f"《{st.data.get('live_title', '')}》时长约 {fmt_dur(now - since)}\n"
                     f"录像 {len(vids)} 段，共 {size:.1f} GB；弹幕 {count_danmaku(xmls)} 条")
             notify(env, f"⚪ {name} 下播了", body, dry)
-            st.data.update(live=False, live_since=None)
+            st.data.update(live=False, live_since=None, live_screen_at=None, live_screen_notified=None)
+            st.data["alerts"].pop("live_screen", None)
             for k in ("not_recording", "danmaku_stale"):
                 st.data["alerts"].pop(k, None)
             if cfg(env, "KIYA_AUTO_ANALYZE", "1") == "1":
@@ -404,6 +433,22 @@ def check(env: dict, dry: bool = False) -> int:
                     msg = run_cut(env)
                     if msg:
                         notify(env, f"✂️ {name} 片段已剪好", msg, dry)
+
+        if is_live and was_live and recording and not dry and cfg(env, "KIYA_LIVE_SCREEN", "0") == "1":
+            every = float(cfg(env, "KIYA_LIVE_SCREEN_MINUTES", "30")) * 60
+            last = st.data.get("live_screen_at") or st.data.get("live_since") or now
+            if now - last >= every:
+                st.data["live_screen_at"] = now
+                st.save()                        # 筛一次要几分钟，先存状态，下一轮 cron 不会重复触发
+                status, msg = run_live_screen(env, rec_dir)
+                alert(env, st, "live_screen", status == "error", "边播边筛失败",
+                      f"{msg}\n不影响录制，下播后仍会正常粗筛。", "边播边筛已恢复", time.time(), dry)
+                if status == "skip":
+                    st.data["live_screen_at"] = now - every + 300       # 录完的分段还不够，5 分钟后再看
+                elif status == "ok" and st.data.get("live_screen_notified") != st.data.get("live_since"):
+                    st.data["live_screen_notified"] = st.data.get("live_since")
+                    notify(env, f"👀 {name} 边播边筛", f"{msg}\n审核页已经能看到了；下播后会重新筛一遍，序号可能变，"
+                           "已经标的会按时间位置对应过去。", dry)
 
         if is_live:
             since = st.data.get("live_since", now)

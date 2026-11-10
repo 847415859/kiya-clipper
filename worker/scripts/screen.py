@@ -9,6 +9,7 @@
   python scripts/screen.py /data/rec --latest --danmaku-only  # 只用弹幕（录像已被同步删掉时）
   python scripts/screen.py /data/rec --latest --min-score 2.5 # 临时指定分数线（默认读配置 analysis.min_score）
   python scripts/screen.py /data/rec --latest --all           # 忽略分数线，输出前 top_n 个
+  python scripts/screen.py /data/rec --latest --live          # 边播边筛：直播中只筛已录完的分段（监控脚本定时调用）
 
 分数线：低于 analysis.min_score 的高峰不进候选列表（不剪、不送审），只记在 candidates.json 的
 below_threshold 里备查。没有片段过线时候选为空，不会硬凑。分数线用 evaluate.py --sweep 按标注定。
@@ -18,6 +19,9 @@ below_threshold 里备查。没有片段过线时候选为空，不会硬凑。�
   candidates.json   候选列表（含各信号贡献、弹幕延迟），供 cut.py / evaluate.py / try_llm.py 使用
   peaks.csv         同上的表格版，最后两列“是否有趣(Y/N)”“备注”给你人工标注
   curve.png         综合分数 + 各信号曲线，高峰标了序号
+边播边筛（--live）：candidates.json 带 live=true / covered_seconds，审核页能提前看到高分候选；
+不转写、不精排、不剪辑，也不写整场特征缓存（各分段的特征缓存在 segfeat/，下播后的完整粗筛直接复用，只补最后一段）。
+下播后的正式粗筛会整体覆盖 live 结果；已有正式结果的场次不会被 live 覆盖。
 转写过的场次会加入“笑声”信号；有录像的会加入“尖叫”信号，并给每个候选算“音乐”程度（唱歌 / 纯音乐，0~1）。
 旧版本的特征缓存没有尖叫 / 音乐特征，会自动重新提取一次。
 如果已经用 transcribe.py 转写过（output/<场次>/transcript.json），每个候选会附上片段内的主播原话。
@@ -40,7 +44,7 @@ from clipper.asr import format_speech, load_transcript, speech_between  # noqa: 
 from clipper.danmaku import Segment, all_events  # noqa: E402
 from clipper.media import extract_session, load_features, save_features  # noqa: E402
 from clipper.peaks import find_top_peaks, hhmmss  # noqa: E402
-from clipper.session import find_sessions  # noqa: E402
+from clipper.session import drop_active, find_sessions  # noqa: E402
 
 DEFAULT_CONFIG = ROOT.parent / "config" / "kiya.yaml"
 
@@ -77,7 +81,7 @@ def plot(sig: dict, peaks, title: str, path: Path, min_score: float | None = Non
 
 
 def write_outputs(name: str, segs: list[Segment], peaks, sig: dict, out_dir: Path, cfg: dict, used: str,
-                  min_score: float | None = None, dropped=()) -> None:
+                  min_score: float | None = None, dropped=(), extra: dict | None = None) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     tr = load_transcript(out_dir / "transcript.json")
     sents = tr["sentences"] if tr else []
@@ -98,6 +102,8 @@ def write_outputs(name: str, segs: list[Segment], peaks, sig: dict, out_dir: Pat
         "segments": [{"video": str(s.video_path), "offset": s.offset} for s in segs],
         "candidates": cands,
     }
+    if extra:
+        data.update(extra)
     (out_dir / "candidates.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     with open(out_dir / "peaks.csv", "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
@@ -110,6 +116,13 @@ def write_outputs(name: str, segs: list[Segment], peaks, sig: dict, out_dir: Pat
                         f"{p.danmaku_per_min:.0f}", p.emotion_hits, f"{p.gift_value:.0f}", main,
                         " | ".join(p.top_danmaku), speech, f"{p.music:.2f}", segs[p.file_index].video_path.name, f"{p.local_start:.1f}", "", ""])
     plot(sig, peaks, name, out_dir / "curve.png", min_score, dropped)
+
+
+def _read(p: Path):
+    try:
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    except (OSError, ValueError):
+        return None
 
 
 def main() -> int:
@@ -125,6 +138,8 @@ def main() -> int:
     ap.add_argument("--refresh", action="store_true", help="忽略缓存，重新提取特征")
     ap.add_argument("--min-score", type=float, help="分数线，覆盖配置 analysis.min_score")
     ap.add_argument("--all", action="store_true", help="忽略分数线")
+    ap.add_argument("--live", action="store_true",
+                    help="边播边筛：只用已经录完的分段，结果标 live=true；不写整场特征缓存，不覆盖下播后的正式结果")
     args = ap.parse_args()
 
     cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
@@ -137,30 +152,51 @@ def main() -> int:
         print("没有找到场次（检查目录里是否有录播姬的 .xml 弹幕文件）", file=sys.stderr)
         return 1
 
+    lc = {"quiet_seconds": 120, "min_seconds": 900, **(cfg.get("live_screen") or {})}
     for name, segs in sessions:
+        out_dir = Path(args.out) / name
+        live_extra = None
+        if args.live:
+            prev = _read(out_dir / "candidates.json")
+            if prev and not prev.get("live"):
+                print(f"\n== {name}：已有下播后的正式结果，不再做边播边筛 ==")
+                continue
+            total_segs = len(segs)
+            segs = drop_active(segs, float(lc["quiet_seconds"]))
+            if not segs:
+                print(f"\n== {name}：还没有录完的分段，等下一轮 ==")
+                continue
         events = all_events(segs)
         n_dm = sum(e.kind == "danmaku" for e in events)
-        out_dir = Path(args.out) / name
-        print(f"\n== {name}：{len(segs)} 个分段，弹幕 {n_dm} 条 ==")
+        print(f"\n== {name}：{len(segs)} 个分段，弹幕 {n_dm} 条" + (f"（边播边筛，共 {total_segs} 段，在写的不算）" if args.live else "") + " ==")
         if n_dm < 20:
             print("  弹幕太少，跳过")
             continue
         feats = None
         if not args.danmaku_only:
             cache = out_dir / ("features.npz" if not args.no_video else "features_novideo.npz")
-            feats = None if args.refresh else load_features(cache)
+            feats = None if (args.refresh or args.live) else load_features(cache)   # 边播边筛的数据不完整，不读也不写整场缓存
             if feats is None:
                 has_video = any(s.video_path.exists() and s.video_path.stat().st_size > 0 for s in segs)
                 if has_video:
                     t0 = time.time()
                     print("  提取音频 / 画面特征（首次较慢，结果会缓存）…")
-                    feats = extract_session(segs, with_video=not args.no_video)
-                    save_features(cache, feats)
+                    feats = extract_session(segs, with_video=not args.no_video,
+                                            cache_dir=None if args.refresh else out_dir / "segfeat")
+                    if not args.live:
+                        save_features(cache, feats)
                     print(f"  特征提取完成，用时 {time.time() - t0:.0f} 秒")
                 else:
                     print("  找不到录像文件（可能已同步到 OSS 并从本地删除），只用弹幕")
             else:
                 print(f"  使用缓存特征 {cache.name}")
+        if args.live:
+            covered = len(feats["audio_db"]) if feats is not None else int(segs[-1].offset + segs[-1].last_t)
+            if covered < float(lc["min_seconds"]):
+                print(f"  已录完的部分才 {covered // 60} 分钟，不到 {float(lc['min_seconds']) / 60:.0f} 分钟，先不筛")
+                continue
+            live_extra = {"live": True, "covered_seconds": int(covered), "segments_done": len(segs),
+                          "segments_total": total_segs}
         tr0 = load_transcript(out_dir / "transcript.json")
         peaks, sig = find_top_peaks(events, segs, cfg, feats, tr0["sentences"] if tr0 else None)
         dropped = []
@@ -168,7 +204,7 @@ def main() -> int:
             dropped = [p for p in peaks if p.score < min_score]
             peaks = [p for p in peaks if p.score >= min_score]
         used = "+".join(sig["weights"].keys())
-        write_outputs(name, segs, peaks, sig, out_dir, cfg, used, min_score, dropped)
+        write_outputs(name, segs, peaks, sig, out_dir, cfg, used, min_score, dropped, live_extra)
         if (out_dir / "transcript.json").exists():
             print("  已附上主播原话（transcript.json）")
         if sig.get("music_filtered"):
@@ -182,7 +218,10 @@ def main() -> int:
             if not peaks:
                 print("  本场没有达到分数线的片段")
         print(f"  结果：{out_dir}/candidates.json、peaks.csv、curve.png")
-        print(f"  下一步：python scripts/cut.py {out_dir}/candidates.json")
+        if args.live:
+            print(f"  边播边筛：覆盖前 {live_extra['covered_seconds'] // 60} 分钟，下播后会重新筛一遍（只补最后一段）")
+        else:
+            print(f"  下一步：python scripts/cut.py {out_dir}/candidates.json")
     return 0
 
 

@@ -1,6 +1,7 @@
 """场次识别：把录像目录里的分段文件按开播时间分成一场一场。"""
 from __future__ import annotations
 
+import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -53,4 +54,25 @@ def find_sessions(paths: list[str | Path], latest: bool = False, name: str | Non
         out = [s for s in out if s[0] == name]
     if latest:
         out = out[-1:]
+    return out
+
+
+def drop_active(segs: list[Segment], quiet_seconds: float = 120.0, now: float | None = None) -> list[Segment]:
+    """边播边筛用：去掉末尾还在写的分段（视频或弹幕文件最近 quiet_seconds 秒内改过）。
+
+    录播姬只会往最新的分段里写，所以只看末尾；前面的分段已经定稿，特征可以放心缓存。
+    """
+    now = time.time() if now is None else now
+    out = list(segs)
+    while out:
+        times = []
+        for f in (out[-1].video_path, out[-1].xml_path):
+            try:
+                times.append(f.stat().st_mtime)
+            except OSError:
+                pass
+        if times and now - max(times) < quiet_seconds:
+            out.pop()
+        else:
+            break
     return out

@@ -181,7 +181,7 @@ public class EditService {
         out.put("candidate", Map.of("start", cs, "end", ce));
         out.put("t", c.path("t").asDouble());
         // 预览视频：素材范围就是候选片段时前端用审核片段（clip），否则用 edit_preview.py 按素材范围剪好的（preview）
-        out.put("clip", findClip(session, rank));
+        out.put("clip", findClip(session, rank, c.path("t").asDouble()));
         out.put("preview", findPreview(session, rank, ws, we));
         out.put("finals", finals(session, rank));
         out.put("llm", llm);
@@ -313,7 +313,7 @@ public class EditService {
         return WorkerPaths.inside(paths.output(), paths.sessionDir(session).resolve("edit_preview").resolve(file));
     }
 
-    private String findClip(String session, int rank) {
+    private String findClip(String session, int rank, double t) {
         Path clips = paths.sessionDir(session).resolve("clips");
         if (!Files.isDirectory(clips)) {
             return null;
@@ -321,7 +321,7 @@ public class EditService {
         String prefix = String.format("%02d_", rank);
         try (Stream<Path> s = Files.list(clips)) {
             return s.map(p -> p.getFileName().toString())
-                    .filter(n -> n.startsWith(prefix) && n.endsWith(".mp4"))
+                    .filter(n -> n.startsWith(prefix) && n.endsWith(".mp4") && SessionService.clipMatches(n, prefix.length(), t))
                     .sorted().findFirst().orElse(null);
         } catch (IOException e) {
             return null;

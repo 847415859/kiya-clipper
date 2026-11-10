@@ -181,3 +181,79 @@ def test_run_cut(tmp_path, monkeypatch):
     (sess / "candidates.json").write_text(json.dumps({"candidates": [{"rank": 1}]}))
     os.utime(sess / "candidates.json", (old, old))
     assert km.run_cut({}) is None
+
+
+def test_run_live_screen(tmp_path, monkeypatch):
+    """边播边筛：调用 screen.py --live，把结果整理成 (状态, 说明)。"""
+    sys.path.insert(0, str(HERE))
+    import kiya_monitor as km
+    worker = tmp_path / "worker"
+    (worker / ".venv" / "bin").mkdir(parents=True)
+    (worker / "scripts").mkdir()
+    (worker / "scripts" / "screen.py").write_text("")
+    log = tmp_path / "args.txt"
+    py = worker / ".venv" / "bin" / "python"
+    body = tmp_path / "body.sh"
+
+    def fake(script: str, code: int = 0):
+        py.write_text(f'#!/bin/sh\necho "$@" > "{log}"\n{script}\nexit {code}\n'); py.chmod(0o755)
+
+    monkeypatch.setattr(km, "REPO", tmp_path)
+    fake('echo "== 20261112-2000：2 个分段 =="\necho "  #  1 20:41:00  分数  7.10  [audio+3.1]"\n'
+         'echo "  #  2 20:52:10  分数  5.30  [density+2.2]"\necho "  边播边筛：覆盖前 40 分钟，下播后会重新筛一遍（只补最后一段）"')
+    st, msg = km.run_live_screen({}, tmp_path / "rec")
+    assert st == "ok" and "覆盖前 40 分钟" in msg and "2 个候选" in msg
+    a = log.read_text()
+    assert "--live" in a and "--latest" in a and "--no-video" not in a
+    assert "--no-video" in (km.run_live_screen({"KIYA_ANALYZE_NO_VIDEO": "1"}, tmp_path) and log.read_text())
+    fake('echo "  已录完的部分才 10 分钟，不到 15 分钟，先不筛"')
+    assert km.run_live_screen({}, tmp_path)[0] == "skip"
+    fake('echo "  边播边筛：覆盖前 40 分钟，下播后会重新筛一遍"')
+    assert km.run_live_screen({}, tmp_path)[0] == "empty"
+    fake('echo "boom" >&2', code=1)
+    assert km.run_live_screen({}, tmp_path) == ("error", "boom")
+
+
+def test_check_triggers_live_screen_on_interval(env, tmp_path, monkeypatch):
+    """开关默认关；打开后直播中每 30 分钟一次，没有可筛的分段时 5 分钟后重试，首次出候选推送一次，下播清状态。"""
+    sys.path.insert(0, str(HERE))
+    import kiya_monitor as km
+    rec = Path(env["REC_DIR"]); touch(rec / "a.flv"); touch(rec / "a.xml")
+    calls, pushes, result = [], [], [("ok", "已录完前 30 分钟，3 个候选")]
+    monkeypatch.setattr(km, "run_live_screen", lambda e, r: calls.append(1) or result[0])
+    monkeypatch.setattr(km, "notify", lambda e, title, body, dry=False: pushes.append(title))
+    monkeypatch.setattr(km, "live_status", lambda e: (1, "测试"))
+    monkeypatch.setattr(km, "service_active", lambda e: True)
+    monkeypatch.setattr(km, "sync_age_hours", lambda p: None)
+    e = {**env, "KIYA_AUTO_ANALYZE": "0"}
+    km.check(e)                                                      # 开播
+    set_state(e, live_since=time.time() - 3600)
+    km.check(e)
+    assert calls == []                                               # 开关没开
+    e["KIYA_LIVE_SCREEN"] = "1"
+    set_state(e, live_since=time.time() - 600)
+    km.check(e)
+    assert calls == []                                               # 才开播 10 分钟，还没到间隔
+    set_state(e, live_since=time.time() - 1900)
+    km.check(e)
+    assert len(calls) == 1 and any("边播边筛" in t for t in pushes)
+    km.check(e)
+    assert len(calls) == 1                                           # 间隔内不重复
+    n = len([t for t in pushes if "边播边筛" in t])
+    set_state(e, live_screen_at=time.time() - 1900)
+    km.check(e)
+    assert len(calls) == 2 and len([t for t in pushes if "边播边筛" in t]) == n   # 同一场只推一次
+    result[0] = ("skip", "先不筛")
+    set_state(e, live_screen_at=time.time() - 1900)
+    km.check(e)
+    assert len(calls) == 3
+    set_state(e, live_screen_at=state(e)["live_screen_at"])
+    assert time.time() - state(e)["live_screen_at"] > 1400           # 往回拨到 5 分钟后重试
+    result[0] = ("error", "炸了")
+    set_state(e, live_screen_at=time.time() - 1900)
+    km.check(e)
+    assert any("边播边筛失败" in t for t in pushes)
+    monkeypatch.setattr(km, "live_status", lambda e: (0, ""))
+    km.check(e)                                                      # 下播
+    s = state(e)
+    assert s["live"] is False and not s.get("live_screen_at") and "live_screen" not in s["alerts"]

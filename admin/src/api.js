@@ -74,7 +74,9 @@ export const api = {
   regeneratePublish: (name, rank) => http.post(`/api/sessions/${encodeURIComponent(name)}/publish/${rank}/regenerate`),
   coverUrl: (name, rank, v) => `/api/sessions/${encodeURIComponent(name)}/publish/${rank}/cover.jpg?v=${v || 0}`,
   memory: () => http.get('/api/memory'),
-  memoryAction: (body) => http.post('/api/memory/actions', body)
+  memoryAction: (body) => http.post('/api/memory/actions', body),
+  weekly: (end, days) => http.get('/api/weekly', { params: { end: end || undefined, days: days || undefined }, timeout: 150000 }),
+  weeklyExportUrl: (end, days) => `/api/weekly/export?${new URLSearchParams({ ...(end ? { end } : {}), ...(days ? { days } : {}) })}`
 }
 
 export function fmtDuration(sec) {

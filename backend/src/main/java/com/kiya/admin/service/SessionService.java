@@ -16,6 +16,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import org.slf4j.Logger;
@@ -163,6 +165,7 @@ public class SessionService {
             m.put("hasCandidates", cj != null);
             m.put("hasRerank", Files.exists(dir.resolve("rerank.json")));
             m.put("candidateCount", cj == null ? 0 : cj.path("candidates").size());
+            m.put("live", cj != null && cj.path("live").asBoolean(false));
             m.put("clipCount", countClips(dir.resolve("clips")));
             int[] a = marks.getOrDefault(name, new int[2]);
             m.put("reviewed", a[0]);
@@ -209,13 +212,66 @@ public class SessionService {
             out.put("minScore", cj.path("min_score").isNumber() ? cj.path("min_score").asDouble() : null);
             out.put("belowThreshold", cj.path("below_threshold").size());
             out.put("transcript", cj.path("transcript").isTextual() ? cj.path("transcript").asText() : null);
+            if (cj.path("live").asBoolean(false)) {                   // 边播边筛的临时结果：下播后会被正式粗筛覆盖
+                Map<String, Object> live = new LinkedHashMap<>();
+                live.put("coveredSeconds", cj.path("covered_seconds").asInt(0));
+                live.put("segmentsDone", cj.path("segments_done").asInt(0));
+                live.put("segmentsTotal", cj.path("segments_total").asInt(0));
+                live.put("generatedAt", cj.path("generated_at").asText(""));
+                out.put("live", live);
+            }
         }
         out.put("taboo", memory.tabooWords());
         out.put("hasCurve", Files.exists(paths.sessionDir(session).resolve("curve.png")));
         return out;
     }
 
-    /** candidates.json → 数据库。片段时间没变的保留标注；变了（重跑粗筛后换了片段）就清掉标注。 */
+    /** 新旧候选的对应关系（新序号 → 旧序号），用来把标注搬到重新粗筛后的候选上。
+     *  先认“序号没变、片段起点差不到 1 秒”的；剩下的新候选，再找带标注、离得最近（5 秒内）的旧候选。 */
+    static Map<Integer, Integer> matchByClipStart(List<Candidate> old, JsonNode fresh, Set<Integer> hasMarks) {
+        Map<Integer, Candidate> oldBy = new HashMap<>();
+        old.forEach(c -> oldBy.put(c.getRnk(), c));
+        Map<Integer, Integer> out = new LinkedHashMap<>();
+        Set<Integer> used = new HashSet<>();
+        for (JsonNode n : fresh) {
+            int r = n.path("rank").asInt();
+            Candidate o = oldBy.get(r);
+            if (o != null && (o.getClipStart() == null || Math.abs(o.getClipStart() - n.path("clip_start").asDouble()) <= 1)) {
+                out.put(r, r);
+                used.add(r);
+            }
+        }
+        List<double[]> pairs = new ArrayList<>();
+        for (JsonNode n : fresh) {
+            int r = n.path("rank").asInt();
+            if (out.containsKey(r)) {
+                continue;
+            }
+            for (Candidate o : old) {
+                if (!used.contains(o.getRnk()) && hasMarks.contains(o.getRnk()) && o.getClipStart() != null) {
+                    double d = Math.abs(o.getClipStart() - n.path("clip_start").asDouble());
+                    if (d <= 5) {
+                        pairs.add(new double[] {d, r, o.getRnk()});
+                    }
+                }
+            }
+        }
+        pairs.sort(Comparator.comparingDouble((double[] x) -> x[0]));
+        Set<Integer> usedNew = new HashSet<>();
+        for (double[] x : pairs) {
+            int nr = (int) x[1];
+            int or = (int) x[2];
+            if (!usedNew.contains(nr) && !used.contains(or)) {
+                out.put(nr, or);
+                usedNew.add(nr);
+                used.add(or);
+            }
+        }
+        return out;
+    }
+
+    /** candidates.json → 数据库。重新粗筛（比如边播边筛的结果被下播后的正式结果覆盖）后序号会变，
+     *  标注、原因、耗时按片段起点对应搬过去；对不上的（片段已经不在候选里）才丢掉。 */
     public synchronized JsonNode sync(String session) {
         Path dir = paths.sessionDir(session);
         JsonNode cj = readJson(dir.resolve("candidates.json"));
@@ -226,8 +282,18 @@ public class SessionService {
         Map<Integer, Candidate> byRank = new HashMap<>();
         existing.forEach(c -> byRank.put(c.getRnk(), c));
         boolean hadMarks = existing.stream().anyMatch(c -> c.getMark() != null || c.getNote() != null);
+        Map<String, Map<String, Object>> oldMeta = readMeta(session);
+        Set<Integer> marked = new HashSet<>();
+        Map<Integer, String[]> oldMarks = new HashMap<>();
+        for (Candidate c : existing) {
+            oldMarks.put(c.getRnk(), new String[] {c.getMark(), c.getNote()});
+            if (c.getMark() != null || c.getNote() != null || oldMeta.containsKey(String.valueOf(c.getRnk()))) {
+                marked.add(c.getRnk());
+            }
+        }
+        Map<Integer, Integer> carry = matchByClipStart(existing, cj.path("candidates"), marked);
         Set<Integer> seen = new HashSet<>();
-        Set<Integer> reset = new HashSet<>();
+        boolean moved = false;
         Path clips = dir.resolve("clips");
         for (JsonNode n : cj.path("candidates")) {
             int rank = n.path("rank").asInt();
@@ -238,10 +304,18 @@ public class SessionService {
                 c = new Candidate();
                 c.setSessionName(session);
                 c.setRnk(rank);
-            } else if (c.getClipStart() != null && Math.abs(c.getClipStart() - n.path("clip_start").asDouble()) > 1) {
-                c.setMark(null);
-                c.setNote(null);
-                reset.add(rank);
+            }
+            Integer from = carry.get(rank);
+            if (!isNew && (from == null || from != rank)) {            // 这个序号现在是另一个片段：标注换成对应过来的（没有就清空）
+                String[] m = from == null ? new String[2] : oldMarks.get(from);
+                c.setMark(m[0]);
+                c.setNote(m[1]);
+                moved |= marked.contains(rank) || from != null;
+            } else if (isNew && from != null) {
+                String[] m = oldMarks.get(from);
+                c.setMark(m[0]);
+                c.setNote(m[1]);
+                moved = true;
             }
             c.setT(n.path("t").asDouble());
             c.setScore(n.path("score").asDouble());
@@ -253,7 +327,7 @@ public class SessionService {
             c.setTopDanmaku(n.path("top_danmaku").toString());
             c.setSpeech(n.has("speech") ? n.path("speech").toString() : null);
             c.setContrib(n.path("contrib").toString());
-            c.setClipFile(findClip(clips, rank));
+            c.setClipFile(findClip(clips, rank, c.getT()));
             if (isNew) {
                 candidates.insert(c);
             } else {
@@ -263,16 +337,35 @@ public class SessionService {
         for (Candidate c : existing) {
             if (!seen.contains(c.getRnk())) {
                 candidates.deleteById(c.getId());
+                moved |= marked.contains(c.getRnk());
             }
         }
-        if (!reset.isEmpty()) {
-            clearMeta(session, reset);
+        if (!existing.isEmpty()) {
+            Map<String, Map<String, Object>> newMeta = new LinkedHashMap<>();
+            for (Map.Entry<Integer, Integer> e : carry.entrySet()) {
+                Map<String, Object> m = oldMeta.get(String.valueOf(e.getValue()));
+                if (m != null) {
+                    newMeta.put(String.valueOf(e.getKey()), m);
+                }
+            }
+            if (!newMeta.equals(oldMeta)) {
+                writeMeta(session, newMeta);
+                moved = true;
+            }
+            long lost = marked.stream().filter(r -> !carry.containsValue(r)).count();
+            if (lost > 0) {
+                log.info("{} 重新粗筛后有 {} 条标注对不上新的候选，已丢弃", session, lost);
+            }
+        }
+        if (moved) {
+            exportCsv(session);                                          // eval/reviews 里的序号跟着换
         }
         if (!hadMarks) {
             importMarks(session);
         }
         return cj;
     }
+
 
     public synchronized void mark(String session, int rank, String mark, String note, List<String> reasons,
                                   String mode, Long ms) {
@@ -558,18 +651,30 @@ public class SessionService {
         }
     }
 
-    private static String findClip(Path clips, int rank) {
+    /** 文件名是 序号_时-分-秒.mp4（高峰时间）；重新粗筛后同一个序号可能是别的片段，时间对不上的旧文件不算。 */
+    private static String findClip(Path clips, int rank, Double t) {
         if (!Files.isDirectory(clips)) {
             return null;
         }
         String prefix = String.format("%02d_", rank);
         try (Stream<Path> s = Files.list(clips)) {
             return s.map(p -> p.getFileName().toString())
-                    .filter(n -> n.startsWith(prefix) && n.endsWith(".mp4"))
+                    .filter(n -> n.startsWith(prefix) && n.endsWith(".mp4") && clipMatches(n, prefix.length(), t))
                     .sorted().findFirst().orElse(null);
         } catch (IOException e) {
             return null;
         }
+    }
+
+    private static final Pattern CLIP_TIME = Pattern.compile("(\\d+)-(\\d\\d)-(\\d\\d)\\.mp4");
+
+    static boolean clipMatches(String name, int prefixLen, Double t) {
+        Matcher m = CLIP_TIME.matcher(name.substring(prefixLen));
+        if (t == null || !m.matches()) {
+            return true;                                             // 不是这个格式的文件名就不管了
+        }
+        double sec = Integer.parseInt(m.group(1)) * 3600.0 + Integer.parseInt(m.group(2)) * 60 + Integer.parseInt(m.group(3));
+        return Math.abs(sec - t) <= 3;
     }
 
     private static int countClips(Path clips) {

@@ -153,8 +153,41 @@ def keyframe_changes(video: Path) -> tuple[np.ndarray, np.ndarray]:
     return t, diffs
 
 
-def extract_session(segs: list[Segment], with_video: bool = True, log=print) -> dict:
-    """对一整场提取特征，按整场时间轴（秒）拼接。"""
+def segment_features(v: Path, with_video: bool = True, cache_dir: Path | None = None, log=print):
+    """一个分段的 (音频特征, 关键帧时间, 关键帧差)。
+
+    给了 cache_dir 就按“文件名 + 大小 + 版本 + 是否含画面”缓存到 cache_dir 下：已经录完的分段不会变，
+    边播边筛和下播后的完整粗筛因此共用同一份结果，下播后只需要提取最后一段。
+    文件还在写的时候大小一直变，缓存命中不了，不会用到半截数据。
+    """
+    cf = None
+    if cache_dir is not None:
+        cf = cache_dir / f"{v.stem}_{v.stat().st_size}_v{FEATURE_VERSION}{'v' if with_video else 'n'}.npz"
+        if cf.exists():
+            try:
+                d = np.load(cf, allow_pickle=False)
+                af = {"db": d["db"], "hf": d["hf"], "sustain": d["sustain"]}
+                log(f"  {v.name}：用缓存（音频 {len(af['db'])} 秒）")
+                return af, d["kt"], d["kd"]
+            except (OSError, ValueError, KeyError):
+                pass                                    # 缓存坏了就重算
+    af = audio_features(v)
+    kt, kd = (keyframe_changes(v) if with_video else (np.array([]), np.array([])))
+    log(f"  {v.name}：音频 {len(af['db'])} 秒，关键帧 {len(kt)} 个")
+    if cf is not None and len(af["db"]):
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        tmp = cf.with_name(cf.name + ".tmp")
+        with open(tmp, "wb") as f:
+            np.savez_compressed(f, db=af["db"], hf=af["hf"], sustain=af["sustain"], kt=kt, kd=kd)
+        tmp.replace(cf)
+        for old in cache_dir.glob(f"{v.stem}_*.npz"):    # 同一个分段的旧大小版本没用了
+            if old != cf:
+                old.unlink(missing_ok=True)
+    return af, kt, kd
+
+
+def extract_session(segs: list[Segment], with_video: bool = True, log=print, cache_dir: Path | None = None) -> dict:
+    """对一整场提取特征，按整场时间轴（秒）拼接。cache_dir：分段特征缓存目录（见 segment_features）。"""
     ends = []
     per_seg = []
     for s in segs:
@@ -164,12 +197,9 @@ def extract_session(segs: list[Segment], with_video: bool = True, log=print) -> 
             per_seg.append(None)
             ends.append(s.offset + s.last_t)
             continue
-        af = audio_features(v)
-        loud = af["db"]
-        kt, kd = (keyframe_changes(v) if with_video else (np.array([]), np.array([])))
-        log(f"  {v.name}：音频 {len(loud)} 秒，关键帧 {len(kt)} 个")
+        af, kt, kd = segment_features(v, with_video, cache_dir, log)
         per_seg.append((af, kt, kd))
-        ends.append(s.offset + max(len(loud), s.last_t))
+        ends.append(s.offset + max(len(af["db"]), s.last_t))
     total = int(np.ceil(max(ends))) + 1 if ends else 0
     audio = np.full(total, np.nan, dtype=np.float32)
     hf = np.full(total, np.nan, dtype=np.float32)
