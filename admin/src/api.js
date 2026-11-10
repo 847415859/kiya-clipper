@@ -68,6 +68,11 @@ export const api = {
   hotwordsPreview: () => http.get('/api/config/hotwords-preview'),
   evalResults: () => http.get('/api/eval/results'),
 
+  publishPack: (name, rank) => http.get(`/api/sessions/${encodeURIComponent(name)}/publish/${rank}`),
+  savePublishPack: (name, rank, body) => http.put(`/api/sessions/${encodeURIComponent(name)}/publish/${rank}`, body),
+  publishCover: (name, rank, body) => http.post(`/api/sessions/${encodeURIComponent(name)}/publish/${rank}/cover`, body, { timeout: 150000 }),
+  regeneratePublish: (name, rank) => http.post(`/api/sessions/${encodeURIComponent(name)}/publish/${rank}/regenerate`),
+  coverUrl: (name, rank, v) => `/api/sessions/${encodeURIComponent(name)}/publish/${rank}/cover.jpg?v=${v || 0}`,
   memory: () => http.get('/api/memory'),
   memoryAction: (body) => http.post('/api/memory/actions', body)
 }

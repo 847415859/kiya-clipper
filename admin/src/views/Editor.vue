@@ -189,8 +189,54 @@
             <el-button link type="primary" @click="finalFile = f.file">{{ f.file }}</el-button>
             <span class="muted">{{ (f.size / 1048576).toFixed(1) }} MB · {{ new Date(f.modified).toLocaleString() }}</span>
           </div>
+        </el-card>
+
+        <el-card shadow="never" class="card" v-loading="packLoading">
+          <template #header>
+            <b>发布</b> <span class="muted">（投稿时复制粘贴；类型选“转载”，来源填直播间）</span>
+            <el-button style="float: right" link size="small" @click="regenPack">按精排重新生成文字</el-button>
+          </template>
+          <div class="cover">
+            <img v-if="pack.cover" :src="api.coverUrl(name, rank, pack.cover_version)" alt="封面" @click="openCover" />
+            <div v-else class="muted cover-empty">还没有封面</div>
+          </div>
+          <el-form label-width="64px" size="small" class="pack">
+            <el-form-item label="封面字">
+              <el-input v-model="coverText" maxlength="30" placeholder="空着就是纯截图" />
+            </el-form-item>
+            <el-form-item label="画面">
+              <span class="muted">{{ pack.cover_t != null ? hms(pack.cover_t) + '（' + (pack.cover_source || '') + '）' : '默认笑点' }}</span>
+              <el-button link size="small" @click="coverAtCurrent">用当前播放位置</el-button>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" plain :loading="covering" @click="makeCover()">{{ pack.cover ? '重画封面' : '生成封面' }}</el-button>
+              <a v-if="pack.cover" :href="api.coverUrl(name, rank, pack.cover_version)" :download="`${name}_${rank}_cover.jpg`"><el-button>下载</el-button></a>
+            </el-form-item>
+            <el-form-item label="标题">
+              <el-select v-model="pack.title" filterable allow-create default-first-option style="width: 100%">
+                <el-option v-for="t in pack.title_candidates || []" :key="t" :label="t" :value="t" />
+              </el-select>
+              <span class="muted">{{ (pack.title || '').length }}/80</span>
+              <el-button link size="small" @click="copy(pack.title)">复制</el-button>
+            </el-form-item>
+            <el-form-item label="简介">
+              <el-input v-model="pack.description" type="textarea" :rows="6" maxlength="2000" />
+              <el-button link size="small" @click="copy(pack.description)">复制</el-button>
+            </el-form-item>
+            <el-form-item label="标签">
+              <el-select v-model="pack.tags" multiple filterable allow-create default-first-option :multiple-limit="10" style="width: 100%" />
+              <el-button link size="small" @click="copy((pack.tags || []).join(','))">复制（逗号分隔）</el-button>
+            </el-form-item>
+            <el-form-item label="来源">
+              <span class="muted">{{ pack.source }}</span>
+              <el-button link size="small" @click="copy(pack.source)">复制</el-button>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" @click="savePack">保存文字</el-button>
+            </el-form-item>
+          </el-form>
           <div class="publish">
-            <div class="muted">发布到切片号后填 BV 号：精排会参考它的播放数据（“精排记忆”页）</div>
+            <div class="muted">发布后填 BV 号：精排会参考它的播放数据（“精排记忆”页）</div>
             <el-input v-model="pub.bvid" placeholder="BV1xxxxxxxxx" size="small" style="width: 150px" maxlength="12" />
             <el-input v-model="pub.completion" placeholder="完播率 0.35（选填）" size="small" style="width: 140px" />
             <el-input v-model="pub.followers" placeholder="涨粉（选填）" size="small" style="width: 100px" />
@@ -253,6 +299,11 @@ const rendering = ref(false)
 const renderJob = ref(null)
 const drafting = ref(false)
 const pub = reactive({ bvid: '', completion: '', followers: '', saved: '' })
+const pack = ref({})
+const packLoading = ref(false)
+const covering = ref(false)
+const coverText = ref('')
+let coverT = null
 const warnings = ref([])
 const generatedBy = ref('')
 const aiNote = ref('')
@@ -504,6 +555,7 @@ async function load() {
     apply(r.edit)
     styles.value = await api.styles()
     loadPublish()
+    loadPack()
     loadStickers()
   } finally {
     loading.value = false
@@ -561,6 +613,59 @@ async function render(height) {
     }
   } finally {
     rendering.value = false
+  }
+}
+
+// ---------------------------------------------------------------- 发布包
+async function loadPack() {
+  packLoading.value = true
+  try {
+    pack.value = await api.publishPack(name.value, rank.value)
+    coverText.value = pack.value.cover_text ?? (pack.value.title_candidates || [])[0] ?? ''
+    coverT = null
+  } catch (e) {
+    // 发布包读不到不影响编辑
+  } finally {
+    packLoading.value = false
+  }
+}
+
+function coverAtCurrent() {
+  coverT = Math.round((edit.window.start + time.value) * 100) / 100
+  makeCover()
+}
+
+async function makeCover() {
+  covering.value = true
+  try {
+    pack.value = { ...pack.value, ...(await api.publishCover(name.value, rank.value, { t: coverT, text: coverText.value })) }
+    ElMessage.success('封面已生成')
+  } finally {
+    covering.value = false
+  }
+}
+
+async function savePack() {
+  pack.value = await api.savePublishPack(name.value, rank.value,
+    { title: pack.value.title, description: pack.value.description, tags: pack.value.tags || [] })
+  ElMessage.success('已保存')
+}
+
+async function regenPack() {
+  await ElMessageBox.confirm('标题、简介、标签按精排结果重新生成，覆盖改过的内容？', '重新生成', { type: 'warning' })
+  pack.value = await api.regeneratePublish(name.value, rank.value)
+}
+
+function openCover() {
+  window.open(api.coverUrl(name.value, rank.value, pack.value.cover_version), '_blank', 'noopener')
+}
+
+async function copy(text) {
+  try {
+    await navigator.clipboard.writeText(text || '')
+    ElMessage.success('已复制')
+  } catch (e) {
+    ElMessage.warning('浏览器不让直接复制，请手动选中复制')
   }
 }
 
@@ -781,4 +886,7 @@ onBeforeUnmount(() => {
 .publish { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--el-border-color); }
 .publish .muted { width: 100%; font-size: 12px; }
 .stale { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 5; background: rgba(0, 0, 0, 0.72); color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 13px; display: flex; gap: 8px; align-items: center; }
+.cover img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 6px; cursor: zoom-in; display: block; }
+.cover-empty { aspect-ratio: 16 / 10; display: flex; align-items: center; justify-content: center; background: var(--el-fill-color-light); border-radius: 6px; }
+.pack { margin-top: 10px; }
 </style>

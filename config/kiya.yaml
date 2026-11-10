@@ -72,6 +72,22 @@ memory:
   examples_yes: 3            # 提示词里放几个“值得切”的审核例子（不含正在精排的这一场）
   examples_no: 3
 
+# 发布包（scripts/publish_pack.py）：B站投稿用的封面、标题、简介、标签，后台成片编辑页“发布”卡片里改和复制
+publish:
+  fixed_tags: [虚拟主播, 直播切片, VTuber, 娜由纪雅]   # 每条都带；再加主播名、类型、片段里出现的梗，最多 10 个
+  cover_font: "Noto Sans CJK SC:bold"   # fc-match 的写法；装了综艺体可以换成 "ZCOOL KuaiLe"
+  cover_color: "#FFE14D"
+  cover_stroke: "#E0457B"
+  # 简介模板：{what_happened} 精排的一句话、{streamer} {space_url} {live_url}、{date} 场次日期、{time} 片段在直播里的时间
+  desc_template: |
+    {what_happened}
+
+    主播：{streamer} {space_url}
+    直播间：{live_url}
+    出自 {date} 的直播（约 {time}）
+
+    非官方切片，仅为推广主播；如有不妥请联系删除。
+
 # 剪辑脚本初稿（scripts/autoedit.py）
 autoedit:
   prompt: edit_v1

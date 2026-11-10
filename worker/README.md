@@ -274,6 +274,20 @@ python scripts/render.py output/<场次>/candidates.json --rank 3 --height 480  
 
 编辑页“AI 初稿”可以先让大模型排一版再微调（见上一节）。成片不限于 60 秒的审核片段：剪辑脚本的 `window`（素材范围）默认取“审核片段 ∪ 精排修正后的起止”，前后各留 5 秒；编辑页可以往前、往后扩，渲染时直接从录像重新剪。素材范围超出审核片段时，编辑器的预览视频由 `scripts/edit_preview.py` 另剪一段（480p，带字幕）。录像被同步脚本移走后就剪不了了，要先从 OSS 拉回来。剪辑脚本在 `output/<场次>/edits/<序号>.json`（字段见 `schema/edit_script.schema.json`，校验在 `clipper/edit.py`），成片在 `output/<场次>/final/`。渲染器安装与性能说明见 [renderer/README.md](../renderer/README.md)。
 
+## 发布包（封面、标题、简介、标签）
+
+成片编辑页右下“发布”卡片：封面（默认取精排找到的笑点那一帧，可以换成当前播放位置、改上面的大字）、标题（从精排的标题候选里选或自己写）、简介（`config` 的 `publish.desc_template`，自带“非官方切片”声明和主播链接）、标签（固定标签 + 类型 + 片段里出现的梗，最多 10 个），都有“复制”按钮。投稿仍是手动上传，类型选“转载”，来源填直播间。
+
+```bash
+python scripts/publish_pack.py output/<场次>/candidates.json --rank 3                         # 生成
+python scripts/publish_pack.py output/<场次>/candidates.json --rank 3 --cover-t 5150.5 --cover-text "金油！"
+```
+
+- 封面 1920×1200（16:10），字在中间 4:3 安全区里，首页按 4:3 裁切时不会切到字。字体用 `publish.cover_font`（fc-match 写法）。
+- 截图优先用原录像；录像被同步走后，依次改用成片、编辑预览、审核片段里的画面（清晰度会低一些，先渲染 1080p 成片再截最好）。
+- 后台改过的标题 / 简介 / 标签不会被重新生成覆盖；点“按精排重新生成文字”才会覆盖。
+- 发布后在同一张卡片里填 BV 号，精排记忆会拉它的播放数据。
+
 ## 调参（config/kiya.yaml）
 
 - **情绪词**：看 `peaks.csv` 的“高频弹幕”列，把 kiya 粉丝常刷的梗、口头禅加进 `emotion_words` 或 `lore_words`。
@@ -315,5 +329,8 @@ worker/
 ├── clipper/bili.py      # B站公开接口：投稿列表（WBI 签名）、视频数据
 ├── clipper/memory.py    # 精排记忆：梗挖掘、审核例子、切片号类型表现、权重校准、填进提示词的文字
 ├── scripts/learn.py     # 更新精排记忆 → output/_memory/memory.json
+├── clipper/publish.py   # 发布包：封面绘制、简介模板、标签
+├── scripts/publish_pack.py      # 发布包 → output/<场次>/publish/<序号>.json + 封面
+├── scripts/edit_preview.py      # 编辑器预览视频（素材范围超出审核片段时）
 └── tests/               # 合成弹幕 + 合成录像 + 假百炼接口的端到端测试，不需要真实录像（约 1 分钟）
 ```
