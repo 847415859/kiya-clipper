@@ -59,7 +59,7 @@ class Bili:
         self._keys: tuple[str, str] | None = None
         self._last = 0.0
 
-    def _get(self, path: str, params: dict) -> dict:
+    def _get(self, path: str, params: dict, ok_codes: tuple = (0,)) -> dict:
         wait = self.pause - (time.time() - self._last)
         if wait > 0:
             time.sleep(wait)
@@ -74,14 +74,15 @@ class Bili:
             raise BiliError(f"请求失败 {path}：{e}") from e
         finally:
             self._last = time.time()
-        if d.get("code") != 0:
+        if d.get("code") not in ok_codes:
             hint = "（被风控：检查 Cookie 文件是否有效）" if d.get("code") in (-352, -412, -799) else ""
             raise BiliError(f"{path} 返回 {d.get('code')} {d.get('message', '')}{hint}")
         return d.get("data") or {}
 
     def keys(self) -> tuple[str, str]:
         if self._keys is None:
-            w = self._get("/x/web-interface/nav", {}).get("wbi_img") or {}
+            # 没登录时 nav 返回 -101“账号未登录”，但签名密钥照样给，不算失败
+            w = self._get("/x/web-interface/nav", {}, ok_codes=(0, -101)).get("wbi_img") or {}
             stem = lambda u: Path(urllib.parse.urlparse(u or "").path).stem
             self._keys = (stem(w.get("img_url")), stem(w.get("sub_url")))
             if not all(self._keys):

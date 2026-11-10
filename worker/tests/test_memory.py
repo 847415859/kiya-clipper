@@ -147,7 +147,8 @@ class FakeBili:
                     d = {"title": f"切片{i}", "pubdate": 1762000000 + i, "stat": {"view": 1000 * i, "like": 10 * i, "coin": i}}
                 else:
                     return self._send({"code": -404})
-                self._send({"code": 0, "data": d})
+                # 真实接口：没登录时 nav 返回 -101，但 data 里照样有签名密钥
+                self._send({"code": -101 if u.path == "/x/web-interface/nav" else 0, "message": "账号未登录", "data": d})
 
             def _send(self, obj):
                 b = json.dumps(obj, ensure_ascii=False).encode()

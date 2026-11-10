@@ -71,7 +71,8 @@
       <div class="two">
         <el-card shadow="never" class="card">
           <template #header><b>她自己的投稿</b> <span class="muted">（最近 {{ streamerUploads.length }} 条；精排参考她觉得什么值得发、最近聊什么、标题风格）</span></template>
-          <el-table :data="streamerUploads" size="small" max-height="320" empty-text="还没拉到（看上面的提示）">
+          <el-table :data="streamerUploads" size="small" max-height="320"
+                    :empty-text="mem ? '没拉到，看页面顶部的黄色提示' : '还没更新过：点页面顶部的“更新精排记忆”'">
             <el-table-column label="标题" min-width="240" show-overflow-tooltip>
               <template #default="{ row }"><a :href="`https://www.bilibili.com/video/${row.bvid}`" target="_blank" rel="noopener">{{ row.title }}</a></template>
             </el-table-column>
