@@ -119,12 +119,15 @@ def main() -> int:
             "sentences": sents,
         }
         dst.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        with open(out_dir / "transcript.jsonl", "w", encoding="utf-8") as jf:    # 按句一行，给以后的全文检索用
+            for snt in sents:
+                jf.write(json.dumps({"session": name, **snt}, ensure_ascii=False) + "\n")
         (out_dir / "transcript.txt").write_text(
             "\n".join(f"[{fmt(s['t0'])}] {s['text']}" for s in sents) + "\n", encoding="utf-8")
         chars = sum(len(s["text"]) for s in sents)
         print(f"  完成：{len(sents)} 句、{chars} 字，识别用时 {time.time() - t1:.0f} 秒"
               + ("" if all(ok) else f"；{ok.count(False)} 个分段失败"))
-        print(f"  结果：{dst}、transcript.txt")
+        print(f"  结果：{dst}、transcript.txt、transcript.jsonl")
         print(f"  下一步：python scripts/screen.py {args.paths[0]} --session {name}（候选会带上主播原话）")
         if not all(ok):
             rc = 1

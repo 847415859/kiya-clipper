@@ -148,6 +148,7 @@ public class SessionService {
             m.put("hasTranscript", Files.exists(dir.resolve("transcript.json")));
             JsonNode cj = readJson(dir.resolve("candidates.json"));
             m.put("hasCandidates", cj != null);
+            m.put("hasRerank", Files.exists(dir.resolve("rerank.json")));
             m.put("candidateCount", cj == null ? 0 : cj.path("candidates").size());
             m.put("clipCount", countClips(dir.resolve("clips")));
             int[] a = marks.getOrDefault(name, new int[2]);
@@ -168,9 +169,26 @@ public class SessionService {
                 .eq("session_name", session).orderByAsc("rnk"))) {
             list.add(toMap(c));
         }
+        JsonNode rr = readJson(paths.sessionDir(session).resolve("rerank.json"));
+        Map<Integer, Map<String, Object>> llm = rerankByRank(rr);
+        for (Map<String, Object> m : list) {
+            Map<String, Object> info = llm.get((Integer) m.get("rank"));
+            Object cs = m.get("clipStart");
+            if (info != null && cs instanceof Number n && Math.abs(n.doubleValue() - (Double) info.get("clipStart")) <= 1) {   // 重跑粗筛换了片段的旧结果不显示
+                m.put("llm", info);
+            }
+        }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("session", session);
         out.put("candidates", list);
+        if (rr != null) {
+            Map<String, Object> meta = new LinkedHashMap<>();
+            meta.put("model", rr.path("model").asText(""));
+            meta.put("prompt", rr.path("prompt").asText(""));
+            meta.put("generatedAt", rr.path("generated_at").asText(""));
+            meta.put("costYuan", rr.path("cost_yuan").isNumber() ? rr.path("cost_yuan").asDouble() : null);
+            out.put("rerank", meta);
+        }
         if (cj != null) {
             out.put("signals", cj.path("signals_used").asText(""));
             out.put("delay", cj.path("delay_seconds").asDouble(0));
@@ -305,6 +323,43 @@ public class SessionService {
     }
 
     // ------------------------------------------------------------------ 工具
+    /** rerank.json（精排结果）按原序号整理成前端要的字段；没有精排或解析失败返回空表。 */
+    Map<Integer, Map<String, Object>> rerankByRank(JsonNode rr) {
+        Map<Integer, Map<String, Object>> out = new HashMap<>();
+        if (rr == null) {
+            return out;
+        }
+        for (JsonNode c : rr.path("candidates")) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            JsonNode l = c.path("llm");
+            m.put("newRank", c.path("new_rank").isNumber() ? c.path("new_rank").asInt() : null);
+            m.put("final", c.path("final").isNumber() ? c.path("final").asDouble() : null);
+            m.put("error", c.path("error").isTextual() ? c.path("error").asText() : null);
+            m.put("promptVersion", c.path("prompt_version").asText(""));
+            m.put("clipStart", c.path("clip_start").asDouble());
+            if (l.isObject()) {
+                m.put("funny", l.path("funny").asBoolean(false));
+                m.put("score", l.path("score").asDouble(0));
+                m.put("type", l.path("type").asText(""));
+                m.put("standalone", l.path("standalone").asBoolean(false));
+                m.put("whatHappened", l.path("what_happened").asText(""));
+                m.put("reason", l.path("reason").asText(""));
+                m.put("story", om.convertValue(l.path("story"), new TypeReference<Map<String, Object>>() {}));
+                m.put("titles", om.convertValue(l.path("title_candidates"), new TypeReference<List<String>>() {}));
+            }
+            JsonNode r = c.path("refined");
+            if (r.isObject()) {
+                Map<String, Object> rm = new LinkedHashMap<>();
+                rm.put("start", r.path("start").asDouble());
+                rm.put("end", r.path("end").asDouble());
+                rm.put("note", r.path("note").asText(""));
+                m.put("refined", rm);
+            }
+            out.put(c.path("rank").asInt(), m);
+        }
+        return out;
+    }
+
     private Map<String, Object> toMap(Candidate c) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("rank", c.getRnk());

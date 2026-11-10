@@ -6,6 +6,9 @@
   gift      礼物 / SC / 上舰金额（取对数）
   audio     桶内最大响度 − 前 baseline_seconds 的响度中位数（dB，相对变响了多少）
   scene     桶内关键帧画面变化之和（取对数）
+  laugh     主播原话里的笑声（“哈哈哈”“嘿嘿”“笑死”…，需要先转写）
+  scream    尖叫 / 高音大笑：响度突增且高频能量占比突增
+另有 music（音高稳定拖长的比例，唱歌 / 纯音乐高）：不参与打分，用于标记和（可选）过滤歌回片段。
 每个信号做稳健标准化（中位数 / MAD），按权重加和后平滑、峰值检测。
 没有录像特征时自动只用弹幕三项，权重按可用信号重新归一化。
 
@@ -14,6 +17,7 @@
 """
 from __future__ import annotations
 
+import re
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 
@@ -22,7 +26,8 @@ from scipy.signal import find_peaks
 
 from .danmaku import Event, Segment
 
-SIGNALS = ("density", "emotion", "gift", "audio", "scene")
+SIGNALS = ("density", "emotion", "gift", "audio", "scene", "laugh", "scream")
+LAUGH_RE = re.compile(r"(哈{2,}|[嘿呵嘻]{2,}|h{3,}|笑死|笑不活|笑疯)", re.I)
 
 
 @dataclass
@@ -39,6 +44,7 @@ class Peak:
     file_index: int
     local_start: float       # 在对应分段视频里的起点秒数
     contrib: dict = field(default_factory=dict)   # 各信号在该点的贡献（加权后的 z 值）
+    music: float = 0.0       # 片段内唱歌 / 纯音乐的程度 0~1
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -126,7 +132,22 @@ def estimate_delay(events: list[Event], audio_db: np.ndarray | None, cfg: dict) 
     return best_lag, f"自动估计（相关 {best:.2f}）"
 
 
-def compute_signals(events: list[Event], cfg: dict, features: dict | None = None, delay: float = 0.0) -> dict:
+def laugh_counts(sentences: list[dict], n: int, bucket: float) -> np.ndarray:
+    """每个桶里主播原话的笑声次数（按句子时长平摊）。"""
+    out = np.zeros(n)
+    for s in sentences or []:
+        k = len(LAUGH_RE.findall(s.get("text", "")))
+        if not k:
+            continue
+        a, b = int(s["t0"] // bucket), int(max(s["t0"], s["t1"] - 1e-6) // bucket)
+        span = range(max(0, a), min(n - 1, b) + 1)
+        for i in span:
+            out[i] += k / max(1, len(span))
+    return out
+
+
+def compute_signals(events: list[Event], cfg: dict, features: dict | None = None, delay: float = 0.0,
+                    sentences: list[dict] | None = None) -> dict:
     a = cfg["analysis"]
     bucket = float(a["bucket_seconds"])
     end_t = max((e.t for e in events), default=0.0)
@@ -167,6 +188,23 @@ def compute_signals(events: list[Event], cfg: dict, features: dict | None = None
         scene = np.asarray(features["scene"], dtype=float)
         scene = np.concatenate([scene, np.zeros(max(0, n * b - len(scene)))])[: n * b].reshape(n, b).sum(axis=1)
         raw["scene"] = np.log1p(scene)
+        if features.get("hf") is not None and len(features["hf"]):
+            # 尖叫：这一秒比前 5 分钟中位数响 6 dB 以上，且高频占比也明显升高
+            loud = np.asarray(features["audio_db"], dtype=float)
+            hf = np.asarray(features["hf"], dtype=float)
+            m = min(len(loud), len(hf), n * b)
+            base_l = np.repeat(trailing_median(loud[:m][::5], 60), 5)[:m]
+            base_h = np.repeat(trailing_median(hf[:m][::5], 60), 5)[:m]
+            ex = np.where((loud[:m] - np.nan_to_num(base_l, nan=-90)) > 6, np.nan_to_num(hf[:m] - base_h, nan=0), 0)
+            ex = np.concatenate([np.clip(ex, 0, None), np.zeros(n * b - m)]).reshape(n, b).max(axis=1)
+            raw["scream"] = ex
+        if features.get("sustain") is not None and len(features["sustain"]):
+            sus = np.asarray(features["sustain"], dtype=float)
+            sus = np.concatenate([sus, np.full(max(0, n * b - len(sus)), np.nan)])[: n * b].reshape(n, b)
+            with np.errstate(all="ignore"):
+                music = np.nan_to_num(np.nanmean(sus, axis=1), nan=0.0)
+    if sentences:
+        raw["laugh"] = np.log1p(laugh_counts(sentences, n, bucket))
 
     w_cfg = cfg["weights"]
     avail = [k for k in SIGNALS if k in raw and w_cfg.get(k, 0) > 0]
@@ -178,15 +216,18 @@ def compute_signals(events: list[Event], cfg: dict, features: dict | None = None
     sm = max(1, int(a["smooth_seconds"] // bucket))
     score = smooth(score, sm)
     times = (np.arange(n) + 0.5) * bucket
+    if features is None or features.get("sustain") is None or not len(features.get("sustain", [])):
+        music = np.zeros(n)
+    music = smooth(music, max(1, int(30 // bucket)))       # 唱歌是持续几分钟的事，按 30 秒平滑
     return {"times": times, "score": score, "count": count, "emotion": emo, "gift": gift, "bucket": bucket,
-            "z": {k: smooth(zs[k], sm) for k in avail}, "weights": weights, "raw": raw}
+            "z": {k: smooth(zs[k], sm) for k in avail}, "weights": weights, "raw": raw, "music": music}
 
 
 def find_top_peaks(events: list[Event], segs: list[Segment], cfg: dict,
-                   features: dict | None = None) -> tuple[list[Peak], dict]:
+                   features: dict | None = None, sentences: list[dict] | None = None) -> tuple[list[Peak], dict]:
     a = cfg["analysis"]
     delay, delay_note = estimate_delay(events, features["audio_db"] if features else None, cfg)
-    sig = compute_signals(events, cfg, features, delay)
+    sig = compute_signals(events, cfg, features, delay, sentences)
     sig["delay"], sig["delay_note"] = delay, delay_note
     bucket = sig["bucket"]
     score = sig["score"]
@@ -194,7 +235,15 @@ def find_top_peaks(events: list[Event], segs: list[Segment], cfg: dict,
         return [], sig
     dist = max(1, int(a["min_peak_gap_seconds"] // bucket))
     idx, _ = find_peaks(score, distance=dist)
-    idx = sorted(idx, key=lambda i: score[i], reverse=True)[: int(a["top_n"])]
+    idx = sorted(idx, key=lambda i: score[i], reverse=True)
+    music = sig["music"]
+    sig["music_filtered"] = 0
+    if a.get("music_filter"):                    # 歌回过滤：片段大部分时间在唱歌 / 放音乐的不要
+        th = float(a.get("music_threshold", 0.45))
+        keep = [i for i in idx if music[i] < th]
+        sig["music_filtered"] = len(idx) - len(keep)
+        idx = keep
+    idx = idx[: int(a["top_n"])]
 
     before = float(a["clip_before_seconds"])
     after = float(a["clip_after_seconds"])
@@ -219,5 +268,6 @@ def find_top_peaks(events: list[Event], segs: list[Segment], cfg: dict,
             top_danmaku=top, clip_start=clip_start, clip_end=clip_end,
             file_index=seg_i, local_start=clip_start - segs[seg_i].offset if segs else clip_start,
             contrib={k: round(float(sig["weights"][k] * sig["z"][k][i]), 2) for k in sig["z"]},
+            music=round(float(music[i]), 2),
         ))
     return peaks, sig

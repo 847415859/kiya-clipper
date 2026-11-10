@@ -16,6 +16,7 @@
   python scripts/evaluate.py                          # 评测 output/ 下所有有标注的场次
   python scripts/evaluate.py --log "情绪词加了草和绷"   # 同时把结果追加到 eval/results.csv
   python scripts/evaluate.py --sweep                  # 按标注试不同分数线：每条线送审几个、漏掉几个
+  python scripts/evaluate.py --rerank                 # 精排前后对比：前 5 / 前 10 里有几个有趣，大模型和你的判断一致率
 """
 from __future__ import annotations
 
@@ -126,6 +127,60 @@ def sweep(reviews: Path, truth: dict, out: Path) -> int:
     return 0
 
 
+def rerank_report(reviews: Path, out: Path) -> int:
+    """精排（rerank.json）和粗筛的名次对比，只用你标过 Y/N 的候选。"""
+    marks: dict[str, dict[int, str]] = {}
+    for p in sorted(reviews.glob("*.csv")) if reviews.exists() else []:
+        with open(p, encoding="utf-8-sig") as f:
+            for r in csv.DictReader(f):
+                m = (r.get("是否有趣(Y/N)") or "").strip().upper()
+                if m in ("Y", "N") and (r.get("序号") or "").isdigit():
+                    marks.setdefault(p.stem, {})[int(r["序号"])] = m
+    rows = []
+    agree = {"TP": 0, "FP": 0, "FN": 0, "TN": 0}
+    ys, ns = [], []
+    for sess, mk in sorted(marks.items()):
+        rp = out / sess / "rerank.json"
+        if not rp.exists():
+            continue
+        rr = json.loads(rp.read_text(encoding="utf-8"))
+        cands = [c for c in rr["candidates"] if c["rank"] in mk]
+        if not cands:
+            continue
+        screen_order = sorted(cands, key=lambda c: c["rank"])
+        llm_order = sorted(cands, key=lambda c: c["new_rank"])
+        total_y = sum(mk[c["rank"]] == "Y" for c in cands)
+
+        def at(order, k):
+            y = sum(mk[c["rank"]] == "Y" for c in order[:k])
+            return y, min(k, len(order))
+        rows.append((sess, len(cands), total_y, at(screen_order, 5), at(llm_order, 5), at(screen_order, 10), at(llm_order, 10),
+                     rr.get("prompt", "?")))
+        for c in cands:
+            o = c.get("llm")
+            if not o:
+                continue
+            y = mk[c["rank"]] == "Y"
+            agree["TP" if y and o["funny"] else "FN" if y else "FP" if o["funny"] else "TN"] += 1
+            (ys if y else ns).append(o["score"])
+    if not rows:
+        print("没有可对比的数据：需要场次同时有 rerank.json（rerank.py）和标注（eval/reviews/*.csv）")
+        return 1
+    f = lambda x: f"{x[0]}/{x[1]}"
+    print(f"{'场次':<16}{'已标':>5}{'有趣':>5}   前5：粗筛 → 精排     前10：粗筛 → 精排   提示词")
+    for sess, n, ty, s5, l5, s10, l10, pv in rows:
+        print(f"{sess:<16}{n:>5}{ty:>5}   {f(s5):>6} → {f(l5):<9}    {f(s10):>6} → {f(l10):<9}  {pv}")
+    tot = sum(agree.values())
+    if tot:
+        acc = (agree["TP"] + agree["TN"]) / tot
+        print(f"\n大模型“值得切”和你的 Y/N 一致 {agree['TP'] + agree['TN']}/{tot} = {acc:.0%}"
+              f"（你 Y 它也说值得：{agree['TP']}，你 Y 它说不值得：{agree['FN']}，你 N 它说值得：{agree['FP']}，都说不行：{agree['TN']}）")
+        if ys and ns:
+            print(f"平均分：你标 Y 的 {sum(ys) / len(ys):.1f}，标 N 的 {sum(ns) / len(ns):.1f}（差得越多，分数越有区分度）")
+    print("只有 1–2 场时波动很大，别据此调提示词；攒够 3 场再看")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", default=str(ROOT / "output"), help="screen.py 的输出目录")
@@ -134,8 +189,11 @@ def main() -> int:
     ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"))
     ap.add_argument("--log", metavar="改了什么", help="把结果追加到 eval/results.csv")
     ap.add_argument("--sweep", action="store_true", help="按标注试不同分数线")
+    ap.add_argument("--rerank", action="store_true", help="精排前后对比")
     args = ap.parse_args()
 
+    if args.rerank:
+        return rerank_report(Path(args.reviews), Path(args.out))
     truth = load_truth(Path(args.annotations), Path(args.reviews))
     if args.sweep:
         return sweep(Path(args.reviews), truth, Path(args.out))

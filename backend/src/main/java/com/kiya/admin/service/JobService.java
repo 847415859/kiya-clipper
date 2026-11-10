@@ -42,16 +42,19 @@ public class JobService {
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     /** 任务类型及中文名。 */
-    public static final Map<String, String> TYPES = Map.of(
-            "TRANSCRIBE", "语音转写",
-            "SCREEN", "粗筛",
-            "CUT", "剪切",
-            "PIPELINE", "全流程（转写 → 粗筛 → 剪切）",
-            "HOTWORDS_SYNC", "同步热词表",
-            "EVALUATE", "评测",
-            "EVAL_SWEEP", "分数线扫描",
-            "EVAL_LOG", "评测并记录",
-            "RENDER", "渲染成片");
+    public static final Map<String, String> TYPES = Map.ofEntries(
+            Map.entry("TRANSCRIBE", "语音转写"),
+            Map.entry("SCREEN", "粗筛"),
+            Map.entry("RERANK", "大模型精排"),
+            Map.entry("CUT", "剪切"),
+            Map.entry("PIPELINE", "全流程（转写 → 粗筛 → 剪切）"),
+            Map.entry("HOTWORDS_SYNC", "同步热词表"),
+            Map.entry("EVALUATE", "评测"),
+            Map.entry("EVAL_SWEEP", "分数线扫描"),
+            Map.entry("EVAL_LOG", "评测并记录"),
+            Map.entry("EVAL_RERANK", "精排对比"),
+            Map.entry("AUTO_EDIT", "AI 剪辑初稿"),
+            Map.entry("RENDER", "渲染成片"));
 
     private final JobMapper mapper;
     private final WorkerPaths paths;
@@ -206,7 +209,7 @@ public class JobService {
     // ------------------------------------------------------------------ 执行
     private static boolean needsSession(String type) {
         return switch (type) {
-            case "TRANSCRIBE", "SCREEN", "CUT", "PIPELINE", "RENDER" -> true;
+            case "TRANSCRIBE", "SCREEN", "RERANK", "CUT", "PIPELINE", "RENDER", "AUTO_EDIT" -> true;
             default -> false;
         };
     }
@@ -225,6 +228,9 @@ public class JobService {
                 steps.add(cut(session, p));
             }
             case "RENDER" -> steps.add(render(session, p));
+            case "RERANK" -> steps.add(rerank(session, p));
+            case "AUTO_EDIT" -> steps.add(autoEdit(session, p));
+            case "EVAL_RERANK" -> steps.add(runner.command("evaluate.py", List.of("--rerank")));
             case "HOTWORDS_SYNC" -> steps.add(runner.command("hotwords.py", List.of("sync")));
             case "EVALUATE" -> steps.add(runner.command("evaluate.py", List.of()));
             case "EVAL_SWEEP" -> steps.add(runner.command("evaluate.py", List.of("--sweep")));
@@ -293,6 +299,36 @@ public class JobService {
             a.addAll(List.of("--sub-style-json", "@style:" + styleId));
         }
         return runner.command("cut.py", a);
+    }
+
+    private List<String> rerank(String session, Map<String, Object> p) {
+        String cand = paths.sessionDir(session).resolve("candidates.json").toString();
+        List<String> a = new ArrayList<>(List.of(cand));
+        Object ranks = p.get("ranks");
+        if (ranks instanceof List<?> l && !l.isEmpty()) {
+            a.add("--ranks");
+            for (Object r : l) {
+                int v = (r instanceof Number n) ? n.intValue() : Integer.parseInt(String.valueOf(r));
+                if (v < 1 || v > 999) {
+                    throw ApiException.badRequest("序号不合法");
+                }
+                a.add(String.valueOf(v));
+            }
+        }
+        return runner.command("rerank.py", a);              // 重跑时没变的候选走缓存，不重复花钱
+    }
+
+    private List<String> autoEdit(String session, Map<String, Object> p) {
+        int rank = intParam(p, "rank", 0);
+        if (rank < 1 || rank > 999) {
+            throw ApiException.badRequest("请指定序号");
+        }
+        String cand = paths.sessionDir(session).resolve("candidates.json").toString();
+        List<String> a = new ArrayList<>(List.of(cand, "--rank", String.valueOf(rank)));
+        if (Boolean.TRUE.equals(p.get("force"))) {
+            a.add("--force");
+        }
+        return runner.command("autoedit.py", a);
     }
 
     private List<String> render(String session, Map<String, Object> p) {

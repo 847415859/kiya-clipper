@@ -33,6 +33,7 @@
               {{ row.hasCandidates ? `候选 ${row.candidateCount}` : '未粗筛' }}
             </el-tag>
             <el-tag size="small" :type="row.clipCount ? 'success' : 'info'">片段 {{ row.clipCount }}</el-tag>
+            <el-tag v-if="row.hasRerank" size="small" type="success">已精排</el-tag>
             <el-tag v-if="row.hasCandidates" size="small" :type="row.reviewed >= row.candidateCount && row.candidateCount ? 'success' : 'warning'">
               已审 {{ row.reviewed }}/{{ row.candidateCount }}，有趣 {{ row.funny }}
             </el-tag>
@@ -49,6 +50,7 @@
                 <el-dropdown-item command="PIPELINE">全流程（转写 → 粗筛 → 剪切）</el-dropdown-item>
                 <el-dropdown-item command="TRANSCRIBE" divided>语音转写</el-dropdown-item>
                 <el-dropdown-item command="SCREEN">粗筛</el-dropdown-item>
+                <el-dropdown-item command="RERANK" :disabled="!row.hasCandidates || !row.hasTranscript">大模型精排</el-dropdown-item>
                 <el-dropdown-item command="CUT" :disabled="!row.hasCandidates">剪切</el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -97,6 +99,15 @@
             <el-input v-model="form.ranks" placeholder="留空剪全部，例如 1 3 5" />
           </el-form-item>
         </template>
+        <template v-if="form.type === 'RERANK'">
+          <p class="muted" style="margin: 0 0 12px">
+            每个候选抽 8 张截图 + 原话 + 弹幕交给多模态大模型打分、找笑点、修正起止、出标题候选。
+            按所选模型的价格计费（任务日志最后会打印 token 用量）；结果有缓存，重跑不重复收费。
+          </p>
+          <el-form-item label="只精排序号">
+            <el-input v-model="form.ranks" placeholder="留空全部，例如 1 3 5" />
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="dialog = false">取消</el-button>
@@ -118,7 +129,7 @@ const styles = ref([])
 const loading = ref(false)
 const scanning = ref(false)
 const dialog = ref(false)
-const typeName = { PIPELINE: '全流程', TRANSCRIBE: '语音转写', SCREEN: '粗筛', CUT: '剪切' }
+const typeName = { PIPELINE: '全流程', TRANSCRIBE: '语音转写', SCREEN: '粗筛', RERANK: '大模型精排', CUT: '剪切' }
 const form = reactive({ type: 'CUT', session: '', model: '', refresh: false, noVideo: false, height: 480, styleId: null, noSubs: false, ranks: '' })
 
 async function load() {
@@ -156,6 +167,11 @@ async function submit() {
     if (form.refresh) p.refresh = true
   }
   if ((form.type === 'SCREEN' || form.type === 'PIPELINE') && form.noVideo) p.noVideo = true
+  if (form.type === 'RERANK') {
+    const ranks = String(form.ranks || '').split(/[\s,，]+/).filter(Boolean).map(Number)
+    if (ranks.some((n) => !Number.isInteger(n) || n < 1)) return ElMessage.error('序号格式不对')
+    if (ranks.length) p.ranks = ranks
+  }
   if (form.type === 'CUT' || form.type === 'PIPELINE') {
     p.height = form.height
     if (form.noSubs) p.noSubs = true

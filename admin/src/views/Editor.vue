@@ -6,6 +6,9 @@
       <span class="muted">高峰 {{ hms(info.t) }}，片段 {{ fmt(info.clipLen) }}</span>
       <span class="spacer" />
       <el-tag v-if="dirty" type="warning" size="small">未保存</el-tag>
+      <el-tooltip content="让大模型按精排结果写一版花字 / 运镜 / 贴图，再手动微调" placement="bottom">
+        <el-button :loading="drafting" :disabled="!info.clip" @click="aiDraft">AI 初稿</el-button>
+      </el-tooltip>
       <el-button type="primary" :disabled="!dirty" :loading="saving" @click="save()">保存</el-button>
       <el-dropdown split-button type="success" :disabled="rendering" @click="render(480)" @command="render">
         {{ rendering ? '渲染中…' : '渲染 480p 预览' }}
@@ -18,6 +21,18 @@
         </template>
       </el-dropdown>
       <el-button v-if="renderJob" link type="primary" @click="$router.push({ path: '/jobs', query: { open: renderJob } })">渲染日志</el-button>
+    </div>
+
+    <div v-if="info.llm || warnings.length || generatedBy" class="ai-bar">
+      <template v-if="info.llm && !info.llm.error">
+        <el-tag size="small" :type="info.llm.funny ? 'success' : 'info'">AI {{ info.llm.funny ? '有梗' : '一般' }} {{ info.llm.score }}</el-tag>
+        <el-tag size="small" effect="plain">{{ info.llm.type }}</el-tag>
+        <span>{{ info.llm.whatHappened }}</span>
+        <span v-if="info.llm.refined" class="muted">（建议起止已按精排修正：{{ info.llm.refined.note }}）</span>
+        <span v-if="info.llm.titles && info.llm.titles.length" class="muted">标题：{{ info.llm.titles.join(' / ') }}</span>
+      </template>
+      <span v-if="generatedBy" class="muted">当前脚本由 {{ generatedBy }} 生成{{ aiNote ? '：' + aiNote : '' }}</span>
+      <el-alert v-for="w in warnings" :key="w" :title="w" type="warning" :closable="false" show-icon class="warn" />
     </div>
 
     <div v-if="!loading && !info.clip" class="empty-all">
@@ -206,7 +221,11 @@ const saving = ref(false)
 const cutting = ref(false)
 const rendering = ref(false)
 const renderJob = ref(null)
-const info = reactive({ clipLen: 60, clip: null, t: 0, finals: [] })
+const drafting = ref(false)
+const warnings = ref([])
+const generatedBy = ref('')
+const aiNote = ref('')
+const info = reactive({ clipLen: 60, clip: null, t: 0, finals: [], llm: null, exists: false })
 const edit = reactive({ trim: { start: 0, end: 60 }, subtitles: { enabled: true }, items: [] })
 const styleId = ref(null)
 const styles = ref([])
@@ -429,6 +448,8 @@ function apply(e) {
   edit.subtitles.enabled = e.subtitles ? e.subtitles.enabled !== false : true
   styleId.value = (e.subtitles && e.subtitles.style_id) || null
   edit.items.splice(0, edit.items.length, ...(e.items || []).map((i) => ({ ...i, id: i.id || newId() })))
+  generatedBy.value = e.generated_by || ''
+  aiNote.value = e.note || ''
 }
 
 async function load() {
@@ -436,7 +457,7 @@ async function load() {
   loaded = false
   try {
     const r = await api.getEdit(name.value, rank.value)
-    Object.assign(info, { clipLen: r.clipLen, clip: r.clip, t: r.t, finals: r.finals || [] })
+    Object.assign(info, { clipLen: r.clipLen, clip: r.clip, t: r.t, finals: r.finals || [], llm: r.llm || null, exists: !!r.exists })
     apply(r.edit)
     styles.value = await api.styles()
     loadStickers()
@@ -455,15 +476,18 @@ async function save(quiet) {
   saving.value = true
   try {
     const body = { version: 1, trim: { ...edit.trim }, subtitles: { enabled: edit.subtitles.enabled }, items: edit.items }
-    const norm = await api.saveEdit(name.value, rank.value, body, edit.subtitles.enabled ? styleId.value : null)
+    if (generatedBy.value) Object.assign(body, { generated_by: generatedBy.value, note: aiNote.value })
+    const r = await api.saveEdit(name.value, rank.value, body, edit.subtitles.enabled ? styleId.value : null)
+    warnings.value = r.warnings || []
+    info.exists = true
     loaded = false
     const sel = selected.value
-    apply(norm)
+    apply(r.edit)
     selected.value = sel
     await nextTick()
     dirty.value = false
     loaded = true
-    if (!quiet) ElMessage.success('已保存')
+    if (!quiet) ElMessage[warnings.value.length ? 'warning' : 'success'](warnings.value.length ? `已保存，有 ${warnings.value.length} 条提醒` : '已保存')
     return true
   } finally {
     saving.value = false
@@ -493,6 +517,35 @@ async function render(height) {
     }
   } finally {
     rendering.value = false
+  }
+}
+
+async function waitJob(id, every) {
+  for (;;) {
+    await new Promise((r) => setTimeout(r, every))
+    const s = await api.job(id)
+    if (s.status !== 'PENDING' && s.status !== 'RUNNING') return s
+  }
+}
+
+async function aiDraft() {
+  const has = info.exists || edit.items.length > 0
+  if (has) {
+    await ElMessageBox.confirm('AI 初稿会覆盖当前的剪辑脚本（花字、运镜、贴图和裁剪范围），确定？', 'AI 初稿',
+      { type: 'warning', confirmButtonText: '覆盖' })
+  }
+  if (!info.llm) {
+    ElMessage.info('这个候选还没有精排结果，初稿只能参考原话和弹幕；建议先在场次页跑“精排”')
+  }
+  drafting.value = true
+  try {
+    const j = await api.submitJob('AUTO_EDIT', name.value, { rank: rank.value, force: has })
+    const s = await waitJob(j.id, 3000)
+    if (s.status !== 'SUCCESS') return ElMessage.error(`初稿没有生成：${s.summary || s.status}（详情见任务页）`)
+    await load()
+    ElMessage.success('AI 初稿已载入，检查后记得渲染预览')
+  } finally {
+    drafting.value = false
   }
 }
 
@@ -592,4 +645,6 @@ onBeforeUnmount(() => {
 .cell .nm { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cell .del { position: absolute; top: 2px; right: 4px; }
 @media (max-width: 1000px) { .body { grid-template-columns: 1fr; } .right { border-left: none; } }
+.ai-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 12px; font-size: 13px; border-bottom: 1px solid var(--el-border-color-lighter); }
+.ai-bar .warn { width: 100%; padding: 4px 10px; }
 </style>

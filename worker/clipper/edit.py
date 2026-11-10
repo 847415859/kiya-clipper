@@ -99,7 +99,7 @@ def validate_edit(raw: dict, clip_len: float) -> dict:
     if isinstance(subs.get("style"), dict):          # 后台保存时把选中的样式整份写进来
         out["subtitles"]["style"] = subs["style"]
         out["subtitles"]["style_name"] = str(subs.get("style_name") or "")[:64]
-    for k in ("session", "rank", "updated_at"):
+    for k in ("session", "rank", "updated_at", "generated_by", "note"):
         if k in raw:
             out[k] = raw[k]
     return out
@@ -107,3 +107,48 @@ def validate_edit(raw: dict, clip_len: float) -> dict:
 
 def default_edit(clip_len: float) -> dict:
     return {"version": 1, "trim": {"start": 0.0, "end": clip_len}, "subtitles": {"enabled": True}, "items": []}
+
+
+# ---------------------------------------------------------------- 密度约束
+MAX_CONCURRENT = 2       # 同一时刻最多两个效果（花字 / 贴图 / 运镜都算）
+ZOOM_GAP = 10.0          # 两次推镜开始至少隔 10 秒
+
+
+def density_problems(edit: dict) -> list[str]:
+    """检查效果是否太密，返回问题描述（不改脚本）。"""
+    items = sorted(edit.get("items") or [], key=lambda i: i["start"])
+    out = []
+    for i, it in enumerate(items):
+        t = it["start"]
+        active = [x for x in items if x["start"] <= t < x["start"] + x["duration"]]
+        if len(active) > MAX_CONCURRENT:
+            out.append(f"{t:.1f} 秒处同时有 {len(active)} 个效果（建议最多 {MAX_CONCURRENT} 个）")
+    zooms = [i for i in items if i["type"] == "zoom"]
+    for a, b in zip(zooms, zooms[1:]):
+        if b["start"] - a["start"] < ZOOM_GAP:
+            out.append(f"{a['start']:.1f} 秒和 {b['start']:.1f} 秒两次推镜间隔不到 {ZOOM_GAP:.0f} 秒")
+    return list(dict.fromkeys(out))
+
+
+def enforce_density(edit: dict) -> tuple[dict, list[dict]]:
+    """按时间顺序保留效果，丢掉会让画面太乱的（自动生成的脚本用）。返回 (新脚本, 被丢掉的效果)。"""
+    kept, dropped = [], []
+    last_zoom = None
+    for it in sorted(edit.get("items") or [], key=lambda i: i["start"]):
+        active = [x for x in kept if x["start"] <= it["start"] < x["start"] + x["duration"]]
+        if len(active) >= MAX_CONCURRENT:
+            dropped.append(it)
+            continue
+        if it["type"] == "zoom":
+            if last_zoom is not None and it["start"] - last_zoom < ZOOM_GAP:
+                dropped.append(it)
+                continue
+            last_zoom = it["start"]
+        kept.append(it)
+    return dict(edit, items=kept), dropped
+
+
+def missing_assets(edit: dict, sticker_dir) -> list[str]:
+    from pathlib import Path
+    d = Path(sticker_dir)
+    return sorted({i["asset"] for i in edit.get("items") or [] if i["type"] == "sticker" and not (d / i["asset"]).exists()})

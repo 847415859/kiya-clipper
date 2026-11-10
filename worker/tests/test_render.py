@@ -42,7 +42,7 @@ def test_edit_check_script(tmp_path):
     f.write_text(json.dumps({"items": [{"type": "zoom", "start": 3}]}), encoding="utf-8")
     r = subprocess.run([sys.executable, str(ROOT / "scripts" / "edit_check.py"), str(f), "--clip-len", "60"],
                        capture_output=True, text=True)
-    assert r.returncode == 0 and json.loads(r.stdout)["items"][0]["scale"] == 1.5
+    assert r.returncode == 0 and json.loads(r.stdout)["edit"]["items"][0]["scale"] == 1.5
     f.write_text("{坏的", encoding="utf-8")
     r = subprocess.run([sys.executable, str(ROOT / "scripts" / "edit_check.py"), str(f), "--clip-len", "60"],
                        capture_output=True, text=True)

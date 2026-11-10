@@ -7,6 +7,10 @@
       <span v-if="data.signals" class="muted">信号 {{ data.signals }}；弹幕延迟 {{ data.delay }} 秒</span>
       <span v-if="data.minScore != null" class="muted">分数线 {{ data.minScore }}，另有 {{ data.belowThreshold }} 个未过线</span>
       <span class="spacer" />
+      <el-tooltip v-if="data.rerank" placement="bottom"
+                  content="先自己判断再看 AI，标注才能用来评测精排；已标过的片段总是显示">
+        <el-switch v-model="showAi" active-text="显示 AI 精排" />
+      </el-tooltip>
       <span class="muted keys">Y 有趣 · N 不有趣 · ←/→ 切换 · 空格 播放 · J/L ±5 秒 · E 备注</span>
     </div>
 
@@ -19,6 +23,7 @@
         <div v-for="(c, i) in list" :key="c.rank" :class="['item', { cur: i === cur }]" @click="select(i)">
           <span class="r">#{{ c.rank }}</span>
           <span>{{ hms(c.t) }}</span>
+          <span v-if="aiVisible(c) && c.llm && !c.llm.error" class="ai" :class="{ hot: c.llm.funny }">AI {{ c.llm.score }}</span>
           <el-tag size="small" :type="c.mark === 'Y' ? 'success' : c.mark === 'N' ? 'danger' : 'info'" class="badge">
             {{ c.mark === 'Y' ? '有趣' : c.mark === 'N' ? '不有趣' : c.clip ? '未标' : '未剪' }}
           </el-tag>
@@ -54,6 +59,26 @@
           <span>高频弹幕</span><b>{{ (c.topDanmaku || []).join(' | ') || '—' }}</b>
         </div>
 
+        <div v-if="c.llm && aiVisible(c)" class="aibox">
+          <div v-if="c.llm.error" class="muted">AI 精排失败：{{ c.llm.error }}</div>
+          <template v-else>
+            <div>
+              <el-tag size="small" :type="c.llm.funny ? 'success' : 'info'">{{ c.llm.funny ? '有梗' : '一般' }} {{ c.llm.score }}/10</el-tag>
+              <el-tag size="small" effect="plain">{{ c.llm.type }}</el-tag>
+              <el-tag v-if="c.llm.standalone" size="small" effect="plain" type="success">能单独看懂</el-tag>
+              <span class="muted">精排后第 {{ c.llm.newRank }} 名（综合 {{ c.llm.final }}）</span>
+            </div>
+            <div><b>{{ c.llm.whatHappened }}</b> <span class="muted">{{ c.llm.reason }}</span></div>
+            <div v-if="c.llm.story && c.llm.story.punch" class="muted">
+              铺垫：{{ c.llm.story.setup || '—' }}｜笑点：{{ c.llm.story.punch }}｜反应：{{ c.llm.story.reaction || '—' }}
+            </div>
+            <div v-if="c.llm.refined" class="muted">
+              建议切 {{ hms(c.llm.refined.start) }}–{{ hms(c.llm.refined.end) }}（{{ Math.round(c.llm.refined.end - c.llm.refined.start) }} 秒，{{ c.llm.refined.note }}）
+            </div>
+            <div v-if="c.llm.titles && c.llm.titles.length">标题候选：{{ c.llm.titles.join(' ／ ') }}</div>
+          </template>
+        </div>
+
         <div v-if="c.speech" class="speech">
           <div class="muted">主播原话（点一句跳到那里；语音识别可能有错字）</div>
           <div v-if="!c.speech.length" class="muted">这段没有识别到说话</div>
@@ -87,6 +112,7 @@ const note = ref('')
 const saved = ref('')
 const loading = ref(true)
 const cutting = ref(false)
+const showAi = ref(false)
 const video = ref(null)
 const noteInput = ref(null)
 let savedTimer = null
@@ -110,6 +136,9 @@ async function load(keep) {
 }
 
 watch(c, (v) => { note.value = (v && v.note) || '' })
+
+// 没标注前默认不显示 AI 判断，免得先入为主，标注就没法用来评测精排
+const aiVisible = (x) => showAi.value || !!x.mark
 
 function mmss(sec) {
   const s = Math.max(0, Math.round(sec))
@@ -240,4 +269,8 @@ video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; dis
   .list { max-height: 200px; }
   .keys { display: none; }
 }
+.ai { font-size: 11px; color: var(--el-text-color-secondary); margin-left: auto; margin-right: 4px; }
+.ai.hot { color: var(--el-color-success); font-weight: 600; }
+.aibox { margin: 10px 0; padding: 8px 12px; border-left: 3px solid var(--el-color-primary-light-5); background: var(--el-fill-color-light); display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.aibox .el-tag { margin-right: 6px; }
 </style>

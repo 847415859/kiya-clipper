@@ -35,12 +35,30 @@ public class EditService {
     private final ProcessRunner runner;
     private final StyleService styles;
     private final ObjectMapper om;
+    private final SessionService sessions;
 
-    public EditService(WorkerPaths paths, ProcessRunner runner, StyleService styles, ObjectMapper om) {
+    public EditService(WorkerPaths paths, ProcessRunner runner, StyleService styles, ObjectMapper om,
+                       SessionService sessions) {
         this.paths = paths;
         this.runner = runner;
         this.styles = styles;
         this.om = om;
+        this.sessions = sessions;
+    }
+
+    /** 这个候选的精排结果（没有返回 null）。 */
+    private Map<String, Object> rerank(String session, int rank) {
+        Path f = paths.sessionDir(session).resolve("rerank.json");
+        if (!Files.exists(f)) {
+            return null;
+        }
+        try {
+            Map<String, Object> m = sessions.rerankByRank(om.readTree(f.toFile())).get(rank);
+            double cs = candidate(session, rank).path("clip_start").asDouble();
+            return m != null && Math.abs((Double) m.get("clipStart") - cs) <= 1 ? m : null;   // 粗筛重跑后的旧结果不用
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     private JsonNode candidate(String session, int rank) {
@@ -72,10 +90,24 @@ public class EditService {
         } catch (IOException e) {
             edit = null;
         }
+        Map<String, Object> llm = rerank(session, rank);
         if (edit == null) {
+            double ts = 0.0;
+            double te = clipLen;
+            if (llm != null && llm.get("refined") instanceof Map<?, ?> r) {      // 默认用精排修正后的起止（限制在片段内）
+                double cs = c.path("clip_start").asDouble();
+                double rs = ((Number) r.get("start")).doubleValue() - cs;
+                double re = ((Number) r.get("end")).doubleValue() - cs;
+                rs = Math.max(0, Math.min(rs, clipLen));
+                re = Math.max(0, Math.min(re, clipLen));
+                if (re - rs >= 5) {
+                    ts = Math.round(rs * 10) / 10.0;
+                    te = Math.round(re * 10) / 10.0;
+                }
+            }
             edit = new LinkedHashMap<>();
             edit.put("version", 1);
-            edit.put("trim", Map.of("start", 0.0, "end", clipLen));
+            edit.put("trim", Map.of("start", ts, "end", te));
             edit.put("subtitles", Map.of("enabled", true));
             edit.put("items", List.of());
         }
@@ -86,6 +118,8 @@ public class EditService {
         out.put("t", c.path("t").asDouble());
         out.put("clip", findClip(session, rank));
         out.put("finals", finals(session, rank));
+        out.put("llm", llm);
+        out.put("exists", Files.exists(f));
         return out;
     }
 
@@ -124,8 +158,14 @@ public class EditService {
             if (r.exitCode() != 0) {
                 throw ApiException.badRequest(SessionService.lastLine(r.output()));
             }
-            Map<String, Object> norm = om.readValue(SessionService.lastLine(r.output()),
+            Map<String, Object> checked = om.readValue(SessionService.lastLine(r.output()),
                     new TypeReference<Map<String, Object>>() {});
+            if (!(checked.get("edit") instanceof Map<?, ?>)) {
+                throw ApiException.badRequest("校验结果格式不对（worker 版本和后台不一致？）");
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> norm = new LinkedHashMap<>((Map<String, Object>) checked.get("edit"));
+            Object warnings = checked.getOrDefault("warnings", List.of());
             Object sid = subs.get("style_id");
             if (sid != null && norm.get("subtitles") instanceof Map<?, ?> ns) {
                 @SuppressWarnings("unchecked")
@@ -139,7 +179,10 @@ public class EditService {
             Path part = f.resolveSibling(f.getFileName() + ".tmp");
             Files.writeString(part, om.writerWithDefaultPrettyPrinter().writeValueAsString(norm), StandardCharsets.UTF_8);
             Files.move(part, f, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-            return norm;
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("edit", norm);
+            out.put("warnings", warnings);
+            return out;
         } catch (IOException ex) {
             throw ApiException.badRequest("保存失败：" + ex.getMessage());
         } finally {

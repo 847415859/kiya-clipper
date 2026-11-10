@@ -20,6 +20,7 @@ import numpy as np
 from .danmaku import Segment
 
 SR = 16000
+FEATURE_VERSION = 2       # 2：加了高频占比（尖叫）和音高稳定比例（唱歌 / 音乐）
 THUMB_W, THUMB_H = 64, 36
 
 
@@ -39,29 +40,91 @@ def probe_duration(video: Path) -> float | None:
         return None
 
 
-def audio_loudness(video: Path) -> np.ndarray:
-    """每秒的响度（dBFS，RMS）。没有音轨时返回空数组。"""
+FRAME = SR // 20          # 50 ms 一帧（音高分析）
+F0_MIN, F0_MAX = 80, 1000
+
+
+def _block_features(x: np.ndarray) -> tuple[float, float, np.ndarray]:
+    """一秒音频 → (响度 dBFS, 高频能量占比, 每 50ms 帧的音高 Hz（不是浊音为 0）)。"""
+    db = 20 * np.log10(np.sqrt(np.mean(x * x)) + 1e-6)
+    spec = np.abs(np.fft.rfft(x)) ** 2
+    freqs = np.fft.rfftfreq(len(x), 1 / SR)
+    total = spec[freqs > 80].sum() + 1e-12
+    hf = float(spec[freqs > 2500].sum() / total)          # 尖叫、高音大笑：高频能量突然变多
+    n = len(x) // FRAME
+    f0 = np.zeros(n, dtype=np.float32)
+    if n:
+        fr = x[: n * FRAME].reshape(n, FRAME)
+        fr = fr - fr.mean(axis=1, keepdims=True)
+        energy = (fr * fr).sum(axis=1)
+        sp = np.fft.rfft(fr, 2048, axis=1)
+        ac = np.fft.irfft(np.abs(sp) ** 2, axis=1)[:, :FRAME]
+        lo, hi = SR // F0_MAX, SR // F0_MIN
+        seg = ac[:, lo:hi]
+        lag = seg.argmax(axis=1) + lo
+        peak = seg.max(axis=1) / (ac[:, 0] + 1e-9)
+        voiced = (peak > 0.55) & (energy > 1e-4 * FRAME)
+        f0[voiced] = SR / lag[voiced]
+    return float(db), hf, f0
+
+
+def sustain_ratio(f0: np.ndarray, min_run: int = 6, tol: float = 0.03) -> np.ndarray:
+    """每帧是否处在“音高稳定地拖长”的片段里（≥ min_run 帧、相邻帧音高相差 < tol）。
+    唱歌和乐器的长音很多，说话很少：按秒平均后就是音乐 / 唱歌的程度。"""
+    out = np.zeros(len(f0), dtype=np.float32)
+    i = 0
+    while i < len(f0):
+        if f0[i] <= 0:
+            i += 1
+            continue
+        j = i + 1
+        while j < len(f0) and f0[j] > 0 and abs(f0[j] / f0[j - 1] - 1) < tol:
+            j += 1
+        if j - i >= min_run:
+            out[i:j] = 1
+        i = j
+    return out
+
+
+def audio_features(video: Path) -> dict:
+    """每秒的 响度 dB、高频占比、音高稳定比例（0~1）。没有音轨时返回空数组。"""
     cmd = [_need("ffmpeg"), "-nostdin", "-loglevel", "error", "-i", str(video), "-vn", "-ac", "1",
            "-ar", str(SR), "-f", "s16le", "-"]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    out: list[float] = []
+    dbs: list[float] = []
+    hfs: list[float] = []
+    f0s: list[np.ndarray] = []
     block = SR * 2  # 1 秒，16bit
     buf = b""
     assert proc.stdout is not None
+
+    def add(b: bytes):
+        x = np.frombuffer(b[: len(b) // 2 * 2], dtype=np.int16).astype(np.float32) / 32768.0
+        db, hf, f0 = _block_features(x)
+        dbs.append(db)
+        hfs.append(hf)
+        f0s.append(np.pad(f0, (0, 20 - len(f0))) if len(f0) < 20 else f0[:20])
+
     while True:
         chunk = proc.stdout.read(block - len(buf))
         if not chunk:
             break
         buf += chunk
         if len(buf) == block:
-            x = np.frombuffer(buf, dtype=np.int16).astype(np.float32) / 32768.0
-            out.append(20 * np.log10(np.sqrt(np.mean(x * x)) + 1e-6))
+            add(buf)
             buf = b""
     if len(buf) >= 2 * SR // 4:  # 末尾不足 1 秒但超过 0.25 秒也算
-        x = np.frombuffer(buf[: len(buf) // 2 * 2], dtype=np.int16).astype(np.float32) / 32768.0
-        out.append(20 * np.log10(np.sqrt(np.mean(x * x)) + 1e-6))
+        add(buf)
     proc.wait()
-    return np.array(out, dtype=np.float32)
+    f0 = np.concatenate(f0s) if f0s else np.zeros(0, dtype=np.float32)
+    sus = sustain_ratio(f0).reshape(-1, 20).mean(axis=1) if len(f0) else np.zeros(0, dtype=np.float32)
+    return {"db": np.array(dbs, dtype=np.float32), "hf": np.array(hfs, dtype=np.float32),
+            "sustain": sus.astype(np.float32)}
+
+
+def audio_loudness(video: Path) -> np.ndarray:
+    """每秒的响度（dBFS，RMS）。没有音轨时返回空数组。"""
+    return audio_features(video)["db"]
 
 
 def keyframe_changes(video: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -101,37 +164,48 @@ def extract_session(segs: list[Segment], with_video: bool = True, log=print) -> 
             per_seg.append(None)
             ends.append(s.offset + s.last_t)
             continue
-        loud = audio_loudness(v)
+        af = audio_features(v)
+        loud = af["db"]
         kt, kd = (keyframe_changes(v) if with_video else (np.array([]), np.array([])))
         log(f"  {v.name}：音频 {len(loud)} 秒，关键帧 {len(kt)} 个")
-        per_seg.append((loud, kt, kd))
+        per_seg.append((af, kt, kd))
         ends.append(s.offset + max(len(loud), s.last_t))
     total = int(np.ceil(max(ends))) + 1 if ends else 0
     audio = np.full(total, np.nan, dtype=np.float32)
+    hf = np.full(total, np.nan, dtype=np.float32)
+    sustain = np.full(total, np.nan, dtype=np.float32)
     scene = np.zeros(total, dtype=np.float32)
     for s, feat in zip(segs, per_seg):
         if feat is None:
             continue
-        loud, kt, kd = feat
+        af, kt, kd = feat
+        loud = af["db"]
         o = int(round(s.offset))
         n = min(len(loud), total - o)
         audio[o:o + n] = loud[:n]
+        hf[o:o + n] = af["hf"][:n]
+        sustain[o:o + n] = af["sustain"][:n]
         for t, d in zip(kt, kd):
             i = int(o + t)
             if 0 <= i < total:
                 scene[i] += d
-    return {"audio_db": audio, "scene": scene,
+    return {"audio_db": audio, "scene": scene, "hf": hf, "sustain": sustain,
             "segments": [{"xml": str(s.xml_path), "offset": s.offset} for s in segs]}
 
 
 def save_features(path: Path, feat: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(path, audio_db=feat["audio_db"], scene=feat["scene"],
-                        meta=np.array(json.dumps({"segments": feat["segments"]}, ensure_ascii=False)))
+    np.savez_compressed(path, audio_db=feat["audio_db"], scene=feat["scene"], hf=feat["hf"], sustain=feat["sustain"],
+                        meta=np.array(json.dumps({"segments": feat["segments"], "version": FEATURE_VERSION},
+                                                 ensure_ascii=False)))
 
 
 def load_features(path: Path) -> dict | None:
+    """读缓存；旧版本缓存（没有高频 / 音高特征）返回 None，让调用方重新提取。"""
     if not path.exists():
         return None
     d = np.load(path, allow_pickle=False)
-    return {"audio_db": d["audio_db"], "scene": d["scene"], "meta": json.loads(str(d["meta"]))}
+    if "hf" not in d or "sustain" not in d:
+        return None
+    return {"audio_db": d["audio_db"], "scene": d["scene"], "hf": d["hf"], "sustain": d["sustain"],
+            "meta": json.loads(str(d["meta"]))}

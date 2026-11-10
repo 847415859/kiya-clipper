@@ -4,6 +4,9 @@
       <el-button type="primary" @click="run('EVALUATE')">运行评测</el-button>
       <el-button @click="run('EVAL_SWEEP')">分数线扫描</el-button>
       <el-button @click="logResult">评测并记录…</el-button>
+      <el-tooltip content="对比粗筛排序和大模型精排排序，哪个更接近你的 Y/N 标注（需要已精排并标注的场次）">
+        <el-button @click="run('EVAL_RERANK')">精排对比</el-button>
+      </el-tooltip>
       <span class="spacer" />
       <span class="muted">标准答案 = 审核页的 Y/N 标注 + eval/annotations.csv 里手写的漏掉片段；攒够 3 场再据此调参数</span>
     </div>

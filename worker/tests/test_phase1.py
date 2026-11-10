@@ -80,7 +80,7 @@ def screened(session, tmp_path_factory):
 def test_multi_signal_ranking(screened):
     d, log = screened
     data = json.loads((d / "candidates.json").read_text(encoding="utf-8"))
-    assert data["signals_used"] == "density+emotion+gift+audio+scene"
+    assert data["signals_used"] == "density+emotion+gift+audio+scene+scream"   # 没转写，所以没有 laugh
     assert abs(data["delay_seconds"] - DELAY) <= 2, log
     top3 = sorted(c["t"] for c in data["candidates"][:3])
     for got, want in zip(top3, TRUE_EVENTS):

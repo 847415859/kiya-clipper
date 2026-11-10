@@ -203,6 +203,50 @@ python scripts/subtitle.py make output/<场次>/candidates.json              # �
 - **错字修正**：识别固定出错的词（比如“发件礼”→“发舰礼”）加到 `config/subtitles.yaml` 的 `corrections`，下次剪切生效。
 - **已经剪好的片段**要加字幕或换样式，重新运行 `cut.py` 就会覆盖。
 
+### 转写抽测（字错率）
+
+挑 5 分钟左右、说话密集的一段，自己听写成纯文本（标点随意），和识别结果比：
+
+```bash
+python scripts/asr_eval.py output/<场次>/transcript.json --start 01:23:00 --end 01:28:00 --ref ref.txt
+```
+
+输出字错率（CER，忽略标点和空格）和最常错的片段（如“舰 → 发件”）。错的多是名字、梗时，加进热词表再测。
+
+转写同时会写 `transcript.jsonl`（一句一行，带场次名），以后做全文检索 / 梗库时直接导入。
+
+## 阶段 2：大模型精排 + AI 剪辑初稿
+
+```bash
+# 1. 精排：每个候选抽 8 张截图 + 片段内原话 + 片段前 60 秒前情 + 弹幕 / 礼物，交给多模态大模型
+python scripts/rerank.py output/<场次>/candidates.json --dry-run     # 先不花钱，看 rerank_preview/ 里的提示词和截图
+python scripts/rerank.py output/<场次>/candidates.json               # → output/<场次>/rerank.json
+python scripts/rerank.py output/<场次>/candidates.json --ranks 3 7   # 只重跑几个
+
+# 2. 比较：粗筛顺序 vs 精排顺序，哪个更接近审核页的 Y/N 标注
+python scripts/evaluate.py --rerank
+
+# 3. AI 剪辑初稿：按精排结果写一版花字 / 运镜 / 贴图（已有脚本不覆盖，加 --force 覆盖）
+python scripts/autoedit.py output/<场次>/candidates.json --rank 3
+```
+
+- 后台：场次页“运行 → 大模型精排”；审核页右上角“显示 AI 精排”（没标注的片段默认不显示 AI 判断，免得先入为主、标注就没法用来评测）；编辑页“AI 初稿”；评测页“精排对比”。
+- 大模型输出用 pydantic 校验，不合法会带着错误提示重问一次；请求结果按“模型 + 提示词版本 + 内容（含图片）”缓存在 `output/_llm_cache/`，重跑不重复收费；429 / 5xx 自动重试。
+- 综合分 = 0.8 × 大模型分 / 10 + 0.2 × 粗筛名次，大模型判断“不好笑”再 × 0.6（`config/kiya.yaml` 的 `rerank.weights`）。
+- 起止修正（`clipper/boundary.py`）：大模型给的起止点对齐到句首 / 句末，笑点前至少留 8 秒铺垫、结尾留 1.5 秒余韵，限制在 30 秒–3 分钟。编辑页没有剪辑脚本时，默认裁剪范围就用它（限制在审核片段内）。
+- AI 初稿只用贴图库里已有的贴图；同一时刻最多 2 个效果、两次推镜至少隔 10 秒，超出的自动丢掉。后台保存时同样检查，太密只提醒不阻止。
+- 提示词在仓库根目录 `prompts/`，改动时升版本号（见 [prompts/README.md](../prompts/README.md)），评测结果才能对应到版本。
+- 费用：任务日志最后打印 token 用量；在 `rerank.price_in / price_out` 填控制台单价（元 / 百万 tokens）就显示金额。
+- 下播自动精排：`.env` 加 `KIYA_RERANK=1`（需要 `KIYA_ASR=1`）。**先手动跑一两场、用“精排对比”看效果再打开。**
+
+### 音频事件（不需要额外模型）
+
+粗筛多了三个音频信号，都缓存在特征文件里（升级后第一次粗筛会重新提取）：
+
+- **笑声**：转写文本里的“哈哈 / 笑死 / hhh”等（需要先转写）。
+- **尖叫**：响度比基线高 6 dB 以上，且高频（>2.5 kHz）能量占比明显升高。
+- **音乐 / 唱歌**：音高持续平稳的比例（说话音高变化快，唱歌和 BGM 平稳）。`peaks.csv` 的“音乐”列显示每个候选的值；`analysis.music_filter: true` 时过滤音乐值超过 `music_threshold` 的高峰（歌回）。**默认关闭**，先看几场真实数据里歌回和聊天的音乐值再决定阈值。
+
 ## 成片渲染（花字 / 放大运镜 / 贴图）
 
 在后台审核页点“编辑成片 →”编排效果，再点“渲染”；也可以命令行：
@@ -211,7 +255,7 @@ python scripts/subtitle.py make output/<场次>/candidates.json              # �
 python scripts/render.py output/<场次>/candidates.json --rank 3 --height 480   # 先 480p 看效果
 ```
 
-剪辑脚本在 `output/<场次>/edits/<序号>.json`（字段见 `schema/edit_script.schema.json`，校验在 `clipper/edit.py`），成片在 `output/<场次>/final/`。渲染器安装与性能说明见 [renderer/README.md](../renderer/README.md)。
+编辑页“AI 初稿”可以先让大模型排一版再微调（见上一节）。剪辑脚本在 `output/<场次>/edits/<序号>.json`（字段见 `schema/edit_script.schema.json`，校验在 `clipper/edit.py`），成片在 `output/<场次>/final/`。渲染器安装与性能说明见 [renderer/README.md](../renderer/README.md)。
 
 ## 调参（config/kiya.yaml）
 
@@ -245,5 +289,11 @@ worker/
 ├── scripts/transcribe.py        # 整场语音转写 → transcript.json
 ├── scripts/hotwords.py          # 百炼热词表：从主播资料生成、创建 / 更新 / 删除
 ├── scripts/try_asr.py           # 试用百炼语音转写（Paraformer / Fun-ASR），不需要 GPU
+├── scripts/asr_eval.py          # 转写抽测：和手打的参考文本比字错率
+├── clipper/llm.py       # 大模型调用层：OpenAI 兼容接口、磁盘缓存、重试、pydantic 校验、提示词加载
+├── clipper/context.py   # 精排上下文：主播资料、原话 / 弹幕 / 礼物整理、抽帧
+├── clipper/boundary.py  # 起止点对齐句子、铺垫 / 余韵、时长限制
+├── scripts/rerank.py    # 阶段 2 精排 → rerank.json
+├── scripts/autoedit.py  # AI 剪辑初稿 → edits/<序号>.json
 └── tests/               # 合成弹幕 + 合成录像 + 假百炼接口的端到端测试，不需要真实录像（约 1 分钟）
 ```

@@ -14,6 +14,8 @@ analysis:
   min_peak_gap_seconds: 60    # 两个高峰至少间隔，太近的合并
   top_n: 20                   # 最多输出几个候选（只是上限，不会为了凑数硬塞）
   min_score: null             # 分数线：低于它的高峰不剪、不送审。用 evaluate.py --sweep 按标注结果定，null = 不设线
+  music_filter: false         # 歌回过滤：true = 唱歌 / 纯音乐占比超过 music_threshold 的高峰不进候选（先看 candidates.json 的 music 值再决定开不开）
+  music_threshold: 0.45
   danmaku_delay_seconds: 5    # 观众反应比画面慢；delay_mode=auto 且有音频时自动估计，否则用这个值
   delay_mode: auto            # auto：用弹幕热度与响度的互相关估计；fixed：固定用上面的值
   delay_range_seconds: [1, 15]
@@ -27,6 +29,8 @@ weights:
   gift: 0.15         # 礼物、SC、上舰金额
   audio: 0.20        # 响度突增（相对前 5 分钟，dB）
   scene: 0.10        # 画面变化（关键帧差异）
+  laugh: 0.15        # 主播原话里的笑声（哈哈哈 / 嘿嘿 / 笑死，需要转写）
+  scream: 0.05       # 尖叫、高音大笑（响度 + 高频突增）
 
 # 语音转写（阿里云百炼录音文件识别，不需要 GPU）。scripts/transcribe.py 使用
 asr:
@@ -38,6 +42,26 @@ asr:
   # 热词 = 下面这些 + lore 里的昵称、粉丝名、观众称呼、世界观、口头禅、常见话题 + lore_words（自动合并去重）
   # 看 transcript.txt 发现总认错的词就加在这里，然后运行 python scripts/hotwords.py sync
   hotwords: [舰长, 舰礼, 上舰, 提督, 总督, 大航海, 醒目留言, 粉丝牌, 直播间, 切片, 录播, 歌回, 杂谈, QQ糖]
+
+# 精排（scripts/rerank.py）：多模态大模型给每个候选打分、找笑点、建议起止，再和粗筛分数合成排序
+rerank:
+  prompt: rerank_v1          # prompts/ 里的提示词文件
+  model: ""                  # 空 = 用 .env 的 DASHSCOPE_MODEL
+  frames: 8                  # 每个候选抽几张图（越多越贵）
+  width: 640                 # 截图宽度
+  context_before: 60         # 前情：片段前多少秒的原话
+  workers: 3                 # 并发请求数
+  weights: {llm: 0.8, screen: 0.2}   # 最终分 = 大模型分 × 0.8 + 粗筛名次分 × 0.2；判为不值得切的再 × 0.6
+  min_len: 30                # 边界修正后的最短 / 最长时长（秒）
+  max_len: 180
+  price_in: null             # 单价（元 / 百万 tokens），填了就估算费用
+  price_out: null
+
+# 剪辑脚本初稿（scripts/autoedit.py）
+autoedit:
+  prompt: edit_v1
+  model: ""
+  max_items: 8               # 一条切片最多几个效果
 
 # 情绪词典：命中即计入“情绪词占比”。按 VTuber 圈和 kiya 粉丝的梗持续扩充
 emotion_words:
@@ -59,5 +83,7 @@ lore:
   catchphrases: [喵, 泥嚎, 空你几哇, 歌会走调但kiya不会走掉, 掉落一只双马尾]
   persona: [猫娘, 粉色头发, 双马尾, 温柔治愈杂谈势, 窝囊势, 抽象]
   recurring_topics: [舰长, 禁言, 做局, 旮旯给木, 钓鱼, 不怕死挑战, 翻唱]
+  # 她自己的高播放切片标题（大模型起标题时参考风格）
+  title_examples: [舰长寄来律师函：请停止你的报恩行为, 妈妈我D到傻V了, 你们都是禁言凶手！！！]
   # 同名 / 近名主播：标题标签写全名，检索时排除
   not_to_confuse: [金飞龙Kiya, 芙宴璃kiya]

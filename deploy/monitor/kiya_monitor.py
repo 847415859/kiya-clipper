@@ -264,6 +264,33 @@ def latest_candidates(worker: Path, max_age: float = 3600) -> Path | None:
     return max(files, key=lambda p: p.stat().st_mtime) if files else None
 
 
+def run_rerank(env: dict) -> str | None:
+    """KIYA_RERANK=1 时，粗筛后用多模态大模型精排（阶段 2）。需要先有转写；返回推送内容，没做时返回 None。"""
+    if cfg(env, "KIYA_RERANK", "0") != "1":
+        return None
+    worker = REPO / "worker"
+    py = worker / ".venv" / "bin" / "python"
+    script = worker / "scripts" / "rerank.py"
+    cands = latest_candidates(worker)
+    if not (py.exists() and script.exists() and cands):
+        return None
+    if not (cands.parent / "transcript.json").exists():
+        return "跳过精排：这场没有转写（KIYA_ASR=1 才会自动转写）"
+    try:
+        if not json.loads(cands.read_text(encoding="utf-8")).get("candidates"):
+            return None
+        r = subprocess.run(["nice", "-n", "10", str(py), str(script), str(cands)], capture_output=True, text=True,
+                           timeout=int(cfg(env, "KIYA_RERANK_TIMEOUT", "1800")))
+    except Exception as e:
+        return f"精排失败：{e}"
+    if r.returncode != 0:
+        return "精排失败：" + ((r.stderr or r.stdout).strip().splitlines() or ["未知错误"])[-1][:200]
+    out = r.stdout.splitlines()
+    tops = [l.rstrip() for l in out if re.match(r"\s*\d+ #\d+", l)][:5]
+    usage = next((l.strip() for l in out if l.startswith("用时")), "")
+    return "\n".join([f"场次 {cands.parent.name} 精排完成，新的前 5（新名次 #原序号）："] + tops + ([usage] if usage else []))
+
+
 def run_cut(env: dict) -> str | None:
     """粗筛后自动把候选剪成带字幕的小视频，打开标注页就能直接审。返回推送内容；没东西可剪时返回 None。"""
     worker = REPO / "worker"
@@ -348,6 +375,10 @@ def check(env: dict, dry: bool = False) -> int:
             if cfg(env, "KIYA_AUTO_ANALYZE", "1") == "1":
                 st.save()  # 分析可能较慢，先存状态，避免下一轮重复触发
                 notify(env, f"📈 {name} 弹幕分析", run_analysis(env, rec_dir), dry)
+                if not dry:
+                    msg = run_rerank(env)
+                    if msg:
+                        notify(env, f"🤖 {name} 大模型精排", msg, dry)
                 if cfg(env, "KIYA_AUTO_CUT", "1") == "1" and not dry:
                     msg = run_cut(env)
                     if msg:

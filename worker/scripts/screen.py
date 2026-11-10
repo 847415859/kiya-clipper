@@ -18,6 +18,8 @@ below_threshold 里备查。没有片段过线时候选为空，不会硬凑。�
   candidates.json   候选列表（含各信号贡献、弹幕延迟），供 cut.py / evaluate.py / try_llm.py 使用
   peaks.csv         同上的表格版，最后两列“是否有趣(Y/N)”“备注”给你人工标注
   curve.png         综合分数 + 各信号曲线，高峰标了序号
+转写过的场次会加入“笑声”信号；有录像的会加入“尖叫”信号，并给每个候选算“音乐”程度（唱歌 / 纯音乐，0~1）。
+旧版本的特征缓存没有尖叫 / 音乐特征，会自动重新提取一次。
 如果已经用 transcribe.py 转写过（output/<场次>/transcript.json），每个候选会附上片段内的主播原话。
 """
 from __future__ import annotations
@@ -100,13 +102,13 @@ def write_outputs(name: str, segs: list[Segment], peaks, sig: dict, out_dir: Pat
     with open(out_dir / "peaks.csv", "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(["序号", "高峰时间", "片段起", "片段止", "分数", "弹幕/分钟", "情绪词", "礼物价值",
-                    "主要信号", "高频弹幕", "主播原话", "视频文件", "文件内起点秒", "是否有趣(Y/N)", "备注"])
+                    "主要信号", "高频弹幕", "主播原话", "音乐", "视频文件", "文件内起点秒", "是否有趣(Y/N)", "备注"])
         for p, d in zip(peaks, cands):
             main = " ".join(f"{k}{v:+.1f}" for k, v in sorted(p.contrib.items(), key=lambda kv: -kv[1])[:2])
             speech = format_speech(d.get("speech", []), p.clip_start, limit=400).replace("\n", " ")
             w.writerow([p.rank, hhmmss(p.t), hhmmss(p.clip_start), hhmmss(p.clip_end), f"{p.score:.2f}",
                         f"{p.danmaku_per_min:.0f}", p.emotion_hits, f"{p.gift_value:.0f}", main,
-                        " | ".join(p.top_danmaku), speech, segs[p.file_index].video_path.name, f"{p.local_start:.1f}", "", ""])
+                        " | ".join(p.top_danmaku), speech, f"{p.music:.2f}", segs[p.file_index].video_path.name, f"{p.local_start:.1f}", "", ""])
     plot(sig, peaks, name, out_dir / "curve.png", min_score, dropped)
 
 
@@ -159,7 +161,8 @@ def main() -> int:
                     print("  找不到录像文件（可能已同步到 OSS 并从本地删除），只用弹幕")
             else:
                 print(f"  使用缓存特征 {cache.name}")
-        peaks, sig = find_top_peaks(events, segs, cfg, feats)
+        tr0 = load_transcript(out_dir / "transcript.json")
+        peaks, sig = find_top_peaks(events, segs, cfg, feats, tr0["sentences"] if tr0 else None)
         dropped = []
         if min_score is not None:      # 按分数从高到低排好的，过线的一定是前面连续的一段，序号不断
             dropped = [p for p in peaks if p.score < min_score]
@@ -168,6 +171,8 @@ def main() -> int:
         write_outputs(name, segs, peaks, sig, out_dir, cfg, used, min_score, dropped)
         if (out_dir / "transcript.json").exists():
             print("  已附上主播原话（transcript.json）")
+        if sig.get("music_filtered"):
+            print(f"  歌回过滤：{sig['music_filtered']} 个高峰在唱歌 / 放音乐，已去掉")
         print(f"  使用信号：{used}；弹幕延迟 {sig['delay']:.0f} 秒（{sig['delay_note']}）")
         for p in peaks:
             main = " ".join(f"{k}{v:+.1f}" for k, v in sorted(p.contrib.items(), key=lambda kv: -kv[1])[:2])
