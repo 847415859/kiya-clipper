@@ -26,6 +26,16 @@
       <el-button v-if="renderJob" link type="primary" @click="$router.push({ path: '/jobs', query: { open: renderJob } })">渲染日志</el-button>
     </div>
 
+    <div v-if="info.variants && info.variants.length > 1" class="variant-bar">
+      <b>初稿版本</b>
+      <el-radio-group :model-value="info.chosenVariant" size="small" @change="pickVariant">
+        <el-radio-button v-for="v in info.variants" :key="v.key" :value="v.key">
+          {{ v.label }}（{{ v.items }} 个效果{{ v.memes ? ` · ${v.memes} 个梗` : '' }}）
+        </el-radio-button>
+      </el-radio-group>
+      <span class="muted">{{ variantNote }}</span>
+    </div>
+
     <div v-if="info.llm || warnings.length || generatedBy" class="ai-bar">
       <template v-if="info.llm && !info.llm.error">
         <el-tag size="small" :type="info.llm.funny ? 'success' : 'info'">AI {{ info.llm.funny ? '有梗' : '一般' }} {{ info.llm.score }}</el-tag>
@@ -283,6 +293,18 @@
         <a v-if="finalFile" :href="api.finalUrl(name, finalFile)" :download="finalFile"><el-button>下载</el-button></a>
       </template>
     </el-dialog>
+      <el-dialog v-model="draftDlg.show" title="AI 初稿：生成哪几个版本" width="460px">
+      <el-checkbox-group v-model="draftDlg.styles" class="style-pick">
+        <el-checkbox v-for="o in styleOptions" :key="o.key" :value="o.key" border>
+          <b>{{ o.label }}</b> <span class="muted">{{ o.hint }}</span>
+        </el-checkbox>
+      </el-checkbox-group>
+      <p class="muted">默认三个都生成，生成后在编辑器顶部切换比较；每多一个版本多一次大模型调用。只选一个就只出那一版。</p>
+      <template #footer>
+        <el-button @click="draftDlg.show = false">取消</el-button>
+        <el-button type="primary" :disabled="!draftDlg.styles.length" @click="runDraft">生成</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -322,7 +344,7 @@ const generatedBy = ref('')
 const aiNote = ref('')
 let restoredAi = false           // 刚点了“还原 AI 原稿”：下一次保存不算人工修改
 const info = reactive({ aiDraft: null, clipLen: 60, clip: null, preview: null, t: 0, finals: [], llm: null, exists: false,
-  candidate: { start: 0, end: 60 }, videoWindow: null })
+  candidate: { start: 0, end: 60 }, videoWindow: null, variants: [], chosenVariant: null })
 const edit = reactive({ window: { start: 0, end: 60 }, trim: { start: 0, end: 60 }, subtitles: { enabled: true }, items: [] })
 const styleId = ref(null)
 const styles = ref([])
@@ -572,7 +594,7 @@ async function load() {
   try {
     const r = await api.getEdit(name.value, rank.value)
     Object.assign(info, { clipLen: r.clipLen, clip: r.clip, preview: r.preview || null, t: r.t, finals: r.finals || [],
-      llm: r.llm || null, exists: !!r.exists, aiDraft: r.aiDraft || null, candidate: r.candidate || { start: 0, end: r.clipLen } })
+      llm: r.llm || null, exists: !!r.exists, aiDraft: r.aiDraft || null, variants: r.variants || [], chosenVariant: r.chosenVariant || null, candidate: r.candidate || { start: 0, end: r.clipLen } })
     info.videoWindow = null
     videoSrc.value = ''
     pickVideo()
@@ -736,7 +758,33 @@ async function waitJob(id, every) {
   }
 }
 
-async function aiDraft() {
+const variantNote = computed(() => {
+  const v = (info.variants || []).find((x) => x.key === info.chosenVariant)
+  return v && v.note ? `思路：${v.note}` : '切换会换掉当前的剪辑脚本，画面里立刻能看到效果；选定后在这一版上继续改'
+})
+async function pickVariant(key) {
+  if (key === info.chosenVariant) return
+  if (dirty.value || (edit.items.length && info.exists)) {
+    await ElMessageBox.confirm('切换版本会替换当前的剪辑脚本（包括你手动改过的部分），确定？', '切换初稿版本',
+      { type: 'warning', confirmButtonText: '切换' })
+  }
+  await api.chooseVariant(name.value, rank.value, key)
+  await load()
+  ElMessage.success('已切换，选中的这一版会作为剪辑口味的对比基础')
+}
+
+// 点“AI 初稿”先选要几个版本（默认三个都选）；选一个就只出那一版
+const draftDlg = reactive({ show: false, styles: ['restrained', 'standard', 'lively'] })
+const styleOptions = [
+  { key: 'restrained', label: '克制', hint: '只在笑点出 1–3 个效果，最多 1 个梗' },
+  { key: 'standard', label: '标准', hint: '默认编排：铺垫克制、笑点集中、反应补一个' },
+  { key: 'lively', label: '热闹', hint: '效果更密，优先用梗和贴图' }
+]
+function aiDraft() {
+  draftDlg.show = true
+}
+async function runDraft() {
+  draftDlg.show = false
   const has = info.exists || edit.items.length > 0
   if (has) {
     await ElMessageBox.confirm('AI 初稿会覆盖当前的剪辑脚本（花字、运镜、贴图和裁剪范围），确定？', 'AI 初稿',
@@ -747,7 +795,7 @@ async function aiDraft() {
   }
   drafting.value = true
   try {
-    const j = await api.submitJob('AUTO_EDIT', name.value, { rank: rank.value, force: has })
+    const j = await api.submitJob('AUTO_EDIT', name.value, { rank: rank.value, force: has, styles: [...draftDlg.styles] })
     const s = await waitJob(j.id, 3000)
     if (s.status !== 'SUCCESS') return ElMessage.error(`初稿没有生成：${s.summary || s.status}（详情见任务页）`)
     await load()
@@ -917,6 +965,9 @@ onBeforeUnmount(() => {
 .cell .nm { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cell .del { position: absolute; top: 2px; right: 4px; }
 @media (max-width: 1000px) { .body { grid-template-columns: 1fr; } .right { border-left: none; } }
+.style-pick { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
+.style-pick :deep(.el-checkbox) { margin-right: 0; height: auto; padding: 8px 12px; }
+.variant-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 6px 12px; font-size: 13px; border-bottom: 1px solid var(--el-border-color-lighter); }
 .ai-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 12px; font-size: 13px; border-bottom: 1px solid var(--el-border-color-lighter); }
 .ai-bar .warn { width: 100%; padding: 4px 10px; }
 .publish { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--el-border-color); }

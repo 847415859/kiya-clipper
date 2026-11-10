@@ -249,6 +249,16 @@ python scripts/autoedit.py output/<场次>/candidates.json --rank 3
 - 费用：任务日志最后打印 token 用量；在 `rerank.price_in / price_out` 填控制台单价（元 / 百万 tokens）就显示金额。
 - 下播自动精排：`.env` 加 `KIYA_RERANK=1`（需要 `KIYA_ASR=1`）。**先手动跑一两场、用“精排对比”看效果再打开。**
 
+### 多版本初稿（克制 / 标准 / 热闹）
+
+后台成片编辑器的"AI 初稿"按钮先弹出**版本选择**（克制 / 标准 / 热闹，**默认三个都选**，可以只选其中几个，任务 `AUTO_EDIT` 带 `styles`，命令行 `autoedit.py --rank N --styles restrained,standard,lively`）；人勾选的不受排名限制，选一个就只出那一版（不生成多版本文件，当前脚本和 AI 原稿就是那一版）。批量场景用 `--variants auto`：**AI 评分靠前的前 `autoedit.variants.top_n`（5）个候选**出三版（`autoedit.variants.styles` 可改成别的组合），其余只出标准版。同一份精排结论 / 原话 / 弹幕 / 梗库检索结果，按三个风格档位各出一版，其余候选只出标准版（多一版 = 多一次大模型调用，同样输入走缓存不重复花钱）：
+
+- **克制**：只在笑点出 1–3 个效果，最多 1 个梗，几乎不用贴图（对应技术方案里的"纯享版"）；
+- **标准**：原来的默认编排；
+- **热闹**：效果更密、优先用梗和贴图，上限比标准版多 3 个（对应"整活版"里现在能落地的部分）。
+
+三版各自受同一套约束：同一时刻最多 2 个效果、两次推镜隔 10 秒、梗的数量和间隔（克制版梗上限 1）。结果在 `edits/<序号>.variants.json`；`edits/<序号>.json` 是当前选中的那一版（默认标准版，编辑器改的就是它），`edits/<序号>.ai.json` 也跟着是选中的那一版——**剪辑口味对比的是"选定版本 vs 人工终稿"**。编辑器顶部可以切换版本，画面里立刻看到效果；切换会替换当前脚本（有手动修改时会先确认），并记下 `chosen_by: human`，攒着以后看哪一档更常被选。重新生成单版本（超出前 N 个，或不带 `--variants`）时旧的多版本文件会被删掉，免得和当前脚本对不上。
+
 ### 精排记忆：让精排跟着数据变
 
 提示词模板（`prompts/rerank_v2.md`）是固定的，填进去的【积累】会随着数据变化。`scripts/learn.py` 负责更新它：下播后监控会自动跑（`KIYA_LEARN=1`，默认开），也可以在后台“精排记忆”页点“更新精排记忆”。结果写到 `output/_memory/memory.json`。
@@ -367,6 +377,7 @@ worker/
 ├── clipper/hot.py       # B站热门标题 / 热搜 → 高频短语快照、热度（近 7 天加权）
 ├── clipper/embed.py     # 文本向量（百炼 OpenAI 兼容接口）+ 磁盘缓存 + 字面相似度备用
 ├── clipper/memes.py     # 梗库：合并来源、准入 / 黑名单 / 降温、使用与保留统计、检索、初稿里梗的数量限制
+├── clipper/variants.py  # 初稿多版本：风格档位（克制 / 标准 / 热闹）、前 N 个才出、variants.json 读写
 ├── scripts/memes.py     # 梗库入口：refresh（抓热门 + 重建 + 预热向量）/ search → output/_memory/memes.json
 ├── scripts/cut.py       # 精确剪切（跨分段自动拼接）
 ├── scripts/evaluate.py  # 命中率 / 召回率评测，记录到 eval/results.csv

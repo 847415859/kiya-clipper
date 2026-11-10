@@ -41,6 +41,8 @@ public class JobService {
     private static final Logger log = LoggerFactory.getLogger(JobService.class);
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
+    private static final List<String> AUTO_EDIT_STYLES = List.of("restrained", "standard", "lively");
+
     /** 任务类型及中文名。 */
     public static final Map<String, String> TYPES = Map.ofEntries(
             Map.entry("TRANSCRIBE", "语音转写"),
@@ -338,6 +340,22 @@ public class JobService {
         List<String> a = new ArrayList<>(List.of(cand, "--rank", String.valueOf(rank)));
         if (Boolean.TRUE.equals(p.get("force"))) {
             a.add("--force");
+        }
+        if (p.get("styles") instanceof List<?> picked && !picked.isEmpty()) {
+            // 人在编辑器里勾选的版本（克制 / 标准 / 热闹，默认三个都选），不受前 N 个的限制
+            List<String> keys = new ArrayList<>();
+            for (Object o : picked) {
+                String k = String.valueOf(o);
+                if (!AUTO_EDIT_STYLES.contains(k)) {
+                    throw ApiException.badRequest("不认识的版本：" + k);
+                }
+                if (!keys.contains(k)) {
+                    keys.add(k);
+                }
+            }
+            a.addAll(List.of("--styles", String.join(",", keys)));
+        } else if (Boolean.TRUE.equals(p.get("variants"))) {
+            a.addAll(List.of("--variants", "auto"));          // 批量：AI 评分靠前的前 N 个出三版，其余只出标准版
         }
         return runner.command("autoedit.py", a);
     }

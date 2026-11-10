@@ -31,6 +31,7 @@ from clipper.context import danmaku_lines, load_events, profile, speech_lines  #
 from clipper.edit import EditError, enforce_density, suggest_window, validate_edit, validate_item  # noqa: E402
 from clipper.editdiff import edit_taste, taste_text  # noqa: E402
 from clipper.llm import LLMClient, fill, load_prompt  # noqa: E402
+from clipper.variants import DEFAULT, STYLES, load as variants_load, resolve, save as save_variants, variants_cfg, wants_variants  # noqa: E402
 from clipper.memes import (enforce_memes, load_library, offer_text, retrieve, settings as meme_settings,  # noqa: E402
                            situation_text)
 
@@ -60,11 +61,14 @@ def main() -> int:
     ap.add_argument("candidates")
     ap.add_argument("--rank", type=int, required=True)
     ap.add_argument("--force", action="store_true", help="覆盖已有的剪辑脚本")
+    ap.add_argument("--styles", help="指定要生成哪几版（逗号分隔：restrained,standard,lively）；指定后不受前 top_n 个的限制。默认 --variants auto 的三版")
+    ap.add_argument("--variants", choices=["off", "auto"], default="off",
+                    help="auto：AI 评分靠前的前 autoedit.variants.top_n 个候选按克制 / 标准 / 热闹各出一版（其余只出标准版）；off：只出标准版")
     ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"))
     args = ap.parse_args()
 
     cfg = load_cfg(Path(args.config))
-    ac = {"prompt": "edit_v3", "model": "", "max_items": 8, **(cfg.get("autoedit") or {})}
+    ac = {"prompt": "edit_v4", "model": "", "max_items": 8, **(cfg.get("autoedit") or {})}
     mc = cfg.get("memory") or {}
     cpath = Path(args.candidates)
     sess = cpath.parent
@@ -96,83 +100,132 @@ def main() -> int:
     story = llm.get("story") or {}
     stickers = sticker_names()
     dm, _ = danmaku_lines(load_events(data["segments"]), a, b, a, float(data.get("delay_seconds") or 0), limit=40)
-    version, system, user = load_prompt(ac["prompt"])
+    version, system_t, user = load_prompt(ac["prompt"])
     ms = meme_settings(cfg)
-    system = fill(system, max_items=ac["max_items"], **({"max_memes": str(ms["max_per_clip"]), "meme_gap": f"{float(ms['min_gap']):.0f}"}
-                                                          if "{{max_memes}}" in system else {}))
     # 剪辑师口味：人改过 AI 初稿的记录攒够了才生效（clipper/editdiff.py）；提示词用 edit_v2 才有这一块
     taste = edit_taste(sess.parent, int(mc.get("min_edits", 5)), int(mc.get("min_edit_sessions", 2)))
     extra = {"taste": taste_text(taste) or "（还没有积累）"} if "{{taste}}" in user else {}
-    # 梗库：用精排结论 + 弹幕当情境去检索，只给大模型“已确认、相符”的几个；提示词用 edit_v3 才有这一块
+    # 梗库：用精排结论 + 弹幕当情境去检索，只给大模型“已确认、相符”的几个；提示词用 edit_v3 才有这一块（几个版本共用这一份结果）
     offered, meme_method = [], "none"
     if "{{memes}}" in user:
         lib = load_library(Path(os.environ.get("KIYA_MEMES") or sess.parent / "_memory" / "memes.json"))
         offered, meme_method = retrieve(situation_text(llm, extra=dm), lib, cfg, taboo=cfg.get("taboo") or [])
         extra["memes"] = offer_text(offered)
-    text = fill(user, profile=profile(cfg), **extra, window=f"{clip_len:.0f}", trim_start=f"{t_start:.1f}", trim_end=f"{t_end:.1f}",
-                what_happened=llm.get("what_happened") or "（没有精排结论）",
-                punch=(f"{ca + llm['punch_time'] - a:.1f}" if llm.get("punch_time", -1) >= 0 else "（未知）"),
-                setup=story.get("setup") or "—", punchline=story.get("punch") or "—", reaction=story.get("reaction") or "—",
-                speech=speech_lines(sents, a, b, a) if sents else "（这场还没有转写）",
-                danmaku=dm, stickers="\n".join(stickers) or "（贴图库是空的，不要用贴图）", colors=COLORS)
+    # 多版本：前 top_n 个候选按风格档位各出一版（提示词要有 {{variant}}），其余只出标准版
+    vc = variants_cfg(ac)
+    if args.styles:                                   # 人在编辑器里勾选的：想要几版就几版，不看排名
+        picked = list(dict.fromkeys(x.strip() for x in args.styles.split(",") if x.strip()))
+        bad_keys = [x for x in picked if x not in STYLES]
+        if bad_keys or not picked:
+            print(f"不认识的版本：{'、'.join(bad_keys) or '（空）'}；可选 {', '.join(STYLES)}", file=sys.stderr)
+            return 1
+        if "{{variant}}" not in user:
+            print("当前提示词不支持多版本（需要 edit_v4 及以上）", file=sys.stderr)
+            return 1
+        multi, why, styles = len(picked) > 1, "", picked
+    else:
+        multi, why = (wants_variants(args.variants, (rr or {}).get("new_rank"), args.rank, int(vc["top_n"]))
+                      if "{{variant}}" in user else (False, ""))
+        styles = vc["styles"] if multi else [DEFAULT]
     client = LLMClient(model=ac["model"] or None)
-    print(f"#{args.rank} 生成剪辑脚本初稿（{client.model}，{version}）…")
-    r = client.chat_json([{"role": "system", "content": system}, {"role": "user", "content": text}], EditOut, tag=version)
-    if r.data is None:
-        print(f"生成失败：{r.error}", file=sys.stderr)
-        return 1
-    out = r.data
-    items, bad = [], []
-    for it in out.items:
+
+    def make(key: str):
+        """某个档位的一版初稿：(edit, bad, dropped, meme_notes)，大模型失败返回 None。"""
+        v = resolve(key, int(ac["max_items"]), int(ms["max_per_clip"]))
+        system = fill(system_t, max_items=v["max_items"], **({"max_memes": str(v["max_memes"]), "meme_gap": f"{float(ms['min_gap']):.0f}"}
+                                                            if "{{max_memes}}" in system_t else {}))
+        vx = {"variant": v["brief"]} if "{{variant}}" in user else {}
+        text = fill(user, profile=profile(cfg), **extra, **vx, window=f"{clip_len:.0f}", trim_start=f"{t_start:.1f}", trim_end=f"{t_end:.1f}",
+                    what_happened=llm.get("what_happened") or "（没有精排结论）",
+                    punch=(f"{ca + llm['punch_time'] - a:.1f}" if llm.get("punch_time", -1) >= 0 else "（未知）"),
+                    setup=story.get("setup") or "—", punchline=story.get("punch") or "—", reaction=story.get("reaction") or "—",
+                    speech=speech_lines(sents, a, b, a) if sents else "（这场还没有转写）",
+                    danmaku=dm, stickers="\n".join(stickers) or "（贴图库是空的，不要用贴图）", colors=COLORS)
+        print(f"#{args.rank} 生成剪辑脚本初稿{'（' + v['label'] + '版）' if multi or key != DEFAULT else ''}（{client.model}，{version}）…")
+        r = client.chat_json([{"role": "system", "content": system}, {"role": "user", "content": text}], EditOut, tag=version)
+        if r.data is None:
+            print(f"生成失败：{r.error}", file=sys.stderr)
+            return None
+        out = r.data
+        items, bad = [], []
+        for it in out.items:
+            try:
+                x = validate_item(it, clip_len)
+                if x["type"] == "sticker" and x["asset"] not in stickers:
+                    bad.append(f"贴图 {x['asset']} 不在贴图库")
+                    continue
+                items.append(x)
+            except EditError as e:
+                bad.append(str(e))
+        trim = {"start": t_start, "end": t_end}
+        if out.trim and 0 <= out.trim.start < out.trim.end <= clip_len and out.trim.end - out.trim.start >= 5:
+            trim = {"start": round(out.trim.start, 2), "end": round(out.trim.end, 2)}
+        items = [i for i in items if trim["start"] <= i["start"] < trim["end"]]
+        edit = {"version": 1, "window": window, "trim": trim, "subtitles": {"enabled": True}, "items": items,
+                "generated_by": f"{version} / {client.model}" + (f" / {v['label']}" if multi or key != DEFAULT else ""), "note": out.note[:200]}
+        edit, dropped = enforce_density(edit)
+        meme_notes: list[str] = []
+        if "{{memes}}" in user:                          # 没提供梗的时候，模型写的梗标记一律去掉
+            edit, meme_notes = enforce_memes(edit, {m["text"] for m in offered}, int(v["max_memes"]), float(ms["min_gap"]))
+        if len(edit["items"]) > v["max_items"]:
+            dropped += edit["items"][v["max_items"]:]
+            edit["items"] = edit["items"][:v["max_items"]]
         try:
-            v = validate_item(it, clip_len)
-            if v["type"] == "sticker" and v["asset"] not in stickers:
-                bad.append(f"贴图 {v['asset']} 不在贴图库")
-                continue
-            items.append(v)
+            edit = validate_edit(edit, clip_len)
         except EditError as e:
-            bad.append(str(e))
-    trim = {"start": t_start, "end": t_end}
-    if out.trim and 0 <= out.trim.start < out.trim.end <= clip_len and out.trim.end - out.trim.start >= 5:
-        trim = {"start": round(out.trim.start, 2), "end": round(out.trim.end, 2)}
-    items = [i for i in items if trim["start"] <= i["start"] < trim["end"]]
-    edit = {"version": 1, "window": window, "trim": trim, "subtitles": {"enabled": True}, "items": items,
-            "generated_by": f"{version} / {client.model}", "note": out.note[:200]}
-    edit, dropped = enforce_density(edit)
-    meme_notes: list[str] = []
-    if "{{memes}}" in user:                          # 没提供梗的时候，模型写的梗标记一律去掉
-        edit, meme_notes = enforce_memes(edit, {m["text"] for m in offered}, int(ms["max_per_clip"]), float(ms["min_gap"]))
-    if len(edit["items"]) > int(ac["max_items"]):
-        dropped += edit["items"][int(ac["max_items"]):]
-        edit["items"] = edit["items"][:int(ac["max_items"])]
-    try:
-        edit = validate_edit(edit, clip_len)
-    except EditError as e:
-        print(f"生成的脚本不合法：{e}", file=sys.stderr)
+            print(f"生成的脚本不合法：{e}", file=sys.stderr)
+            return None
+        edit.update(session=sess.name, rank=args.rank, updated_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
+        return edit, bad, dropped, meme_notes
+
+    made = []
+    for key in styles:
+        res = make(key)
+        if res is None:
+            if key == DEFAULT or len(styles) == 1:
+                return 1                                # 标准版（或唯一的一版）失败就整个失败
+            print(f"  {STYLES[key]['label']}版没生成成功，跳过")
+            continue
+        made.append((key, res))
+    if not made:
         return 1
-    edit.update(session=sess.name, rank=args.rank, updated_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
+    chosen_key = DEFAULT if any(k == DEFAULT for k, _ in made) else made[0][0]
+    chosen = next(r for k, r in made if k == chosen_key)
+    edit = chosen[0]
     dst.parent.mkdir(exist_ok=True)
     dst.write_text(json.dumps(edit, ensure_ascii=False, indent=1), encoding="utf-8")
-    # 原稿另存一份：之后和人工终稿对比，剪辑口味才能积累下来
+    ai_meta = {"prompt": version, "model": client.model, "taste_used": bool(extra and taste["active"]),
+               "memes_offered": [{"meme": m["text"], "sim": m["sim"], "score": m["score"]} for m in offered],
+               "meme_method": meme_method, "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    # 原稿另存一份：之后和人工终稿对比，剪辑口味才能积累下来（多版本时是被选中的那一版）
     (dst.parent / f"{args.rank:02d}.ai.json").write_text(json.dumps(
-        {"edit": edit, "prompt": version, "model": client.model, "taste_used": bool(extra and taste["active"]),
-         "memes_offered": [{"meme": m["text"], "sim": m["sim"], "score": m["score"]} for m in offered],
-         "meme_method": meme_method, "meme_notes": meme_notes,
-         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S")}, ensure_ascii=False, indent=1), encoding="utf-8")
-    kinds = {}
-    for i in edit["items"]:
-        kinds[i["type"]] = kinds.get(i["type"], 0) + 1
-    print(f"初稿：成片 {trim['start']:.1f}–{trim['end']:.1f} 秒，效果 {len(edit['items'])} 个 "
-          f"（花字 {kinds.get('text', 0)}、运镜 {kinds.get('zoom', 0)}、贴图 {kinds.get('sticker', 0)}）"
-          + (f"；丢掉 {len(dropped) + len(bad)} 个不合规的" if dropped or bad else ""))
-    for x in bad[:5]:
-        print("  - " + x)
-    used = [i["meme"] for i in edit["items"] if i.get("meme")]
-    if "{{memes}}" in user:
-        print(f"梗库（{meme_method}）：给了 {len(offered)} 个，用了 {len(used)} 个" + (f"：{'、'.join(used)}" if used else ""))
-        for x in meme_notes:
+        {"edit": edit, "meme_notes": chosen[3], "variant": chosen_key if multi or chosen_key != DEFAULT else None, **ai_meta}, ensure_ascii=False, indent=1), encoding="utf-8")
+    if multi:
+        save_variants(dst.parent, args.rank, [
+            {"key": k, "label": STYLES[k]["label"], "edit": r[0], "meme_notes": r[3]} for k, r in made], chosen_key, ai_meta)
+    elif variants_load(dst.parent, args.rank):
+        (dst.parent / f"{args.rank:02d}.variants.json").unlink(missing_ok=True)       # 这次只出标准版：旧的多版本作废
+
+    for key, (e, bad, dropped, meme_notes) in made:
+        kinds = {}
+        for i in e["items"]:
+            kinds[i["type"]] = kinds.get(i["type"], 0) + 1
+        label = f"【{STYLES[key]['label']}】" if multi or key != DEFAULT else ""
+        print(f"{label}初稿：成片 {e['trim']['start']:.1f}–{e['trim']['end']:.1f} 秒，效果 {len(e['items'])} 个 "
+              f"（花字 {kinds.get('text', 0)}、运镜 {kinds.get('zoom', 0)}、贴图 {kinds.get('sticker', 0)}）"
+              + (f"；丢掉 {len(dropped) + len(bad)} 个不合规的" if dropped or bad else ""))
+        for x in bad[:5]:
             print("  - " + x)
-    print(f"思路：{edit.get('note') or '—'}")
+        used = [i["meme"] for i in e["items"] if i.get("meme")]
+        if "{{memes}}" in user:
+            print(f"梗库（{meme_method}）：给了 {len(offered)} 个，用了 {len(used)} 个" + (f"：{'、'.join(used)}" if used else ""))
+            for x in meme_notes:
+                print("  - " + x)
+        print(f"思路：{e.get('note') or '—'}")
+    if why:
+        print(why)
+    if multi:
+        print(f"已生成 {len(made)} 个版本（默认选中{STYLES[chosen_key]['label']}版），在编辑器顶部切换比较")
     print(f"已保存 {dst}，在后台成片编辑器里打开即可微调、渲染")
     return 0
 

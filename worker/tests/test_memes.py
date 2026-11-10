@@ -280,7 +280,7 @@ class FakeServer:
                     out = {"data": [{"index": i, "embedding": [t.count(k) for k in keys] + [0.1]} for i, t in enumerate(body["input"])]}
                 else:
                     api.chat.append(body)
-                    out = {"choices": [{"message": {"content": json.dumps(api.edit(), ensure_ascii=False)}}],
+                    out = {"choices": [{"message": {"content": json.dumps(api.edit(body), ensure_ascii=False)}}],
                            "usage": {"prompt_tokens": 100, "completion_tokens": 10}}
                 b = json.dumps(out, ensure_ascii=False).encode()
                 self.send_response(200)
@@ -293,7 +293,14 @@ class FakeServer:
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
-    def edit(self):
+    def edit(self, body=None):
+        prompt = json.dumps(body or {}, ensure_ascii=False)
+        if "克制版：" in prompt:                              # 多版本：克制版想加 4 个，应被限制到 3 个
+            return {"trim": {"start": 2, "end": 50}, "note": "克制", "items": [
+                {"type": "text", "start": 10 * i, "duration": 2, "text": f"字{i}"} for i in range(1, 5)]}
+        if "热闹版：" in prompt:                              # 热闹版加 9 个
+            return {"trim": {"start": 2, "end": 50}, "note": "热闹", "items": [
+                {"type": "text", "start": 4 * i, "duration": 2, "text": f"闹{i}"} for i in range(1, 10)]}
         return {"trim": {"start": 2, "end": 50}, "note": "n", "items": [
             {"type": "text", "start": 20, "duration": 2, "text": "钓鱼佬又来了", "meme": "钓鱼佬", "meme_reason": "主播又在钓鱼"},
             {"type": "text", "start": 24, "duration": 2, "text": "编的梗", "meme": "自己编的梗"},
@@ -320,7 +327,7 @@ def world(tmp_path):
     decisions.write_text(json.dumps({"memes": {"钓鱼佬": {"status": "approved", "meaning": "总在钓鱼", "level": 1},
                                                "内衣梗": {"status": "approved", "meaning": "寄内衣的名场面", "level": 1}}}), encoding="utf-8")
     cfgp = tmp_path / "kiya.yaml"
-    cfgp.write_text("streamer: {name: 测试}\nlore: {memes: []}\nmemes: {min_sim: 0.5}\nautoedit: {prompt: edit_v3, max_items: 8}\n", encoding="utf-8")
+    cfgp.write_text("streamer: {name: 测试}\nlore: {memes: []}\nmemes: {min_sim: 0.5}\nautoedit: {prompt: edit_v4, max_items: 8}\n", encoding="utf-8")
     mem = out / "_memory"
     mem.mkdir()
     (mem / "memory.json").write_text(json.dumps({"lore": [{"text": "钓鱼佬", "sessions": 3, "speech": 5, "danmaku": 9},
@@ -337,7 +344,7 @@ def world(tmp_path):
         else:
             args = [str(ROOT / "scripts" / script), str(a[0]), *map(str, a[1:]), "--config", str(cfgp)]
         return subprocess.run([sys.executable, *args], capture_output=True, text=True, env=env)
-    return type("W", (), dict(srv=srv, out=out, sess=sess, run=run, env=env, tmp=tmp_path))
+    return type("W", (), dict(srv=srv, out=out, sess=sess, run=run, env=env, tmp=tmp_path, cfg=cfgp))
 
 
 def test_memes_script_refresh_and_search(world):

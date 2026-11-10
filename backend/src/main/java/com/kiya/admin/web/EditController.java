@@ -47,6 +47,14 @@ public class EditController {
         return edits.save(name, rank, req.edit(), req.styleId(), Boolean.TRUE.equals(req.restoredAi()));
     }
 
+    public record VariantReq(String key) {}
+
+    /** 多版本初稿：选用某一版（克制 / 标准 / 热闹），替换当前剪辑脚本。 */
+    @PostMapping("/api/sessions/{name}/edits/{rank}/variant")
+    public Map<String, Object> variant(@PathVariable String name, @PathVariable int rank, @RequestBody VariantReq req) {
+        return edits.chooseVariant(name, rank, req.key());
+    }
+
     @GetMapping("/api/sessions/{name}/finals")
     public List<Map<String, Object>> finals(@PathVariable String name) {
         return edits.finals(name, null);

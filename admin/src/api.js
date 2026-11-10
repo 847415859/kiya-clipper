@@ -53,6 +53,7 @@ export const api = {
 
   getEdit: (name, rank) => http.get(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}`),
   saveEdit: (name, rank, edit, styleId, restoredAi = false) => http.put(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}`, { edit, styleId, restoredAi }),
+  chooseVariant: (name, rank, key) => http.post(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}/variant`, { key }),
   finalUrl: (name, file) => `/api/sessions/${encodeURIComponent(name)}/finals/${encodeURIComponent(file)}`,
   stickers: () => http.get('/api/stickers'),
   stickerUrl: (n) => `/api/stickers/${encodeURIComponent(n)}`,

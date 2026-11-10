@@ -107,9 +107,12 @@ publish:
 
 # 剪辑脚本初稿（scripts/autoedit.py）
 autoedit:
-  prompt: edit_v3            # v3 = v2 + 梗库（只用后台确认过的梗；v2 = v1 + 剪辑师口味，人工改过的初稿攒够 memory.min_edits 条才生效）
+  prompt: edit_v4            # v4 = v3 + 多版本风格档位；v3 = v2 + 梗库（只用后台确认过的梗；v2 = v1 + 剪辑师口味，人工改过的初稿攒够 memory.min_edits 条才生效）
   model: ""
-  max_items: 8               # 一条切片最多几个效果
+  max_items: 8               # 一条切片最多几个效果（标准版；克制版最多 3 个，热闹版多 3 个）
+  variants:                  # 多版本初稿：前 top_n 个候选各出一版，其余只出标准版（多一版 = 多一次大模型调用）
+    top_n: 5
+    styles: [restrained, standard, lively]   # 克制 / 标准 / 热闹
 
 # 梗库（scripts/memes.py、clipper/memes.py）：B站热门每天抓一次标题 / 热搜，提炼高频短语；新梗要后台确认含义和尺度后才会被剪辑初稿用
 memes:

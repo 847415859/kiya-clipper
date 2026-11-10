@@ -77,6 +77,95 @@ public class EditService {
         }
     }
 
+    private Path variantsFile(String session, int rank) {
+        return paths.sessionDir(session).resolve("edits").resolve(String.format("%02d.variants.json", rank));
+    }
+
+    private Map<String, Object> readVariants(String session, int rank) {
+        Path f = variantsFile(session, rank);
+        if (!Files.exists(f)) {
+            return null;
+        }
+        try {
+            return om.readValue(f.toFile(), new TypeReference<LinkedHashMap<String, Object>>() {});
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /** 多版本概览（给编辑器顶部切换用）：[{key, label, items, memes, note}]，没有多版本返回空列表。 */
+    private List<Map<String, Object>> variantSummary(Map<String, Object> v) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        if (v != null && v.get("variants") instanceof List<?> l) {
+            for (Object o : l) {
+                if (o instanceof Map<?, ?> m && m.get("edit") instanceof Map<?, ?> em) {
+                    int items = 0;
+                    int memes = 0;
+                    if (em.get("items") instanceof List<?> its) {
+                        items = its.size();
+                        for (Object it : its) {
+                            if (it instanceof Map<?, ?> im && im.get("meme") != null) {
+                                memes++;
+                            }
+                        }
+                    }
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("key", m.get("key"));
+                    row.put("label", m.get("label"));
+                    row.put("items", items);
+                    row.put("memes", memes);
+                    row.put("note", em.get("note") == null ? "" : em.get("note"));
+                    out.add(row);
+                }
+            }
+        }
+        return out;
+    }
+
+    /** 选用某一版：它成为当前剪辑脚本（编辑器改的就是它），AI 原稿也换成它（剪辑口味按它对比人工修改），并记下选了哪一版。 */
+    public synchronized Map<String, Object> chooseVariant(String session, int rank, String key) {
+        Map<String, Object> v = readVariants(session, rank);
+        if (v == null || !(v.get("variants") instanceof List<?> list)) {
+            throw ApiException.notFound("这个候选没有多版本初稿");
+        }
+        Map<String, Object> picked = null;
+        for (Object o : list) {
+            if (o instanceof Map<?, ?> m && String.valueOf(m.get("key")).equals(key) && m.get("edit") instanceof Map<?, ?>) {
+                picked = castMap(m);
+            }
+        }
+        if (picked == null) {
+            throw ApiException.badRequest("没有这个版本");
+        }
+        Map<String, Object> edit = new LinkedHashMap<>(castMap((Map<?, ?>) picked.get("edit")));
+        edit.put("updated_at", LocalDateTime.now().toString());
+        Path edits = paths.sessionDir(session).resolve("edits");
+        try {
+            Files.createDirectories(edits);
+            write(editFile(session, rank), edit);
+            Path aiF = edits.resolve(String.format("%02d.ai.json", rank));
+            Map<String, Object> ai = Files.exists(aiF)
+                    ? om.readValue(aiF.toFile(), new TypeReference<LinkedHashMap<String, Object>>() {}) : new LinkedHashMap<>();
+            ai.put("edit", edit);
+            ai.put("variant", key);
+            ai.put("meme_notes", picked.getOrDefault("meme_notes", List.of()));
+            write(aiF, ai);
+            v.put("chosen", key);
+            v.put("chosen_by", "human");
+            v.put("chosen_at", LocalDateTime.now().withNano(0).toString());
+            write(variantsFile(session, rank), v);
+        } catch (IOException ex) {
+            throw ApiException.badRequest("切换失败：" + ex.getMessage());
+        }
+        return get(session, rank);
+    }
+
+    private void write(Path f, Map<String, Object> m) throws IOException {
+        Path part = f.resolveSibling(f.getFileName() + ".tmp");
+        Files.writeString(part, om.writerWithDefaultPrettyPrinter().writeValueAsString(m), StandardCharsets.UTF_8);
+        Files.move(part, f, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+    }
+
     @SuppressWarnings("unchecked")
     private static Map<String, Object> castMap(Map<?, ?> m) {
         return (Map<String, Object>) m;
@@ -187,6 +276,9 @@ public class EditService {
         out.put("llm", llm);
         out.put("exists", Files.exists(f));
         out.put("aiDraft", aiDraft(session, rank));
+        Map<String, Object> variants = readVariants(session, rank);
+        out.put("variants", variantSummary(variants));
+        out.put("chosenVariant", variants == null ? null : variants.get("chosen"));
         return out;
     }
 
