@@ -26,6 +26,7 @@ REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
 from clipper.kcfg import load_cfg  # noqa: E402
+from clipper.streamer import resolve_config  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.context import danmaku_lines, load_events, profile, speech_lines  # noqa: E402
 from clipper.edit import EditError, enforce_density, suggest_window, validate_edit, validate_item  # noqa: E402
@@ -64,14 +65,14 @@ def main() -> int:
     ap.add_argument("--styles", help="指定要生成哪几版（逗号分隔：restrained,standard,lively）；指定后不受前 top_n 个的限制。默认 --variants auto 的三版")
     ap.add_argument("--variants", choices=["off", "auto"], default="off",
                     help="auto：AI 评分靠前的前 autoedit.variants.top_n 个候选按克制 / 标准 / 热闹各出一版（其余只出标准版）；off：只出标准版")
-    ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"))
+    ap.add_argument("--config", default=None, help="主播配置；不填时按 candidates.json 所在目录推导主播")
     args = ap.parse_args()
 
-    cfg = load_cfg(Path(args.config))
-    ac = {"prompt": "edit_v4", "model": "", "max_items": 8, **(cfg.get("autoedit") or {})}
-    mc = cfg.get("memory") or {}
     cpath = Path(args.candidates)
     sess = cpath.parent
+    cfg = load_cfg(resolve_config(args.config, sess))
+    ac = {"prompt": "edit_v4", "model": "", "max_items": 8, **(cfg.get("autoedit") or {})}
+    mc = cfg.get("memory") or {}
     data = json.loads(cpath.read_text(encoding="utf-8"))
     c = next((x for x in data["candidates"] if x["rank"] == args.rank), None)
     if not c:
@@ -127,7 +128,7 @@ def main() -> int:
         multi, why = (wants_variants(args.variants, (rr or {}).get("new_rank"), args.rank, int(vc["top_n"]))
                       if "{{variant}}" in user else (False, ""))
         styles = vc["styles"] if multi else [DEFAULT]
-    client = LLMClient(model=ac["model"] or None)
+    client = LLMClient(model=ac["model"] or None, cache_dir=sess.parent / "_llm_cache")
 
     def make(key: str):
         """某个档位的一版初稿：(edit, bad, dropped, meme_notes)，大模型失败返回 None。"""

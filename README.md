@@ -30,7 +30,7 @@ kiya-clipper/
 ├── prompts/     # 版本化的大模型提示词（阶段 2）
 ├── deploy/      # 部署：录播姬、监控、后台（MySQL / nginx / systemd）
 ├── eval/        # 评测集：人工标注的高光时间点、评测结果
-├── config/      # 主播配置：直播间、信号权重、弹幕词典
+├── config/      # 主播配置：直播间、信号权重、弹幕词典；新主播放 config/streamers/<主播标识>.yaml（见 docs/多主播支持.md）
 └── docs/        # 合作、授权等非代码文档
 ```
 
@@ -39,3 +39,4 @@ kiya-clipper/
 - 密钥（API Key、云账号）只放 `.env`，不进 Git；从 `.env.example` 复制。
 - 主播配置、权重、词典放 `config/*.yaml`，进 Git。
 - 每次改权重、词典、提示词，都跑一遍评测并记入 `eval/results.csv`。
+- 多主播：数据在 `output/<主播标识>/`、评测在 `eval/<主播标识>/`，主播标识由 `KIYA_STREAMER`（默认 `kiya`）指定，见 [docs/多主播支持.md](docs/多主播支持.md)。

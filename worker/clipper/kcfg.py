@@ -1,10 +1,10 @@
-"""读 config/kiya.yaml，并把后台“精排记忆”页里做的决定合并进去：
+"""读 config/<主播>.yaml，并把后台“精排记忆”页里做的决定合并进去：
 
   - promoted_lore（梗转正）：确认过的梗 / 口头禅 / 话题并入主播档案 lore，热词、字幕关键词、标签、提示词都会用到
   - taboo（禁区话题）：cfg["taboo"] = 词列表，精排时命中就判不切，审核页标红
 
-决定存在 config/memory_decisions.json（环境变量 KIYA_MEMORY_DECISIONS 可改路径，测试用）。
-yaml 本身不会被改写（里面的注释都保留）。
+决定按主播隔离在 output/<主播>/memory_decisions.json（环境变量 KIYA_MEMORY_DECISIONS 可改路径，测试用）；
+首位主播 kiya 兼容旧的 config/memory_decisions.json。yaml 本身不会被改写（里面的注释都保留）。
 """
 from __future__ import annotations
 
@@ -15,13 +15,15 @@ from pathlib import Path
 
 import yaml
 
+from .streamer import decisions_path as _streamer_decisions_path
+
 REPO = Path(__file__).resolve().parents[2]
 KIND_KEY = {"catchphrase": "catchphrases", "topic": "recurring_topics", "meme": "memes"}
 KIND_LABEL = {"catchphrase": "口头禅", "topic": "常聊话题", "meme": "梗"}
 
 
 def decisions_path() -> Path:
-    return Path(os.environ.get("KIYA_MEMORY_DECISIONS") or REPO / "config" / "memory_decisions.json")
+    return Path(os.environ.get("KIYA_MEMORY_DECISIONS") or _streamer_decisions_path())
 
 
 def read_decisions(path: Path | None = None) -> dict:

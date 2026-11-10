@@ -1,4 +1,4 @@
-"""后台管理写入的覆盖配置（config/admin_overrides.json，不进 git）。
+"""后台管理写入的覆盖配置（按主播隔离在 output/<id>/admin_overrides.json，不进 git）。
 
 后台改的东西都落在这个文件里，worker 读取时和 config/*.yaml 合并，所以命令行、监控自动剪切和后台用的是同一套设置：
   {"hotwords": ["额外热词", ...],                 # 合并进热词表（hotwords.py sync 后生效）
@@ -12,11 +12,13 @@ import json
 import os
 from pathlib import Path
 
+from .streamer import overrides_path as _streamer_overrides_path
+
 REPO = Path(__file__).resolve().parents[2]
 
 
 def overrides_path() -> Path:
-    return Path(os.environ.get("KIYA_OVERRIDES") or REPO / "config" / "admin_overrides.json")
+    return Path(os.environ.get("KIYA_OVERRIDES") or _streamer_overrides_path())
 
 
 def load_overrides() -> dict:

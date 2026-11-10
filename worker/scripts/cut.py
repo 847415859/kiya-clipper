@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from clipper.kcfg import load_cfg  # noqa: E402
+from clipper.streamer import resolve_config  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.media import probe_duration  # noqa: E402
 from clipper.subtitles import (StyleError, ass_filter, build_events, font_available, get_style,  # noqa: E402
@@ -98,7 +99,7 @@ def main() -> int:
     ap.add_argument("--no-subs", action="store_true", help="不加字幕")
     ap.add_argument("--sub-style", help="字幕样式名（config/subtitles.yaml 的 styles），默认用 active")
     ap.add_argument("--sub-style-json", help="直接给一套样式的 JSON 文件（以后后台管理下发任务时用，结构见 schema）")
-    ap.add_argument("--config", default=str(ROOT.parent / "config" / "kiya.yaml"), help="主播配置（用于关键词换色）")
+    ap.add_argument("--config", default=None, help="主播配置（用于关键词换色）；不填时按 candidates.json 所在目录推导主播")
     args = ap.parse_args()
 
     path = Path(args.candidates)
@@ -122,7 +123,8 @@ def main() -> int:
         except (StyleError, OSError, json.JSONDecodeError) as e:
             print(f"字幕配置有误，本次不加字幕：{e}")
         else:
-            streamer = load_cfg(Path(args.config)) if Path(args.config).exists() else {}
+            cfg_path = resolve_config(args.config, path.parent)
+            streamer = load_cfg(cfg_path) if cfg_path.exists() else {}
             subs = {"style": style, "corrections": sub_cfg.get("corrections") or {}, "keywords": lore_keywords(streamer)}
             print(f"字幕：样式 {style_name}（{style['name']}）" + ("，--fast 模式只生成字幕文件不烧录" if args.fast else ""))
             if not font_available(style["font"]):

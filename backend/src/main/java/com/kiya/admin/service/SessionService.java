@@ -74,6 +74,9 @@ public class SessionService {
         this.om = om;
     }
 
+    /** 当前管理的主播标识：所有场次 / 候选查询都按它过滤，实现多主播数据隔离。 */
+    private String streamer() { return paths.streamer(); }
+
     // ------------------------------------------------------------------ 场次
     /** 扫描录像目录（worker/scripts/sessions.py），更新场次表。 */
     public int scan() {
@@ -96,10 +99,12 @@ public class SessionService {
             if (!name.matches("^[0-9A-Za-z_\\-]{1,64}$")) {
                 continue;
             }
-            LiveSession s = sessions.selectOne(new QueryWrapper<LiveSession>().eq("name", name));
+            LiveSession s = sessions.selectOne(new QueryWrapper<LiveSession>()
+                    .eq("streamer_id", streamer()).eq("name", name));
             boolean isNew = s == null;
             if (isNew) {
                 s = new LiveSession();
+                s.setStreamerId(streamer());
                 s.setName(name);
             }
             s.setStartTime(m.get("start_time") == null ? null : String.valueOf(m.get("start_time")));
@@ -121,7 +126,8 @@ public class SessionService {
     /** 场次列表 = 数据库里扫描到的 + output/ 下有结果但录像已经不在的。附带每场的处理进度。 */
     public List<Map<String, Object>> list() {
         Map<String, Map<String, Object>> byName = new LinkedHashMap<>();
-        for (LiveSession s : sessions.selectList(new QueryWrapper<LiveSession>().orderByDesc("name"))) {
+        for (LiveSession s : sessions.selectList(new QueryWrapper<LiveSession>()
+                .eq("streamer_id", streamer()).orderByDesc("name"))) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("name", s.getName());
             m.put("startTime", s.getStartTime());
@@ -147,7 +153,8 @@ public class SessionService {
             }
         }
         Map<String, int[]> marks = new HashMap<>();
-        for (Candidate c : candidates.selectList(new QueryWrapper<Candidate>().select("session_name", "mark"))) {
+        for (Candidate c : candidates.selectList(new QueryWrapper<Candidate>()
+                .eq("streamer_id", streamer()).select("session_name", "mark"))) {
             int[] a = marks.computeIfAbsent(c.getSessionName(), k -> new int[2]);
             if ("Y".equals(c.getMark()) || "N".equals(c.getMark())) {
                 a[0]++;
@@ -183,7 +190,7 @@ public class SessionService {
         List<Map<String, Object>> list = new ArrayList<>();
         Map<String, Map<String, Object>> meta0 = readMeta(session);
         for (Candidate c : candidates.selectList(new QueryWrapper<Candidate>()
-                .eq("session_name", session).orderByAsc("rnk"))) {
+                .eq("streamer_id", streamer()).eq("session_name", session).orderByAsc("rnk"))) {
             list.add(toMap(c, meta0.get(String.valueOf(c.getRnk()))));
         }
         JsonNode rr = readJson(paths.sessionDir(session).resolve("rerank.json"));
@@ -278,7 +285,8 @@ public class SessionService {
         if (cj == null) {
             return null;
         }
-        List<Candidate> existing = candidates.selectList(new QueryWrapper<Candidate>().eq("session_name", session));
+        List<Candidate> existing = candidates.selectList(new QueryWrapper<Candidate>()
+                .eq("streamer_id", streamer()).eq("session_name", session));
         Map<Integer, Candidate> byRank = new HashMap<>();
         existing.forEach(c -> byRank.put(c.getRnk(), c));
         boolean hadMarks = existing.stream().anyMatch(c -> c.getMark() != null || c.getNote() != null);
@@ -302,6 +310,7 @@ public class SessionService {
             boolean isNew = c == null;
             if (isNew) {
                 c = new Candidate();
+                c.setStreamerId(streamer());
                 c.setSessionName(session);
                 c.setRnk(rank);
             }
@@ -370,7 +379,8 @@ public class SessionService {
     public synchronized void mark(String session, int rank, String mark, String note, List<String> reasons,
                                   String mode, Long ms) {
         paths.checkSession(session);
-        Candidate c = candidates.selectOne(new QueryWrapper<Candidate>().eq("session_name", session).eq("rnk", rank));
+        Candidate c = candidates.selectOne(new QueryWrapper<Candidate>()
+                .eq("streamer_id", streamer()).eq("session_name", session).eq("rnk", rank));
         if (c == null) {
             throw ApiException.notFound("没有这个候选");
         }
@@ -469,7 +479,7 @@ public class SessionService {
         List<List<String>> rows = new ArrayList<>();
         Map<String, Map<String, Object>> meta = readMeta(session);
         for (Candidate c : candidates.selectList(new QueryWrapper<Candidate>()
-                .eq("session_name", session).orderByAsc("rnk"))) {
+                .eq("streamer_id", streamer()).eq("session_name", session).orderByAsc("rnk"))) {
             Map<String, Object> e = meta.getOrDefault(String.valueOf(c.getRnk()), Map.of());
             Object rs = e.get("reasons");
             String reasons = rs instanceof List<?> l ? String.join("|", l.stream().map(String::valueOf).toList()) : "";
@@ -504,7 +514,7 @@ public class SessionService {
                     continue;
                 }
                 Candidate c = candidates.selectOne(new QueryWrapper<Candidate>()
-                        .eq("session_name", session).eq("rnk", Integer.parseInt(rank)));
+                        .eq("streamer_id", streamer()).eq("session_name", session).eq("rnk", Integer.parseInt(rank)));
                 if (c != null) {
                     c.setMark(mark.equals("Y") || mark.equals("N") ? mark : null);
                     c.setNote(note.isEmpty() ? null : note.substring(0, Math.min(500, note.length())));

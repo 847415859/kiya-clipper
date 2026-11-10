@@ -34,6 +34,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.edit import EditError, default_edit, edit_window, validate_edit  # noqa: E402
+from clipper.streamer import resolve_config  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
 from clipper.subtitles import (STRIP_PUNCT, StyleError, apply_corrections, build_events, get_style,  # noqa: E402
                                load_config, lore_keywords, validate_style)
@@ -116,7 +117,7 @@ def main() -> int:
     ap.add_argument("--rank", type=int, required=True)
     ap.add_argument("--height", type=int, default=720, choices=[360, 480, 720, 1080])
     ap.add_argument("--edit", help="剪辑脚本，默认 output/<场次>/edits/<序号>.json")
-    ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"))
+    ap.add_argument("--config", default=None, help="主播配置；不填时按 candidates.json 所在目录推导主播")
     args = ap.parse_args()
     load_env()
 
@@ -165,7 +166,7 @@ def main() -> int:
         except StyleError as e:
             print(f"字幕样式有误：{e}", file=sys.stderr)
             return 1
-        streamer = load_cfg(Path(args.config)) if Path(args.config).exists() else {}
+        streamer = load_cfg(resolve_config(args.config, sess_dir)) if resolve_config(args.config, sess_dir).exists() else {}
         keywords = sorted({*(lore_keywords(streamer) if style["highlight_lore"] else []), *style["highlight_words"]},
                           key=len, reverse=True)
         events = subtitle_events(tr["sentences"], t_start, t_end, style, sub_cfg.get("corrections") or {})

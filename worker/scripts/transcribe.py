@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT))
 
 from clipper.asr import AsrError, estimate_cost, extract_audio, resolve_vocabulary, transcribe_files  # noqa: E402
 from clipper.session import find_sessions  # noqa: E402
+from clipper.streamer import config_path, output_root, streamer_from_args  # noqa: E402
 
 
 def load_env() -> None:
@@ -49,8 +50,9 @@ def fmt(t: float) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="+", help="录播姬录像目录，或同一场的若干 .xml 文件")
-    ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"))
-    ap.add_argument("--out", default=str(ROOT / "output"))
+    ap.add_argument("--config", default=None, help="主播配置；不填时按 --streamer 找 config/streamers/<id>.yaml")
+    ap.add_argument("--streamer", default=None, help="主播标识（默认 KIYA_STREAMER 环境变量，再默认 kiya）")
+    ap.add_argument("--out", default=None, help="输出根目录；不填时是 worker/output/<主播标识>/")
     ap.add_argument("--latest", action="store_true")
     ap.add_argument("--session")
     ap.add_argument("--model", help="paraformer-v2 / fun-asr，默认读配置 asr.model")
@@ -60,7 +62,15 @@ def main() -> int:
     args = ap.parse_args()
 
     load_env()
-    cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    streamer_id = streamer_from_args(args.streamer)
+    cfg_path = Path(args.config) if args.config else config_path(streamer_id)
+    try:
+        cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    except OSError:
+        print(f"找不到主播配置 {cfg_path}（复制 config/streamers/_template.yaml 为 "
+              f"config/streamers/{streamer_id}.yaml 后填写）", file=sys.stderr)
+        return 1
+    out_root = Path(args.out) if args.out else output_root(streamer_id)
     asr_cfg = cfg.get("asr") or {}
     model = args.model or asr_cfg.get("model") or "paraformer-v2"
     key = os.environ.get("DASHSCOPE_API_KEY")
@@ -80,7 +90,7 @@ def main() -> int:
         return 1
     rc = 0
     for name, segs in sessions:
-        out_dir = Path(args.out) / name
+        out_dir = out_root / name
         dst = out_dir / "transcript.json"
         print(f"\n== {name}：{len(segs)} 个分段 ==")
         if dst.exists() and not args.refresh:

@@ -1,5 +1,6 @@
 package com.kiya.admin.service;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.regex.Pattern;
 
@@ -7,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 import com.kiya.admin.common.ApiException;
 import com.kiya.admin.config.KiyaProperties;
+import com.kiya.admin.config.StreamerContext;
 
 /** 仓库里各目录的位置，以及防止路径穿越的校验。所有来自请求的名字都必须经过这里。 */
 @Component
@@ -22,11 +24,79 @@ public class WorkerPaths {
 
     public Path repo() { return Path.of(props.getRepoDir()).toAbsolutePath().normalize(); }
     public Path worker() { return repo().resolve("worker"); }
-    public Path output() { return worker().resolve("output"); }
-    public Path reviews() { return repo().resolve("eval").resolve("reviews"); }
-    public Path evalDir() { return repo().resolve("eval"); }
+
+    /** 当前管理的主播标识：优先当前请求选中的主播（session），否则用配置默认值。 */
+    public String streamer() {
+        String s = StreamerContext.get();
+        if (s == null || s.isBlank()) {
+            s = props.getStreamer();
+        }
+        s = s == null ? "" : s.trim().toLowerCase();
+        if (!s.matches("^[a-z][a-z0-9_-]{0,31}$")) {
+            throw new IllegalStateException("kiya.streamer 不合法：" + props.getStreamer()
+                    + "（1–32 位小写字母开头，可含小写字母 / 数字 / _ 和 -）");
+        }
+        return s;
+    }
+
+    /** 主播的输出目录 worker/output/<id>。首位主播 kiya 兼容旧结构：output/kiya 还不存在、
+     *  而 output/ 下直接放着旧的场次或 _memory 时，继续用 output/ 本身（和 worker/clipper/streamer.py 的规则一致）。 */
+    public Path output() {
+        String s = streamer();
+        Path base = worker().resolve("output");
+        Path p = base.resolve(s);
+        if ("kiya".equals(s) && !Files.isDirectory(p) && isLegacyOutput(base)) {
+            return base;
+        }
+        return p;
+    }
+
+    /** 主播的评测目录 eval/<id>；kiya 同样兼容旧的 eval/reviews 等。 */
+    public Path evalDir() {
+        String s = streamer();
+        Path base = repo().resolve("eval");
+        Path p = base.resolve(s);
+        if ("kiya".equals(s) && !Files.isDirectory(p) && isLegacyEval(base)) {
+            return base;
+        }
+        return p;
+    }
+
+    public Path reviews() { return evalDir().resolve("reviews"); }
+
+    private static boolean isLegacyOutput(Path base) {
+        if (!Files.isDirectory(base)) {
+            return false;
+        }
+        try (java.util.stream.Stream<Path> dirs = Files.list(base)) {
+            return dirs.filter(Files::isDirectory).anyMatch(d ->
+                    "_memory".equals(d.getFileName().toString())
+                            || Files.exists(d.resolve("candidates.json"))
+                            || Files.exists(d.resolve("transcript.json")));
+        } catch (java.io.IOException e) {
+            return false;
+        }
+    }
+
+    private static boolean isLegacyEval(Path base) {
+        return Files.isDirectory(base.resolve("reviews"))
+                || Files.exists(base.resolve("annotations.csv"))
+                || Files.exists(base.resolve("results.csv"));
+    }
     public Path configDir() { return repo().resolve("config"); }
-    public Path overridesFile() { return configDir().resolve("admin_overrides.json"); }
+
+    /** 主播专属运行时配置（admin_overrides.json / memory_decisions.json）：按主播隔离在 output/<id>/ 下；
+     *  首位主播 kiya 兼容旧的 config/ 路径（旧文件存在时优先用旧路径，不用搬）。 */
+    public Path streamerStateFile(String filename) {
+        Path p = output().resolve(filename);
+        if (!"kiya".equals(streamer()) || Files.exists(p)) {
+            return p;
+        }
+        Path legacy = configDir().resolve(filename);
+        return Files.exists(legacy) ? legacy : p;
+    }
+
+    public Path overridesFile() { return streamerStateFile("admin_overrides.json"); }
     public Path recDir() { return Path.of(props.getRecDir()).toAbsolutePath().normalize(); }
     public Path jobLogs() { return output().resolve("_jobs"); }
     public Path previewDir() { return output().resolve("_preview"); }

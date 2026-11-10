@@ -10,6 +10,7 @@ import com.baomidou.mybatisplus.annotation.TableName;
 public class LiveSession {
     @TableId(type = IdType.AUTO)
     private Long id;
+    private String streamerId;
     private String name;
     private String startTime;
     private Integer segments;
@@ -21,6 +22,8 @@ public class LiveSession {
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
+    public String getStreamerId() { return streamerId; }
+    public void setStreamerId(String streamerId) { this.streamerId = streamerId; }
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
     public String getStartTime() { return startTime; }

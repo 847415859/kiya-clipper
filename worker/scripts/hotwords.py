@@ -28,6 +28,7 @@ REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
 from clipper.kcfg import load_cfg  # noqa: E402
+from clipper.streamer import resolve_config, streamer_from_args  # noqa: E402
 from clipper.asr import AsrError, build_hotwords, vocab_call  # noqa: E402
 
 
@@ -66,11 +67,12 @@ def set_env(updates: dict[str, str]) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("action", choices=["show", "sync", "list", "delete"])
-    ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"))
+    ap.add_argument("--config", default=None, help="主播配置；不填时按 --streamer 找 config/streamers/<id>.yaml")
+    ap.add_argument("--streamer", default=None, help="主播标识（默认 KIYA_STREAMER 环境变量，再默认 kiya）")
     args = ap.parse_args()
 
     load_env()
-    cfg = load_cfg(Path(args.config))
+    cfg = load_cfg(resolve_config(args.config, streamer=streamer_from_args(args.streamer)))
     asr = cfg.get("asr") or {}
     model = asr.get("model") or "fun-asr"
     prefix = str(asr.get("hotword_prefix") or "kiya")

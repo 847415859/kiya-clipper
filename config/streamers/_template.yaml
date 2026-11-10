@@ -1,0 +1,99 @@
+# 新主播接入模板：复制本文件为 config/streamers/<主播标识>.yaml，改完必填项即可接入。
+# 主播标识（文件名）：1–32 位小写字母开头，可含小写字母 / 数字 / _ 和 -，例如 kiya、kiya2、miko。
+# 字段含义与取值范围见 config/kiya.yaml（首位主播的完整示例）和 worker/README.md。
+# 不改的字段可以整段删掉，脚本会按代码里的默认值补齐。
+
+streamer:
+  name: 新主播              # 必填：主播名（监控推送、周报、成片标题里用）
+  uid: 0                    # 必填：B站 UID（拉投稿、热词、封面用）
+  room_id: 0                # 必填：直播间号（监控开播检测用，可由 UID 自动查询）
+  live_url: https://live.bilibili.com/0
+  space_url: https://space.bilibili.com/0
+
+# 弹幕分析参数。一般用默认值即可，等跑过几场再用 evaluate.py --sweep 调分数线
+analysis:
+  bucket_seconds: 10
+  baseline_seconds: 300
+  smooth_seconds: 30
+  min_peak_gap_seconds: 60
+  top_n: 20
+  min_score: null
+  music_filter: false
+  music_threshold: 0.45
+  danmaku_delay_seconds: 5
+  delay_mode: auto
+  delay_range_seconds: [1, 15]
+  clip_before_seconds: 30
+  clip_after_seconds: 30
+
+# 信号权重。不同主播的内容类型不同，权重可能不一样（游戏主播画面/尖叫更重要，杂谈主播弹幕/情绪词更重要）
+weights:
+  density: 0.35
+  emotion: 0.20
+  gift: 0.15
+  audio: 0.20
+  scene: 0.10
+  laugh: 0.15
+  scream: 0.05
+
+# 语音转写。hotword_prefix 用主播标识（小写，最多 10 位），热词表名按主播区分
+asr:
+  model: fun-asr
+  language_hints: [zh, en, ja]
+  vocabulary_id: ""
+  hotword_prefix: newstreamer        # 必填：改成主播标识，最多 10 位小写字母/数字
+  hotword_weight: 4
+  hotwords: []                       # 主播专属热词，越多越准（昵称、粉丝名、梗、常聊话题）
+
+rerank:
+  prompt: rerank_v2
+  model: ""
+  frames: 8
+  width: 640
+  context_before: 60
+  workers: 3
+  weights: {llm: 0.8, screen: 0.2, not_funny: 0.6}
+  min_len: 30
+  max_len: 180
+  price_in: null
+  price_out: null
+
+memory:
+  min_sessions: 2
+  lore_max: 30
+  lore_in_prompt: 25
+  streamer_uploads: 20
+  streamer_titles: 10
+  my_uploads: 30
+  min_published: 5
+  min_label_sessions: 3
+  examples_yes: 3
+  examples_no: 3
+
+autoedit:
+  prompt: edit_v1
+  model: ""
+  max_items: 8
+
+# 情绪词典：VTuber 圈通用词 + 主播粉丝常刷的梗。按主播粉丝文化持续扩充
+emotion_words:
+  laugh: [哈哈, hhh, "233", 草, 笑死, 绷, 蚌埠住, 乐, 好好笑, xswl, 笑不活]
+  surprise: ["？", "?", 啊这, 卧槽, 我草, 震惊, 离谱, 逆天, 什么]
+  hype: ["666", 牛, 好强, 帅, 高能, 名场面, 切片, 录屏, 截图]
+  cute: [可爱, awsl, 好耶, 贴贴, 嘿嘿]
+  sad: [破防, 心疼, 哭, 呜呜, 寄]
+
+# 计入情绪词得分的主播专属梗（只放「出现就说明有事发生」的词，常见称呼不要放）
+lore_words: []
+
+# 主播梗百科（不参与弹幕打分）：用作 ASR 热词、大模型上下文、标题生成。越全越准
+lore:
+  nicknames: []          # 昵称，例如 [kiya, "72", 娜由纪雅]
+  fan_name: 粉丝名       # 必填：粉丝称呼
+  audience_call: 观众称呼 # 主播怎么称呼观众
+  world: []              # 世界观、背景设定
+  catchphrases: []       # 口头禅
+  persona: []            # 人设（猫娘、杂谈势…）
+  recurring_topics: []   # 常聊话题
+  title_examples: []     # 主播自己的高播放切片标题（大模型起标题时参考风格）
+  not_to_confuse: []     # 同名 / 近名主播，标题标签写全名，检索时排除

@@ -27,6 +27,7 @@ REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
 from clipper.asr import load_transcript  # noqa: E402
+from clipper.streamer import resolve_config, streamer_from_args  # noqa: E402
 from clipper.subtitles import (StyleError, ass_filter, build_events, font_available, get_style,  # noqa: E402
                                load_config, lore_keywords, to_ass, to_srt, validate_style)
 
@@ -86,7 +87,7 @@ def cmd_preview(args) -> int:
     cfg = load_config()
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    kw = lore_keywords(streamer_cfg(args.config))
+    kw = lore_keywords(streamer_cfg(resolve_config(args.config, streamer=streamer_from_args(args.streamer))))
     if args.style_json:                     # 后台编辑中的样式：直接给 JSON，不必先存进配置
         try:
             st = validate_style(json.loads(Path(args.style_json).read_text(encoding="utf-8")))
@@ -124,7 +125,7 @@ def cmd_make(args) -> int:
     except StyleError as e:
         print(e, file=sys.stderr)
         return 1
-    kw = lore_keywords(streamer_cfg(args.config))
+    kw = lore_keywords(streamer_cfg(resolve_config(args.config, streamer=streamer_from_args(args.streamer))))
     out_dir = path.parent / "clips"
     out_dir.mkdir(exist_ok=True)
     for c in data["candidates"]:
@@ -147,7 +148,8 @@ def _hms(t: float) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"), help="主播配置（关键词换色用）")
+    ap.add_argument("--config", default=None, help="主播配置（用于关键词换色）；不填时按 --streamer 找 config/streamers/<id>.yaml")
+    ap.add_argument("--streamer", default=None, help="主播标识（默认 KIYA_STREAMER 环境变量，再默认 kiya）")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("styles", help="列出样式")
     p = sub.add_parser("preview", help="出预览图")

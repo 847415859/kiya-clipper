@@ -24,19 +24,22 @@ REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
 from clipper.kcfg import load_cfg, read_decisions  # noqa: E402
+from clipper.streamer import output_root, resolve_config, reviews_dir, streamer_from_args  # noqa: E402
 from clipper.weekly import build_report, read_json, render_html  # noqa: E402
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"))
-    ap.add_argument("--out", default=str(ROOT / "output"))
-    ap.add_argument("--reviews", default=str(REPO / "eval" / "reviews"))
+    ap.add_argument("--config", default=None, help="主播配置；不填时按 --streamer 找 config/streamers/<id>.yaml")
+    ap.add_argument("--streamer", default=None, help="主播标识（默认 KIYA_STREAMER 环境变量，再默认 kiya）")
+    ap.add_argument("--out", default=None, help="输出根目录；不填时是 worker/output/<主播标识>/")
+    ap.add_argument("--reviews", default=None, help="评测标注目录；不填时是 eval/<主播标识>/reviews/")
     ap.add_argument("--end", help="截止日期 YYYY-MM-DD（含），默认今天")
     ap.add_argument("--days", type=int, help="统计天数，默认读 config 的 weekly.days（7）")
     args = ap.parse_args()
 
-    cfg = load_cfg(Path(args.config))
+    streamer_id = streamer_from_args(args.streamer)
+    cfg = load_cfg(resolve_config(args.config, streamer=streamer_id))
     if args.days:
         cfg.setdefault("weekly", {})["days"] = args.days
     try:
@@ -44,10 +47,11 @@ def main() -> int:
     except ValueError:
         print("日期格式应为 YYYY-MM-DD", file=sys.stderr)
         return 1
-    out = Path(args.out)
+    out = Path(args.out) if args.out else output_root(streamer_id)
     mem = read_json(out / "_memory" / "memory.json", {}) or {}
     dec = read_decisions()
-    rep = build_report(out, cfg, end, Path(args.reviews), mem, set(dec.get("rejected_lore") or []))
+    rev_dir = Path(args.reviews) if args.reviews else reviews_dir(streamer_id)
+    rep = build_report(out, cfg, end, rev_dir, mem, set(dec.get("rejected_lore") or []))
     rdir = out / "_reports"
     rdir.mkdir(parents=True, exist_ok=True)
     stem = f"weekly-{end.isoformat()}"

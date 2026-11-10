@@ -1,4 +1,6 @@
 -- 每次启动执行，必须可重复执行（只用 CREATE TABLE IF NOT EXISTS）
+-- 多主播：streamer_id 标识主播（默认 kiya），场次 / 候选按主播隔离。
+-- 已有部署升级时，若表已存在，需手动执行 deploy/admin/README.md「多主播升级」里的 ALTER 语句。
 CREATE TABLE IF NOT EXISTS sys_user (
     id            BIGINT AUTO_INCREMENT PRIMARY KEY,
     username      VARCHAR(64)  NOT NULL,
@@ -10,6 +12,7 @@ CREATE TABLE IF NOT EXISTS sys_user (
 -- 场次：扫描录像目录得到（worker/scripts/sessions.py）
 CREATE TABLE IF NOT EXISTS live_session (
     id               BIGINT AUTO_INCREMENT PRIMARY KEY,
+    streamer_id      VARCHAR(32) NOT NULL DEFAULT 'kiya',
     name             VARCHAR(64) NOT NULL,
     start_time       VARCHAR(40),
     segments         INT,
@@ -18,12 +21,13 @@ CREATE TABLE IF NOT EXISTS live_session (
     video_bytes      BIGINT,
     danmaku          INT,
     scanned_at       DATETIME,
-    CONSTRAINT uk_session_name UNIQUE (name)
+    CONSTRAINT uk_session_name UNIQUE (streamer_id, name)
 );
 
--- 候选片段：从 output/<场次>/candidates.json 同步；标注（mark / note）只存在这里，并导出到 eval/reviews/<场次>.csv
+-- 候选片段：从 output/<主播>/<场次>/candidates.json 同步；标注（mark / note）只存在这里，并导出到 eval/<主播>/reviews/<场次>.csv
 CREATE TABLE IF NOT EXISTS candidate (
     id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    streamer_id     VARCHAR(32) NOT NULL DEFAULT 'kiya',
     session_name    VARCHAR(64) NOT NULL,
     rnk             INT         NOT NULL,
     t               DOUBLE,
@@ -39,7 +43,7 @@ CREATE TABLE IF NOT EXISTS candidate (
     mark            VARCHAR(1),
     note            VARCHAR(500),
     clip_file       VARCHAR(255),
-    CONSTRAINT uk_candidate UNIQUE (session_name, rnk)
+    CONSTRAINT uk_candidate UNIQUE (streamer_id, session_name, rnk)
 );
 
 -- 字幕样式：config_json 的结构由 config/schema/subtitle_style.schema.json 定义

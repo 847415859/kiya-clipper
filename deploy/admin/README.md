@@ -119,6 +119,31 @@ nginx -t && systemctl reload nginx
 cd /opt/kiya-clipper && git pull && bash deploy/admin/build.sh && systemctl restart kiya-admin
 ```
 
+## 7.5 多主播升级（从旧版本升级时做一次）
+
+新版给 `live_session` 和 `candidate` 两张表加了 `streamer_id`（默认 `kiya`），唯一约束改成带主播的组合键。`schema.sql` 只会 `CREATE TABLE IF NOT EXISTS`，**不会改已有的表**，所以已经部署过的库要手动升级一次，否则后台一启动、查 `streamer_id` 就报错。全新部署不需要这一步。
+
+```bash
+cd /opt/kiya-clipper && git pull
+# 先备份（几秒钟）
+mysqldump --no-tablespaces -h127.0.0.1 -ukiya -p kiya_admin live_session candidate > /root/kiya_admin_before_multi.sql
+# 升级（可重复执行；已有数据全部归到 kiya）
+mysql -h127.0.0.1 -ukiya -p kiya_admin < deploy/admin/migrate_multi_streamer.sql
+```
+
+末尾会打印两张表的行数和归到 kiya 的行数，两个数应该相等。升级完再 `bash deploy/admin/build.sh` 并重启后台。
+
+文件和目录**不用搬**：`kiya` 的数据如果还放在旧的 `worker/output/<场次>/`、`eval/reviews/` 下（没有 `output/kiya/`、`eval/kiya/`），后台和 Python 脚本都会继续用旧位置。想迁到新结构时：
+
+```bash
+cd /opt/kiya-clipper/worker/output && mkdir kiya && for f in * ; do [ "$f" != kiya ] && mv -n "$f" kiya/ ; done
+cd /opt/kiya-clipper/eval && mkdir kiya && mv -n reviews annotations.csv results.csv kiya/ 2>/dev/null
+```
+
+迁完之后 `output/kiya/` 存在，就自动走新结构；**迁移期间不要有任务在跑**。新增主播见 `docs/多主播支持.md`。
+
+---
+
 ## 排查
 
 | 现象 | 处理 |

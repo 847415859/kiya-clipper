@@ -9,6 +9,7 @@ import com.baomidou.mybatisplus.annotation.TableName;
 public class Candidate {
     @TableId(type = IdType.AUTO)
     private Long id;
+    private String streamerId;
     private String sessionName;
     private Integer rnk;
     private Double t;
@@ -27,6 +28,8 @@ public class Candidate {
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
+    public String getStreamerId() { return streamerId; }
+    public void setStreamerId(String streamerId) { this.streamerId = streamerId; }
     public String getSessionName() { return sessionName; }
     public void setSessionName(String sessionName) { this.sessionName = sessionName; }
     public Integer getRnk() { return rnk; }

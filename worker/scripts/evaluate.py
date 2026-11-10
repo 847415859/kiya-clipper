@@ -31,6 +31,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent
+sys.path.insert(0, str(ROOT))
+from clipper.streamer import eval_root, output_root, resolve_config, reviews_dir, streamer_from_args  # noqa: E402
 
 
 def to_sec(s: str) -> float:
@@ -183,20 +185,29 @@ def rerank_report(reviews: Path, out: Path) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--out", default=str(ROOT / "output"), help="screen.py 的输出目录")
-    ap.add_argument("--annotations", default=str(REPO / "eval" / "annotations.csv"))
-    ap.add_argument("--reviews", default=str(REPO / "eval" / "reviews"))
-    ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"))
-    ap.add_argument("--log", metavar="改了什么", help="把结果追加到 eval/results.csv")
+    ap.add_argument("--out", default=None, help="screen.py 的输出根目录；不填时是 worker/output/<主播标识>/")
+    ap.add_argument("--annotations", default=None, help="人工标注文件；不填时是 eval/<主播标识>/annotations.csv")
+    ap.add_argument("--reviews", default=None, help="评测标注目录；不填时是 eval/<主播标识>/reviews/")
+    ap.add_argument("--config", default=None, help="主播配置；不填时按 --streamer 找 config/streamers/<id>.yaml")
+    ap.add_argument("--streamer", default=None, help="主播标识（默认 KIYA_STREAMER 环境变量，再默认 kiya）")
+    ap.add_argument("--log", metavar="改了什么", help="把结果追加到 eval/<主播标识>/results.csv")
     ap.add_argument("--sweep", action="store_true", help="按标注试不同分数线")
     ap.add_argument("--rerank", action="store_true", help="精排前后对比")
     args = ap.parse_args()
 
+    streamer_id = streamer_from_args(args.streamer)
+    out_root = Path(args.out) if args.out else output_root(streamer_id)
+    ev_root = eval_root(streamer_id)
+    annotations = Path(args.annotations) if args.annotations else ev_root / "annotations.csv"
+    reviews = Path(args.reviews) if args.reviews else reviews_dir(streamer_id)
+    cfg_path = resolve_config(args.config, streamer=streamer_id)
+    results_csv = ev_root / "results.csv"
+
     if args.rerank:
-        return rerank_report(Path(args.reviews), Path(args.out))
-    truth = load_truth(Path(args.annotations), Path(args.reviews))
+        return rerank_report(reviews, out_root)
+    truth = load_truth(annotations, reviews)
     if args.sweep:
-        return sweep(Path(args.reviews), truth, Path(args.out))
+        return sweep(reviews, truth, out_root)
     if not truth:
         print("还没有标注数据：填写 eval/annotations.csv，或把标注过的 peaks.csv 复制到 eval/reviews/<场次>.csv")
         return 1
@@ -205,7 +216,7 @@ def main() -> int:
     n_sessions = 0
     print(f"{'场次':<16}{'送审':>6}  {'精确率':<14}{'召回率':<14}{'前10覆盖':<14}{'分数线':<8}信号")
     for sess, t in sorted(truth.items()):
-        cpath = Path(args.out) / sess / "candidates.json"
+        cpath = out_root / sess / "candidates.json"
         if not cpath.exists():
             print(f"{sess:<16}（有标注 {len(t)} 条，但没有 candidates.json，先运行 screen.py）")
             continue
@@ -226,13 +237,13 @@ def main() -> int:
     print(f"{'合计':<16}{tot['n']:>6}  {pct(tuple(tot['precision'])):<14}{pct(tuple(tot['recall'])):<14}"
           f"{pct(tuple(tot['top10'])):<14}")
     print("阶段 1 验收（3 场以上）：召回率 ≥ 90%，精确率 ≥ 40%")
-    if not Path(args.annotations).exists() or Path(args.annotations).stat().st_size < 80:
-        print("提示：召回率只算了你审过的候选；候选之外漏掉的有趣片段记到 eval/annotations.csv 才算得准"
-              "（可以扫一遍 output/<场次>/transcript.txt 找）")
+    if not annotations.exists() or annotations.stat().st_size < 80:
+        print("提示：召回率只算了你审过的候选；候选之外漏掉的有趣片段记到 eval/<主播标识>/annotations.csv 才算得准"
+              "（可以扫一遍 output/<主播标识>/<场次>/transcript.txt 找）")
 
     if args.log:
-        cfg_hash = hashlib.sha1(Path(args.config).read_bytes()).hexdigest()[:8]
-        res = REPO / "eval" / "results.csv"
+        cfg_hash = hashlib.sha1(cfg_path.read_bytes()).hexdigest()[:8]
+        res = results_csv
         header = ["date", "change", "config_version", "sessions", "top10_hit_rate", "recall", "note",
                   "precision", "candidates", "top10_coverage"]
         old = []

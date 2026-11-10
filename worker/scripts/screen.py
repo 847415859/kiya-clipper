@@ -45,8 +45,7 @@ from clipper.danmaku import Segment, all_events  # noqa: E402
 from clipper.media import extract_session, load_features, save_features  # noqa: E402
 from clipper.peaks import find_top_peaks, hhmmss  # noqa: E402
 from clipper.session import drop_active, find_sessions  # noqa: E402
-
-DEFAULT_CONFIG = ROOT.parent / "config" / "kiya.yaml"
+from clipper.streamer import config_path, output_root, streamer_from_args  # noqa: E402
 
 
 def plot(sig: dict, peaks, title: str, path: Path, min_score: float | None = None, dropped=()) -> None:
@@ -128,8 +127,9 @@ def _read(p: Path):
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="+", help="录播姬录像目录，或同一场的若干 .xml 文件")
-    ap.add_argument("--config", default=str(DEFAULT_CONFIG))
-    ap.add_argument("--out", default=str(ROOT / "output"))
+    ap.add_argument("--config", default=None, help="主播配置；不填时按 --streamer 找 config/streamers/<id>.yaml")
+    ap.add_argument("--streamer", default=None, help="主播标识（默认 KIYA_STREAMER 环境变量，再默认 kiya）")
+    ap.add_argument("--out", default=None, help="输出根目录；不填时是 worker/output/<主播标识>/")
     ap.add_argument("--latest", action="store_true", help="只处理最近一场")
     ap.add_argument("--session", help="只处理指定场次，如 20261110-2000")
     ap.add_argument("--top", type=int, help="覆盖配置里的 top_n")
@@ -142,7 +142,15 @@ def main() -> int:
                     help="边播边筛：只用已经录完的分段，结果标 live=true；不写整场特征缓存，不覆盖下播后的正式结果")
     args = ap.parse_args()
 
-    cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    streamer_id = streamer_from_args(args.streamer)
+    cfg_path = Path(args.config) if args.config else config_path(streamer_id)
+    try:
+        cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    except OSError:
+        print(f"找不到主播配置 {cfg_path}（复制 config/streamers/_template.yaml 为 "
+              f"config/streamers/{streamer_id}.yaml 后填写）", file=sys.stderr)
+        return 1
+    out_root = Path(args.out) if args.out else output_root(streamer_id)
     if args.top:
         cfg["analysis"]["top_n"] = args.top
     min_score = None if args.all else (args.min_score if args.min_score is not None
@@ -154,7 +162,7 @@ def main() -> int:
 
     lc = {"quiet_seconds": 120, "min_seconds": 900, **(cfg.get("live_screen") or {})}
     for name, segs in sessions:
-        out_dir = Path(args.out) / name
+        out_dir = out_root / name
         live_extra = None
         if args.live:
             prev = _read(out_dir / "candidates.json")

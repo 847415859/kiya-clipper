@@ -7,6 +7,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class KiyaProperties {
     private String repoDir = "/opt/kiya-clipper";
     private String recDir = "/data/rec";
+    private String streamer = "kiya";
     private String python = "";
     private String adminUsername = "admin";
     private String adminPassword = "";
@@ -16,6 +17,8 @@ public class KiyaProperties {
     public void setRepoDir(String repoDir) { this.repoDir = repoDir; }
     public String getRecDir() { return recDir; }
     public void setRecDir(String recDir) { this.recDir = recDir; }
+    public String getStreamer() { return streamer; }
+    public void setStreamer(String streamer) { this.streamer = streamer; }
     public String getPython() { return python; }
     public void setPython(String python) { this.python = python; }
     public String getAdminUsername() { return adminUsername; }

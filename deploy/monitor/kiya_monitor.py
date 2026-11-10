@@ -56,6 +56,27 @@ def cfg(env: dict, key: str, default: str = "") -> str:
     return v if v != "" else default
 
 
+def streamer_cfg_from_yaml(streamer_id: str) -> dict:
+    """从 config/streamers/<id>.yaml（回退 config/<id>.yaml）读主播的 name / room_id / uid。
+
+    监控脚本只用标准库，不依赖 worker 虚拟环境的 PyYAML，所以用正则提取这几个固定字段。
+    多主播：KIYA_STREAMER 指定主播，room_id 从这里读，不用在 .env 里重复维护。
+    """
+    sid = (streamer_id or "kiya").strip().lower()
+    for p in (REPO / "config" / "streamers" / f"{sid}.yaml", REPO / "config" / f"{sid}.yaml"):
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        out = {}
+        for key in ("name", "room_id", "uid"):
+            m = re.search(rf"^\s*{key}:\s*(.+?)\s*$", text, re.M)
+            if m:
+                out[key] = m.group(1)
+        return out
+    return {}
+
+
 # ---------------------------------------------------------------- 推送
 def _post_json(url: str, payload: dict) -> str:
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST",
@@ -141,7 +162,7 @@ def service_active(env: dict) -> bool:
 
 def live_status(env: dict) -> tuple[int | None, str]:
     """返回 (live_status, title)。1=直播中，0=未开播，2=轮播；接口失败返回 (None, 错误)。"""
-    room = cfg(env, "KIYA_ROOM_ID", "1724773744")
+    room = cfg(env, "KIYA_ROOM_ID", streamer_cfg_from_yaml(cfg(env, "KIYA_STREAMER", "kiya")).get("room_id", "1724773744"))
     url = cfg(env, "KIYA_LIVE_API", "https://api.live.bilibili.com/room/v1/Room/get_info") + f"?room_id={room}"
     headers = {"User-Agent": UA, "Referer": f"https://live.bilibili.com/{room}"}
     # 机房 IP 被风控（412）时，带上 B站小号 Cookie（与 yt-dlp 共用的 Netscape 格式文件）
@@ -396,8 +417,9 @@ def check(env: dict, dry: bool = False) -> int:
     now = time.time()
     rec_dir = Path(cfg(env, "REC_DIR", "/data/rec"))
     st = State(Path(cfg(env, "KIYA_STATE_FILE", "/var/lib/kiya-monitor/state.json")))
-    name = cfg(env, "KIYA_STREAMER_NAME", "娜由纪雅kiya")
-    room = cfg(env, "KIYA_ROOM_ID", "1724773744")
+    sc = streamer_cfg_from_yaml(cfg(env, "KIYA_STREAMER", "kiya"))
+    name = cfg(env, "KIYA_STREAMER_NAME", sc.get("name", "娜由纪雅kiya"))
+    room = cfg(env, "KIYA_ROOM_ID", sc.get("room_id", "1724773744"))
     fresh_video = float(cfg(env, "KIYA_VIDEO_STALE_SECONDS", "180"))
     fresh_xml = float(cfg(env, "KIYA_DANMAKU_STALE_SECONDS", "900"))
     grace = float(cfg(env, "KIYA_START_GRACE_SECONDS", "240"))

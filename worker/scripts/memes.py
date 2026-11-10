@@ -26,6 +26,7 @@ from clipper.bili import Bili, BiliError  # noqa: E402
 from clipper.embed import Embedder, EmbedError  # noqa: E402
 from clipper.env import load_env  # noqa: E402
 from clipper.kcfg import load_cfg, read_decisions  # noqa: E402
+from clipper.streamer import output_root, resolve_config, streamer_from_args  # noqa: E402
 from clipper.memes import (STATUS_LABEL, build_library, doc_text, load_library, meme_stats, retrieve,  # noqa: E402
                            settings, usable, write_library)
 from clipper.weekly import read_json  # noqa: E402
@@ -67,8 +68,9 @@ def summary(lib: list[dict]) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"))
-    ap.add_argument("--out", default=str(ROOT / "output"))
+    ap.add_argument("--config", default=None, help="主播配置；不填时按 --streamer 找 config/streamers/<id>.yaml")
+    ap.add_argument("--streamer", default=None, help="主播标识（默认 KIYA_STREAMER 环境变量，再默认 kiya）")
+    ap.add_argument("--out", default=None, help="输出根目录；不填时是 worker/output/<主播标识>/")
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("refresh")
     r.add_argument("--no-fetch", action="store_true")
@@ -78,9 +80,10 @@ def main() -> int:
     args = ap.parse_args()
 
     load_env()
-    cfg = load_cfg(Path(args.config))
+    streamer_id = streamer_from_args(args.streamer)
+    cfg = load_cfg(resolve_config(args.config, streamer=streamer_id))
     s = settings(cfg)
-    out_dir = Path(args.out)
+    out_dir = Path(args.out) if args.out else output_root(streamer_id)
     mem_dir = out_dir / "_memory"
 
     if args.cmd == "search":

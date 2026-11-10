@@ -39,6 +39,7 @@ mybatis-plus:
 kiya:
   repo-dir: ${KIYA_REPO_DIR:/opt/kiya-clipper}   # 仓库目录（worker、config、eval 都在下面）
   rec-dir: ${REC_DIR:/data/rec}                  # 录播姬录像目录
+  streamer: ${KIYA_STREAMER:kiya}                # 当前管理的主播标识：数据、记忆、评测按它隔离（见 docs/多主播支持.md）
   python: ${KIYA_PYTHON:}                        # 默认 <repo-dir>/worker/.venv/bin/python
   admin-username: ${ADMIN_USERNAME:admin}
   admin-password: ${ADMIN_PASSWORD:}             # 只在第一次启动、还没有账号时使用；留空则随机生成并打印到日志

@@ -28,6 +28,8 @@ REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
 from clipper.kcfg import load_cfg  # noqa: E402
+from clipper.streamer import (decisions_path as streamer_decisions_path, output_root,  # noqa: E402
+                              resolve_config, reviews_dir, streamer_from_args)
 from clipper.bili import Bili, BiliError  # noqa: E402
 from clipper.editdiff import edit_taste  # noqa: E402
 from clipper.env import load_env  # noqa: E402
@@ -39,7 +41,7 @@ MEM_DEFAULTS = {"min_sessions": 2, "lore_max": 30, "streamer_uploads": 20, "my_u
 
 
 def decisions_path() -> Path:
-    return Path(os.environ.get("KIYA_MEMORY_DECISIONS") or REPO / "config" / "memory_decisions.json")
+    return Path(os.environ.get("KIYA_MEMORY_DECISIONS") or streamer_decisions_path())
 
 
 def read_json(p: Path, default):
@@ -72,16 +74,19 @@ def collect_ngrams(out_dir: Path) -> dict[str, dict]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"))
-    ap.add_argument("--out", default=str(ROOT / "output"))
-    ap.add_argument("--reviews", default=str(REPO / "eval" / "reviews"))
+    ap.add_argument("--config", default=None, help="主播配置；不填时按 --streamer 找 config/streamers/<id>.yaml")
+    ap.add_argument("--streamer", default=None, help="主播标识（默认 KIYA_STREAMER 环境变量，再默认 kiya）")
+    ap.add_argument("--out", default=None, help="输出根目录；不填时是 worker/output/<主播标识>/")
+    ap.add_argument("--reviews", default=None, help="评测标注目录；不填时是 eval/<主播标识>/reviews/")
     ap.add_argument("--no-fetch", action="store_true", help="不请求 B站")
     args = ap.parse_args()
 
     load_env()
-    cfg = load_cfg(Path(args.config))
+    streamer_id = streamer_from_args(args.streamer)
+    cfg = load_cfg(resolve_config(args.config, streamer=streamer_id))
     mc = {**MEM_DEFAULTS, **(cfg.get("memory") or {})}
-    out_dir = Path(args.out)
+    out_dir = Path(args.out) if args.out else output_root(streamer_id)
+    rev_dir = Path(args.reviews) if args.reviews else reviews_dir(streamer_id)
     mem_file = out_dir / "_memory" / "memory.json"
     old = read_json(mem_file, {}) or {}
     dec = read_json(decisions_path(), {}) or {}
@@ -114,7 +119,7 @@ def main() -> int:
             except BiliError as e:
                 errors.append(f"切片号投稿拉取失败，沿用上次的：{e}")
     # 绑定到场次 / 序号：类型取精排结果，标注取审核页
-    marks = load_marks(Path(args.reviews))
+    marks = load_marks(rev_dir)
     published = dec.get("published") or {}
     my_uploads = []
     for u in mine:
@@ -148,7 +153,7 @@ def main() -> int:
     # 3. 例子 + 权重
     examples = build_examples(out_dir, marks, set(dec.get("excluded_examples") or []))
     active = active_weights(cfg, dec)
-    cal = calibrate(out_dir, load_marks(Path(args.reviews), trusted_only=True), active, int(mc["min_label_sessions"]))
+    cal = calibrate(out_dir, load_marks(rev_dir, trusted_only=True), active, int(mc["min_label_sessions"]))
     an = cfg.get("analysis") or {}
     rv = review_stats(marks, mc, float(an.get("clip_before_seconds", 30)), float(an.get("clip_after_seconds", 30)))
 

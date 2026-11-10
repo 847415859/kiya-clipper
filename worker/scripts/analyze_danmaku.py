@@ -27,8 +27,7 @@ sys.path.insert(0, str(ROOT))
 from clipper.danmaku import Segment, all_events, load_session  # noqa: E402
 from clipper.session import collect_xml, group_sessions, session_name  # noqa: E402
 from clipper.peaks import find_top_peaks, hhmmss  # noqa: E402
-
-DEFAULT_CONFIG = ROOT.parent / "config" / "kiya.yaml"
+from clipper.streamer import config_path, output_root, streamer_from_args  # noqa: E402
 
 
 def plot_curve(sig: dict, peaks, title: str, path: Path) -> None:
@@ -84,14 +83,23 @@ def write_outputs(segs: list[Segment], peaks, sig, out_dir: Path) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="+", help="录播姬录像目录，或同一场的若干 .xml 文件")
-    ap.add_argument("--config", default=str(DEFAULT_CONFIG))
-    ap.add_argument("--out", default="output")
+    ap.add_argument("--config", default=None, help="主播配置；不填时按 --streamer 找 config/streamers/<id>.yaml")
+    ap.add_argument("--streamer", default=None, help="主播标识（默认 KIYA_STREAMER 环境变量，再默认 kiya）")
+    ap.add_argument("--out", default=None, help="输出根目录；不填时是 worker/output/<主播标识>/")
     ap.add_argument("--top", type=int, help="覆盖配置里的 top_n")
     ap.add_argument("--latest", action="store_true", help="只分析最近一场")
     ap.add_argument("--gap-hours", type=float, default=2.0, help="分段间隔超过多少小时算新的一场")
     args = ap.parse_args()
 
-    cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    streamer_id = streamer_from_args(args.streamer)
+    cfg_path = Path(args.config) if args.config else config_path(streamer_id)
+    try:
+        cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    except OSError:
+        print(f"找不到主播配置 {cfg_path}（复制 config/streamers/_template.yaml 为 "
+              f"config/streamers/{streamer_id}.yaml 后填写）", file=sys.stderr)
+        return 1
+    out_root = Path(args.out) if args.out else output_root(streamer_id)
     if args.top:
         cfg["analysis"]["top_n"] = args.top
 
@@ -111,7 +119,7 @@ def main() -> int:
             print(f"跳过 {files_in_session[0].name}：弹幕太少（{n_dm} 条）")
             continue
         peaks, sig = find_top_peaks(events, segs, cfg)
-        out_dir = Path(args.out) / session_name(segs)
+        out_dir = out_root / session_name(segs)
         write_outputs(segs, peaks, sig, out_dir)
         dur = max(e.t for e in events)
         print(f"\n== {out_dir.name}：{len(segs)} 个分段，时长约 {hhmmss(dur)}，弹幕 {n_dm} 条 ==")

@@ -28,6 +28,9 @@ export const api = {
   logout: () => http.post('/api/auth/logout'),
   changePassword: (oldPassword, newPassword) => http.post('/api/auth/password', { oldPassword, newPassword }),
 
+  streamers: () => http.get('/api/streamers'),
+  switchStreamer: (id) => http.post('/api/streamers/current', { streamer: id }),
+
   sessions: () => http.get('/api/sessions'),
   scan: () => http.post('/api/sessions/scan', null, { timeout: 200000 }),
   candidates: (name) => http.get(`/api/sessions/${encodeURIComponent(name)}/candidates`),

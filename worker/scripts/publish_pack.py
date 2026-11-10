@@ -28,6 +28,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from clipper.kcfg import find_taboo, load_cfg  # noqa: E402
+from clipper.streamer import decisions_path, resolve_config  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.edit import edit_window  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
@@ -84,13 +85,13 @@ def main() -> int:
     ap.add_argument("--cover-text", help="封面上的大字（空字符串 = 不加字）")
     ap.add_argument("--no-cover", action="store_true")
     ap.add_argument("--refresh", action="store_true", help="标题 / 简介 / 标签重新生成（覆盖后台改过的）")
-    ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"))
+    ap.add_argument("--config", default=None, help="主播配置；不填时按 candidates.json 所在目录推导主播")
     args = ap.parse_args()
 
-    cfg = load_cfg(Path(args.config))
-    pc = cfg.get("publish") or {}
     cpath = Path(args.candidates)
     sess = cpath.parent
+    cfg = load_cfg(resolve_config(args.config, sess))
+    pc = cfg.get("publish") or {}
     data = json.loads(cpath.read_text(encoding="utf-8"))
     cand = next((c for c in data["candidates"] if c["rank"] == args.rank), None)
     if not cand:
@@ -115,7 +116,7 @@ def main() -> int:
     lore = [*(cfg.get("lore_words") or []), *(lore_cfg.get("catchphrases") or []), *(lore_cfg.get("recurring_topics") or []),
             *(lore_cfg.get("memes") or [])]
     mem = read(sess.parent / "_memory" / "memory.json", {}) or {}
-    dec = read(Path(os.environ.get("KIYA_MEMORY_DECISIONS") or REPO / "config" / "memory_decisions.json"), {}) or {}
+    dec = read(Path(os.environ.get("KIYA_MEMORY_DECISIONS") or decisions_path()), {}) or {}
     rejected = {str(x).lower() for x in dec.get("rejected_lore") or []}
     lore += [x["text"] for x in mem.get("lore") or [] if x["text"].lower() not in rejected]
     session_date = sess.name[:8]

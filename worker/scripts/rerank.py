@@ -27,6 +27,7 @@ REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
 from clipper.kcfg import find_taboo, load_cfg  # noqa: E402
+from clipper.streamer import decisions_path, resolve_config  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.boundary import refine_bounds  # noqa: E402
 from clipper.context import danmaku_lines, extract_frames, load_events, profile, speech_lines  # noqa: E402
@@ -94,19 +95,19 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("candidates")
     ap.add_argument("--ranks", type=int, nargs="+")
-    ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"))
+    ap.add_argument("--config", default=None, help="主播配置；不填时按 candidates.json 所在目录推导主播")
     ap.add_argument("--dry-run", action="store_true", help="只抽帧、拼提示词，存到 rerank_preview/，不调用接口")
     ap.add_argument("--rescore", action="store_true", help="不调大模型，按当前权重重算已有 rerank.json 的排序")
     args = ap.parse_args()
 
-    cfg = load_cfg(Path(args.config))
+    cpath = Path(args.candidates)
+    sess = cpath.parent
+    cfg = load_cfg(resolve_config(args.config, sess))
     rc = {"prompt": "rerank_v1", "model": "", "frames": 8, "width": 640, "context_before": 60, "workers": 3,
           "min_len": 30, "max_len": 180, "price_in": None, "price_out": None,
           **(cfg.get("rerank") or {})}
-    cpath = Path(args.candidates)
-    sess = cpath.parent
     data = json.loads(cpath.read_text(encoding="utf-8"))
-    dec_file = Path(os.environ.get("KIYA_MEMORY_DECISIONS") or REPO / "config" / "memory_decisions.json")
+    dec_file = Path(os.environ.get("KIYA_MEMORY_DECISIONS") or decisions_path())
     try:
         decisions = json.loads(dec_file.read_text(encoding="utf-8")) if dec_file.exists() else {}
     except ValueError:
@@ -130,7 +131,7 @@ def main() -> int:
         print("提示：这场还没有转写，精排只能看画面和弹幕，效果会差很多。先运行 transcribe.py")
     events = load_events(segs)
     delay = float(data.get("delay_seconds") or 0)
-    client = LLMClient(model=rc["model"] or None)
+    client = LLMClient(model=rc["model"] or None, cache_dir=sess.parent / "_llm_cache")
     print(f"精排 {len(cands)} 个候选，模型 {client.model}，提示词 {rc['prompt']}，每个 {rc['frames']} 张图；"
           f"精排记忆 {mem_version or '（无）'}")
 

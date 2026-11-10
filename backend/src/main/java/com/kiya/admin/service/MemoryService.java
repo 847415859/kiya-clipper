@@ -46,7 +46,7 @@ public class MemoryService {
     }
 
     private Path decisionsFile() {
-        return paths.configDir().resolve("memory_decisions.json");
+        return paths.streamerStateFile("memory_decisions.json");
     }
 
     private Map<String, Object> read(Path f) {

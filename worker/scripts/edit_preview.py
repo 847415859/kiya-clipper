@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from clipper.kcfg import load_cfg  # noqa: E402
+from clipper.streamer import resolve_config  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.edit import EditError, suggest_window, validate_window  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
@@ -41,7 +42,7 @@ def main() -> int:
     ap.add_argument("--start", type=float, help="素材范围起点（整场秒数）")
     ap.add_argument("--end", type=float)
     ap.add_argument("--height", type=int, default=480)
-    ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"))
+    ap.add_argument("--config", default=None, help="主播配置；不填时按 candidates.json 所在目录推导主播")
     args = ap.parse_args()
 
     cpath = Path(args.candidates)
@@ -90,7 +91,7 @@ def main() -> int:
         try:
             sub_cfg = load_config()
             _, style = get_style(None, sub_cfg)
-            streamer = load_cfg(Path(args.config)) if Path(args.config).exists() else {}
+            streamer = load_cfg(resolve_config(args.config, sess)) if resolve_config(args.config, sess).exists() else {}
             events = build_events(tr["sentences"], a, b, style, sub_cfg.get("corrections") or {})
             if events:
                 w, h = probe_size(parts[0][0])
