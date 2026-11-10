@@ -33,7 +33,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from clipper.asr import load_transcript  # noqa: E402
-from clipper.edit import EditError, default_edit, validate_edit  # noqa: E402
+from clipper.edit import EditError, default_edit, edit_window, validate_edit  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
 from clipper.subtitles import (STRIP_PUNCT, StyleError, apply_corrections, build_events, get_style,  # noqa: E402
                                load_config, lore_keywords, validate_style)
@@ -135,8 +135,9 @@ def main() -> int:
     except (EditError, ValueError) as e:
         print(f"剪辑脚本有误：{e}", file=sys.stderr)
         return 1
-    t_start = cand["clip_start"] + edit["trim"]["start"]
-    t_end = cand["clip_start"] + edit["trim"]["end"]
+    ws, _ = edit_window(edit, cand)            # 素材范围可以超出候选片段（按精排修正后的起止）
+    t_start = ws + edit["trim"]["start"]
+    t_end = ws + edit["trim"]["end"]
     dur = t_end - t_start
     print(f"#{args.rank} {hhmmss(t_start)}–{hhmmss(t_end)}（{dur:.1f} 秒），效果 {len(edit['items'])} 个，{args.height}p")
 

@@ -33,6 +33,7 @@ export const api = {
   candidates: (name) => http.get(`/api/sessions/${encodeURIComponent(name)}/candidates`),
   mark: (name, rank, body) => http.put(`/api/sessions/${encodeURIComponent(name)}/candidates/${rank}/mark`, body),
   clipUrl: (name, file) => `/api/sessions/${encodeURIComponent(name)}/clips/${encodeURIComponent(file)}`,
+  editPreviewUrl: (name, file) => `/api/sessions/${encodeURIComponent(name)}/edit-previews/${encodeURIComponent(file)}`,
   curveUrl: (name) => `/api/sessions/${encodeURIComponent(name)}/curve`,
   transcriptUrl: (name) => `/api/sessions/${encodeURIComponent(name)}/transcript`,
 

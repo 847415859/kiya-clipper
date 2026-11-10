@@ -3,11 +3,11 @@
     <div class="topbar">
       <el-button link @click="back">← 审核</el-button>
       <b>{{ name }} · #{{ rank }} 成片编辑</b>
-      <span class="muted">高峰 {{ hms(info.t) }}，片段 {{ fmt(info.clipLen) }}</span>
+      <span class="muted">高峰 {{ hms(info.t) }}，素材 {{ hms(winStart) }}–{{ hms(winEnd) }}（{{ fmt(info.clipLen) }}）</span>
       <span class="spacer" />
       <el-tag v-if="dirty" type="warning" size="small">未保存</el-tag>
       <el-tooltip content="让大模型按精排结果写一版花字 / 运镜 / 贴图，再手动微调" placement="bottom">
-        <el-button :loading="drafting" :disabled="!info.clip" @click="aiDraft">AI 初稿</el-button>
+        <el-button :loading="drafting" @click="aiDraft">AI 初稿</el-button>
       </el-tooltip>
       <el-button type="primary" :disabled="!dirty" :loading="saving" @click="save()">保存</el-button>
       <el-dropdown split-button type="success" :disabled="rendering" @click="render(480)" @command="render">
@@ -35,16 +35,27 @@
       <el-alert v-for="w in warnings" :key="w" :title="w" type="warning" :closable="false" show-icon class="warn" />
     </div>
 
-    <div v-if="!loading && !info.clip" class="empty-all">
-      这个片段还没剪，编辑需要先有审核片段做预览。
-      <el-button type="primary" :loading="cutting" @click="cutClip">剪切这个片段（480p）</el-button>
+    <div v-if="!loading && !videoSrc" class="empty-all">
+      <template v-if="sameAsCandidate">
+        这个片段还没剪，编辑需要先有审核片段做预览。
+        <el-button type="primary" :loading="cutting" @click="cutClip">剪切这个片段（480p）</el-button>
+      </template>
+      <template v-else>
+        素材范围 {{ hms(winStart) }}–{{ hms(winEnd) }} 超出了审核片段（按精排建议的起止），需要先剪一段预览视频。
+        <el-button type="primary" :loading="cutting" @click="makePreview">生成预览（480p）</el-button>
+        <el-button link @click="resetWindow">只用审核片段</el-button>
+      </template>
     </div>
 
     <div v-else class="body">
       <section class="left">
         <div ref="stage" class="stage" @pointerdown.self="selected = null">
-          <video ref="video" :src="info.clip ? api.clipUrl(name, info.clip) : ''" :style="cameraStyle" preload="auto"
+          <video ref="video" :src="videoSrc" :style="cameraStyle" preload="auto"
                  @loadedmetadata="onMeta" @timeupdate="syncTime" @play="playing = true; tick()" @pause="playing = false" />
+          <div v-if="windowStale" class="stale">
+            素材范围改了，画面还是旧的。
+            <el-button size="small" type="primary" :loading="cutting" @click="makePreview">保存并生成新预览</el-button>
+          </div>
           <div class="overlay" @pointerdown.self="selected = null">
             <template v-for="it in visibleItems" :key="it.id">
               <div v-if="it.type === 'text'" class="ov text" :class="{ sel: it.id === selected }" :style="textStyle(it)"
@@ -80,6 +91,17 @@
           </div>
         </div>
 
+        <div class="trim">
+          <span class="muted">素材范围</span>
+          <el-button-group size="small">
+            <el-button @click="shiftWindow(-10, 0)">往前多 10 秒</el-button>
+            <el-button @click="shiftWindow(10, 0)">前面少 10 秒</el-button>
+            <el-button @click="shiftWindow(0, -10)">后面少 10 秒</el-button>
+            <el-button @click="shiftWindow(0, 10)">往后多 10 秒</el-button>
+          </el-button-group>
+          <span class="muted">审核片段 {{ hms(info.candidate.start) }}–{{ hms(info.candidate.end) }}</span>
+          <el-button v-if="!sameAsCandidate" link size="small" @click="resetWindow">还原成审核片段</el-button>
+        </div>
         <div class="trim">
           <span class="muted">成片范围</span>
           <el-slider v-model="trimRange" range :min="0" :max="info.clipLen || 60" :step="0.1" :format-tooltip="fmt" />
@@ -234,8 +256,9 @@ const pub = reactive({ bvid: '', completion: '', followers: '', saved: '' })
 const warnings = ref([])
 const generatedBy = ref('')
 const aiNote = ref('')
-const info = reactive({ clipLen: 60, clip: null, t: 0, finals: [], llm: null, exists: false })
-const edit = reactive({ trim: { start: 0, end: 60 }, subtitles: { enabled: true }, items: [] })
+const info = reactive({ clipLen: 60, clip: null, preview: null, t: 0, finals: [], llm: null, exists: false,
+  candidate: { start: 0, end: 60 }, videoWindow: null })
+const edit = reactive({ window: { start: 0, end: 60 }, trim: { start: 0, end: 60 }, subtitles: { enabled: true }, items: [] })
 const styleId = ref(null)
 const styles = ref([])
 const stickers = ref([])
@@ -253,6 +276,12 @@ let loaded = false
 let raf = 0
 let resizeObs = null
 
+const winStart = computed(() => edit.window.start)
+const winEnd = computed(() => edit.window.end)
+const sameAsCandidate = computed(() => Math.abs(edit.window.start - info.candidate.start) < 0.05 && Math.abs(edit.window.end - info.candidate.end) < 0.05)
+const videoSrc = ref('')
+// 画面对应的素材范围和当前编辑的不一致（改了素材范围还没重新剪预览）
+const windowStale = computed(() => !!info.videoWindow && (Math.abs(info.videoWindow.start - edit.window.start) > 0.05 || Math.abs(info.videoWindow.end - edit.window.end) > 0.05))
 const selItem = computed(() => edit.items.find((i) => i.id === selected.value) || null)
 const visibleItems = computed(() => edit.items.filter((i) => i.type !== 'zoom' && time.value >= i.start && time.value < i.start + i.duration))
 const outsideTrim = computed(() => time.value < edit.trim.start || time.value > edit.trim.end)
@@ -452,6 +481,7 @@ async function delSticker(n) {
 
 // ---------------------------------------------------------------- 加载 / 保存 / 渲染
 function apply(e) {
+  if (e.window) Object.assign(edit.window, { start: e.window.start, end: e.window.end })
   edit.trim.start = e.trim.start
   edit.trim.end = e.trim.end
   edit.subtitles.enabled = e.subtitles ? e.subtitles.enabled !== false : true
@@ -466,7 +496,11 @@ async function load() {
   loaded = false
   try {
     const r = await api.getEdit(name.value, rank.value)
-    Object.assign(info, { clipLen: r.clipLen, clip: r.clip, t: r.t, finals: r.finals || [], llm: r.llm || null, exists: !!r.exists })
+    Object.assign(info, { clipLen: r.clipLen, clip: r.clip, preview: r.preview || null, t: r.t, finals: r.finals || [],
+      llm: r.llm || null, exists: !!r.exists, candidate: r.candidate || { start: 0, end: r.clipLen } })
+    info.videoWindow = null
+    videoSrc.value = ''
+    pickVideo()
     apply(r.edit)
     styles.value = await api.styles()
     loadPublish()
@@ -485,7 +519,7 @@ watch([edit, styleId], () => { if (loaded) dirty.value = true }, { deep: true })
 async function save(quiet) {
   saving.value = true
   try {
-    const body = { version: 1, trim: { ...edit.trim }, subtitles: { enabled: edit.subtitles.enabled }, items: edit.items }
+    const body = { version: 1, window: { ...edit.window }, trim: { ...edit.trim }, subtitles: { enabled: edit.subtitles.enabled }, items: edit.items }
     if (generatedBy.value) Object.assign(body, { generated_by: generatedBy.value, note: aiNote.value })
     const r = await api.saveEdit(name.value, rank.value, body, edit.subtitles.enabled ? styleId.value : null)
     warnings.value = r.warnings || []
@@ -582,6 +616,67 @@ async function aiDraft() {
     ElMessage.success('AI 初稿已载入，检查后记得渲染预览')
   } finally {
     drafting.value = false
+  }
+}
+
+// 选画面：素材范围 = 审核片段时用审核片段，否则用按素材范围剪好的预览；都没有就保留当前画面（提示需要重新剪）
+function pickVideo() {
+  const w = { start: edit.window.start, end: edit.window.end }
+  if (sameAsCandidate.value && info.clip) {
+    videoSrc.value = api.clipUrl(name.value, info.clip)
+    info.videoWindow = w
+  } else if (info.preview && info.preview === previewName(w)) {
+    videoSrc.value = api.editPreviewUrl(name.value, info.preview)
+    info.videoWindow = w
+  }
+}
+
+function previewName(w) {
+  return `${String(rank.value).padStart(2, '0')}_${w.start.toFixed(1)}_${w.end.toFixed(1)}.mp4`
+}
+
+// 改素材范围：所有时间都相对素材范围开头，开头往前挪多少，效果和成片范围就往后挪多少，画面位置不变
+function setWindow(start, end) {
+  start = Math.round(Math.max(0, start) * 10) / 10
+  end = Math.round(end * 10) / 10
+  const len = end - start
+  if (len < 5 || len > 300) return ElMessage.warning('素材范围要在 5 秒到 5 分钟之间')
+  const d = Math.round((edit.window.start - start) * 10) / 10
+  const outside = []
+  for (const it of edit.items) it.start = round(it.start + d)
+  edit.items.splice(0, edit.items.length, ...edit.items.filter((it) => (it.start >= 0 && it.start < len) || !outside.push(it)))
+  edit.trim.start = clamp(round(edit.trim.start + d), 0, len)
+  edit.trim.end = clamp(round(edit.trim.end + d), 0, len)
+  if (edit.trim.end - edit.trim.start < 1) Object.assign(edit.trim, { start: 0, end: len })
+  Object.assign(edit.window, { start, end })
+  info.clipLen = len
+  pickVideo()
+  if (outside.length) ElMessage.warning(`有 ${outside.length} 个效果落在新的素材范围之外，已删掉`)
+}
+
+function shiftWindow(ds, de) {
+  setWindow(edit.window.start + ds, edit.window.end + de)
+}
+
+function resetWindow() {
+  setWindow(info.candidate.start, info.candidate.end)
+}
+
+async function makePreview() {
+  cutting.value = true
+  try {
+    if (dirty.value || !info.exists) await save(true)
+    if (sameAsCandidate.value) {
+      await load()
+      if (!info.clip) await cutClip()
+      return
+    }
+    const j = await api.submitJob('EDIT_PREVIEW', name.value, { rank: rank.value, start: edit.window.start, end: edit.window.end })
+    const s = await waitJob(j.id, 3000)
+    if (s.status !== 'SUCCESS') return ElMessage.error(`预览没剪出来：${s.summary || s.status}（详情见任务页）`)
+    await load()
+  } finally {
+    cutting.value = false
   }
 }
 
@@ -685,4 +780,5 @@ onBeforeUnmount(() => {
 .ai-bar .warn { width: 100%; padding: 4px 10px; }
 .publish { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--el-border-color); }
 .publish .muted { width: 100%; font-size: 12px; }
+.stale { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 5; background: rgba(0, 0, 0, 0.72); color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 13px; display: flex; gap: 8px; align-items: center; }
 </style>

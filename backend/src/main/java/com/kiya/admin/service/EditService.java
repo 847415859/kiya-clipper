@@ -30,6 +30,8 @@ import com.kiya.admin.entity.SubtitleStyle;
 @Service
 public class EditService {
     private static final Pattern FINAL = Pattern.compile("^[0-9]{2,3}_[0-9\\-]{1,16}_[0-9]{3,4}p\\.mp4$");
+    private static final Pattern PREVIEW = Pattern.compile("^([0-9]{2,3})_([0-9]+\\.[0-9])_([0-9]+\\.[0-9])\\.mp4$");
+    static final double MAX_WINDOW = 300;
 
     private final WorkerPaths paths;
     private final ProcessRunner runner;
@@ -79,10 +81,39 @@ public class EditService {
         return paths.sessionDir(session).resolve("edits").resolve(String.format("%02d.json", rank));
     }
 
-    /** 编辑器初始化需要的一切：剪辑脚本（没有就给默认）、片段长度、审核用的片段文件、已渲染的成片。 */
+    /** 默认素材范围 = 候选片段 ∪ 精排修正后的起止（前后各留 5 秒），与 worker 的 clipper/edit.py suggest_window 一致。 */
+    static double[] suggestWindow(double cs, double ce, Map<String, Object> llm) {
+        double a = cs;
+        double b = ce;
+        if (llm != null && llm.get("refined") instanceof Map<?, ?> r) {
+            double rs = ((Number) r.get("start")).doubleValue();
+            double re = ((Number) r.get("end")).doubleValue();
+            a = Math.min(a, rs - 5);
+            b = Math.max(b, re + 5);
+            if (b - a > MAX_WINDOW) {
+                a = rs - 5;
+                b = a + MAX_WINDOW;
+                if (b < re) {
+                    a = rs;
+                    b = rs + MAX_WINDOW;
+                }
+            }
+        }
+        a = Math.max(0, a);
+        return new double[] {round1(a), round1(Math.max(b, a + 5))};
+    }
+
+    /** 一位小数：预览文件名在 Java / Python 两边格式化结果一致。 */
+    private static double round1(double x) {
+        return Math.round(x * 10) / 10.0;
+    }
+
+    /** 编辑器初始化需要的一切：剪辑脚本（没有就给默认）、素材范围、预览视频、已渲染的成片。
+     *  所有时间相对“素材范围”开头；素材范围可以超出候选片段（按精排修正后的起止，成片从录像重新剪）。 */
     public Map<String, Object> get(String session, int rank) {
         JsonNode c = candidate(session, rank);
-        double clipLen = c.path("clip_end").asDouble() - c.path("clip_start").asDouble();
+        double cs = c.path("clip_start").asDouble();
+        double ce = c.path("clip_end").asDouble();
         Map<String, Object> edit;
         Path f = editFile(session, rank);
         try {
@@ -91,32 +122,48 @@ public class EditService {
             edit = null;
         }
         Map<String, Object> llm = rerank(session, rank);
+        double ws;
+        double we;
+        if (edit != null && edit.get("window") instanceof Map<?, ?> w) {
+            ws = ((Number) w.get("start")).doubleValue();
+            we = ((Number) w.get("end")).doubleValue();
+        } else if (edit != null) {                                   // 旧脚本：素材范围就是候选片段
+            ws = cs;
+            we = ce;
+        } else {
+            double[] sw = suggestWindow(cs, ce, llm);
+            ws = sw[0];
+            we = sw[1];
+        }
+        double clipLen = we - ws;
         if (edit == null) {
-            double ts = 0.0;
-            double te = clipLen;
-            if (llm != null && llm.get("refined") instanceof Map<?, ?> r) {      // 默认用精排修正后的起止（限制在片段内）
-                double cs = c.path("clip_start").asDouble();
-                double rs = ((Number) r.get("start")).doubleValue() - cs;
-                double re = ((Number) r.get("end")).doubleValue() - cs;
-                rs = Math.max(0, Math.min(rs, clipLen));
-                re = Math.max(0, Math.min(re, clipLen));
+            double ts = cs - ws;
+            double te = ce - ws;
+            if (llm != null && llm.get("refined") instanceof Map<?, ?> r) {      // 默认成片范围 = 精排修正后的起止
+                double rs = Math.max(0, ((Number) r.get("start")).doubleValue() - ws);
+                double re = Math.min(clipLen, ((Number) r.get("end")).doubleValue() - ws);
                 if (re - rs >= 5) {
-                    ts = Math.round(rs * 10) / 10.0;
-                    te = Math.round(re * 10) / 10.0;
+                    ts = rs;
+                    te = re;
                 }
             }
             edit = new LinkedHashMap<>();
             edit.put("version", 1);
-            edit.put("trim", Map.of("start", ts, "end", te));
+            edit.put("window", Map.of("start", ws, "end", we));
+            edit.put("trim", Map.of("start", Math.round(ts * 10) / 10.0, "end", Math.round(te * 10) / 10.0));
             edit.put("subtitles", Map.of("enabled", true));
             edit.put("items", List.of());
         }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("edit", edit);
         out.put("clipLen", clipLen);
-        out.put("clipStart", c.path("clip_start").asDouble());
+        out.put("clipStart", ws);                                    // 素材范围开头（整场秒数）
+        out.put("window", Map.of("start", ws, "end", we));
+        out.put("candidate", Map.of("start", cs, "end", ce));
         out.put("t", c.path("t").asDouble());
+        // 预览视频：素材范围就是候选片段时前端用审核片段（clip），否则用 edit_preview.py 按素材范围剪好的（preview）
         out.put("clip", findClip(session, rank));
+        out.put("preview", findPreview(session, rank, ws, we));
         out.put("finals", finals(session, rank));
         out.put("llm", llm);
         out.put("exists", Files.exists(f));
@@ -126,7 +173,7 @@ public class EditService {
     /** 保存：选了字幕样式就把样式整份写进脚本（以后改样式不影响已编排好的片段）；校验交给 worker。 */
     public Map<String, Object> save(String session, int rank, Map<String, Object> edit, Long styleId) {
         JsonNode c = candidate(session, rank);
-        double clipLen = c.path("clip_end").asDouble() - c.path("clip_start").asDouble();
+        double clipLen = c.path("clip_end").asDouble() - c.path("clip_start").asDouble();   // 有 window 时 worker 按它校验
         Map<String, Object> e = new LinkedHashMap<>(edit == null ? Map.of() : edit);
         Object subsRaw = e.get("subtitles");
         Map<String, Object> subs = new LinkedHashMap<>();
@@ -227,6 +274,19 @@ public class EditService {
             throw ApiException.badRequest("文件名不合法");
         }
         return WorkerPaths.inside(paths.output(), paths.sessionDir(session).resolve("final").resolve(file));
+    }
+
+    private String findPreview(String session, int rank, double ws, double we) {
+        String name = String.format(java.util.Locale.ROOT, "%02d_%.1f_%.1f.mp4", rank, round1(ws), round1(we));
+        Path f = paths.sessionDir(session).resolve("edit_preview").resolve(name);
+        return Files.exists(f) ? name : null;
+    }
+
+    public Path previewFile(String session, String file) {
+        if (file == null || !PREVIEW.matcher(file).matches()) {
+            throw ApiException.badRequest("文件名不合法");
+        }
+        return WorkerPaths.inside(paths.output(), paths.sessionDir(session).resolve("edit_preview").resolve(file));
     }
 
     private String findClip(String session, int rank) {

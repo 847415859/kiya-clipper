@@ -56,6 +56,7 @@ public class JobService {
             Map.entry("EVAL_LOG", "评测并记录"),
             Map.entry("EVAL_RERANK", "精排对比"),
             Map.entry("AUTO_EDIT", "AI 剪辑初稿"),
+            Map.entry("EDIT_PREVIEW", "剪编辑预览"),
             Map.entry("RENDER", "渲染成片"));
 
     private final JobMapper mapper;
@@ -211,7 +212,7 @@ public class JobService {
     // ------------------------------------------------------------------ 执行
     private static boolean needsSession(String type) {
         return switch (type) {
-            case "TRANSCRIBE", "SCREEN", "RERANK", "RESCORE", "CUT", "PIPELINE", "RENDER", "AUTO_EDIT" -> true;
+            case "TRANSCRIBE", "SCREEN", "RERANK", "RESCORE", "CUT", "PIPELINE", "RENDER", "AUTO_EDIT", "EDIT_PREVIEW" -> true;
             default -> false;
         };
     }
@@ -236,6 +237,7 @@ public class JobService {
             case "LEARN" -> steps.add(runner.command("learn.py",
                     Boolean.TRUE.equals(p.get("noFetch")) ? List.of("--no-fetch") : List.of()));
             case "AUTO_EDIT" -> steps.add(autoEdit(session, p));
+            case "EDIT_PREVIEW" -> steps.add(editPreview(session, p));
             case "EVAL_RERANK" -> steps.add(runner.command("evaluate.py", List.of("--rerank")));
             case "HOTWORDS_SYNC" -> steps.add(runner.command("hotwords.py", List.of("sync")));
             case "EVALUATE" -> steps.add(runner.command("evaluate.py", List.of()));
@@ -335,6 +337,37 @@ public class JobService {
             a.add("--force");
         }
         return runner.command("autoedit.py", a);
+    }
+
+    private List<String> editPreview(String session, Map<String, Object> p) {
+        int rank = intParam(p, "rank", 0);
+        if (rank < 1 || rank > 999) {
+            throw ApiException.badRequest("请指定序号");
+        }
+        String cand = paths.sessionDir(session).resolve("candidates.json").toString();
+        List<String> a = new ArrayList<>(List.of(cand, "--rank", String.valueOf(rank)));
+        if (p.get("start") != null && p.get("end") != null) {
+            double s0 = numParam(p, "start");
+            double e0 = numParam(p, "end");
+            if (s0 < 0 || e0 - s0 < 5 || e0 - s0 > 300) {
+                throw ApiException.badRequest("素材范围要在 5 秒到 5 分钟之间");
+            }
+            a.addAll(List.of("--start", String.format(java.util.Locale.ROOT, "%.1f", s0),
+                    "--end", String.format(java.util.Locale.ROOT, "%.1f", e0)));
+        }
+        return runner.command("edit_preview.py", a);
+    }
+
+    private static double numParam(Map<String, Object> p, String k) {
+        Object v = p.get(k);
+        if (v instanceof Number n) {
+            return n.doubleValue();
+        }
+        try {
+            return Double.parseDouble(String.valueOf(v));
+        } catch (NumberFormatException e) {
+            throw ApiException.badRequest(k + " 不合法");
+        }
     }
 
     private List<String> render(String session, Map<String, Object> p) {

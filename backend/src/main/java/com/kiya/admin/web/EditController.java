@@ -52,6 +52,17 @@ public class EditController {
         return edits.finals(name, null);
     }
 
+    /** 成片编辑器的预览视频（素材范围超出候选片段时，edit_preview.py 剪的 480p）。 */
+    @GetMapping("/api/sessions/{name}/edit-previews/{file}")
+    public ResponseEntity<Resource> previewVideo(@PathVariable String name, @PathVariable String file) {
+        Path p = edits.previewFile(name, file);
+        if (!Files.exists(p)) {
+            throw ApiException.notFound("预览视频不存在");
+        }
+        return ResponseEntity.ok().contentType(MediaType.parseMediaType("video/mp4"))
+                .cacheControl(CacheControl.noCache()).body(new FileSystemResource(p));
+    }
+
     @GetMapping("/api/sessions/{name}/finals/{file}")
     public ResponseEntity<Resource> finalVideo(@PathVariable String name, @PathVariable String file) {
         Path p = edits.finalFile(name, file);

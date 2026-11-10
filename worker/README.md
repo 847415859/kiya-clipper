@@ -272,7 +272,7 @@ python scripts/autoedit.py output/<场次>/candidates.json --rank 3
 python scripts/render.py output/<场次>/candidates.json --rank 3 --height 480   # 先 480p 看效果
 ```
 
-编辑页“AI 初稿”可以先让大模型排一版再微调（见上一节）。剪辑脚本在 `output/<场次>/edits/<序号>.json`（字段见 `schema/edit_script.schema.json`，校验在 `clipper/edit.py`），成片在 `output/<场次>/final/`。渲染器安装与性能说明见 [renderer/README.md](../renderer/README.md)。
+编辑页“AI 初稿”可以先让大模型排一版再微调（见上一节）。成片不限于 60 秒的审核片段：剪辑脚本的 `window`（素材范围）默认取“审核片段 ∪ 精排修正后的起止”，前后各留 5 秒；编辑页可以往前、往后扩，渲染时直接从录像重新剪。素材范围超出审核片段时，编辑器的预览视频由 `scripts/edit_preview.py` 另剪一段（480p，带字幕）。录像被同步脚本移走后就剪不了了，要先从 OSS 拉回来。剪辑脚本在 `output/<场次>/edits/<序号>.json`（字段见 `schema/edit_script.schema.json`，校验在 `clipper/edit.py`），成片在 `output/<场次>/final/`。渲染器安装与性能说明见 [renderer/README.md](../renderer/README.md)。
 
 ## 调参（config/kiya.yaml）
 

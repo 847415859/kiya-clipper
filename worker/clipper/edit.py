@@ -14,6 +14,8 @@ STICKER_PRESETS = ("pop", "slide", "shake", "bounce", "fade", "slam")
 COLOR = re.compile(r"^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 ASSET = re.compile(r"^[\w\-.一-鿿]{1,80}\.(png|jpg|jpeg|gif|webp)$", re.I)
 MAX_ITEMS = 100
+MAX_WINDOW = 300.0       # 素材范围最长 5 分钟（成片最长 3 分钟，留出前后余量）
+MIN_WINDOW = 5.0
 
 
 class EditError(ValueError):
@@ -77,10 +79,46 @@ def validate_item(it: dict, clip_len: float) -> dict:
     return out
 
 
+def validate_window(w) -> dict:
+    """素材范围（整场秒数）。可以超出粗筛的候选片段，成片从录像里重新剪。"""
+    if not isinstance(w, dict):
+        raise EditError("window 格式不对")
+    start = _num(w, "start", 0, 24 * 3600)
+    end = _num(w, "end", 0, 24 * 3600)
+    if not MIN_WINDOW <= end - start <= MAX_WINDOW:
+        raise EditError(f"素材范围要在 {MIN_WINDOW:.0f} 秒到 {MAX_WINDOW:.0f} 秒之间")
+    return {"start": round(start, 1), "end": round(end, 1)}      # 一位小数：预览文件名在 Java / Python 两边一致
+
+
+def edit_window(edit: dict, cand: dict) -> tuple[float, float]:
+    """剪辑脚本的素材范围；旧脚本没有 window 就是候选片段本身。"""
+    w = edit.get("window")
+    if isinstance(w, dict) and "start" in w and "end" in w:
+        return float(w["start"]), float(w["end"])
+    return float(cand["clip_start"]), float(cand["clip_end"])
+
+
+def suggest_window(cand: dict, refined: dict | None, pad: float = 5.0) -> dict:
+    """默认素材范围 = 候选片段 ∪ 精排修正后的起止（前后各留 pad 秒，方便手动微调），最长 MAX_WINDOW。"""
+    a, b = float(cand["clip_start"]), float(cand["clip_end"])
+    if refined:
+        rs, re_ = float(refined["start"]), float(refined["end"])
+        a, b = min(a, rs - pad), max(b, re_ + pad)
+        if b - a > MAX_WINDOW:                      # 太长：以精排的起止为准
+            a, b = rs - pad, rs - pad + MAX_WINDOW
+            if b < re_:
+                a, b = rs, rs + MAX_WINDOW
+    a = max(0.0, a)
+    return {"start": round(a, 1), "end": round(max(b, a + MIN_WINDOW), 1)}
+
+
 def validate_edit(raw: dict, clip_len: float) -> dict:
-    """校验并补默认值。clip_len = 候选片段长度（秒）。"""
+    """校验并补默认值。时间都相对素材范围开头；有 window 时 clip_len 取素材范围长度，否则是候选片段长度。"""
     if not isinstance(raw, dict):
         raise EditError("剪辑脚本格式不对")
+    window = validate_window(raw["window"]) if raw.get("window") is not None else None
+    if window:
+        clip_len = window["end"] - window["start"]
     trim = raw.get("trim") or {}
     start = _num(trim, "start", 0, clip_len, 0.0)
     end = _num(trim, "end", 0, clip_len, clip_len)
@@ -96,6 +134,8 @@ def validate_edit(raw: dict, clip_len: float) -> dict:
     out_items.sort(key=lambda i: i["start"])
     out = {"version": 1, "trim": {"start": start, "end": end},
            "subtitles": {"enabled": bool(subs.get("enabled", True))}, "items": out_items}
+    if window:
+        out["window"] = window
     if isinstance(subs.get("style"), dict):          # 后台保存时把选中的样式整份写进来
         out["subtitles"]["style"] = subs["style"]
         out["subtitles"]["style_name"] = str(subs.get("style_name") or "")[:64]

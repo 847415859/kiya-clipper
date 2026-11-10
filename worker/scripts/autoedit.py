@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.context import danmaku_lines, load_events, profile, speech_lines  # noqa: E402
-from clipper.edit import EditError, enforce_density, validate_edit, validate_item  # noqa: E402
+from clipper.edit import EditError, enforce_density, suggest_window, validate_edit, validate_item  # noqa: E402
 from clipper.llm import LLMClient, fill, load_prompt  # noqa: E402
 
 COLORS = "#FFE14D|#FFFFFF|#FF7EB6|#7FE3FF"
@@ -73,8 +73,7 @@ def main() -> int:
     if dst.exists() and not args.force:
         print(f"{dst} 已存在（手动编辑过），不覆盖；要重新生成加 --force", file=sys.stderr)
         return 1
-    a, b = c["clip_start"], c["clip_end"]
-    clip_len = b - a
+    ca = c["clip_start"]
     tr = load_transcript(sess / "transcript.json")
     sents = tr["sentences"] if tr else []
     rr = None
@@ -83,8 +82,11 @@ def main() -> int:
         rr = next((r for r in json.loads(rpath.read_text(encoding="utf-8"))["candidates"] if r["rank"] == args.rank), None)
     llm = (rr or {}).get("llm") or {}
     refined = (rr or {}).get("refined")
-    t_start = max(0.0, refined["start"] - a) if refined else 0.0
-    t_end = min(clip_len, refined["end"] - a) if refined else clip_len
+    window = suggest_window(c, refined)              # 素材范围：候选片段 ∪ 精排修正后的起止
+    a, b = window["start"], window["end"]
+    clip_len = b - a
+    t_start = max(0.0, refined["start"] - a) if refined else ca - a
+    t_end = min(clip_len, refined["end"] - a) if refined else c["clip_end"] - a
     if t_end - t_start < 5:
         t_start, t_end = 0.0, clip_len
     story = llm.get("story") or {}
@@ -94,7 +96,7 @@ def main() -> int:
     system = fill(system, max_items=ac["max_items"])
     text = fill(user, profile=profile(cfg), window=f"{clip_len:.0f}", trim_start=f"{t_start:.1f}", trim_end=f"{t_end:.1f}",
                 what_happened=llm.get("what_happened") or "（没有精排结论）",
-                punch=(f"{llm['punch_time']:.1f}" if llm.get("punch_time", -1) >= 0 else "（未知）"),
+                punch=(f"{ca + llm['punch_time'] - a:.1f}" if llm.get("punch_time", -1) >= 0 else "（未知）"),
                 setup=story.get("setup") or "—", punchline=story.get("punch") or "—", reaction=story.get("reaction") or "—",
                 speech=speech_lines(sents, a, b, a) if sents else "（这场还没有转写）",
                 danmaku=dm, stickers="\n".join(stickers) or "（贴图库是空的，不要用贴图）", colors=COLORS)
@@ -119,7 +121,7 @@ def main() -> int:
     if out.trim and 0 <= out.trim.start < out.trim.end <= clip_len and out.trim.end - out.trim.start >= 5:
         trim = {"start": round(out.trim.start, 2), "end": round(out.trim.end, 2)}
     items = [i for i in items if trim["start"] <= i["start"] < trim["end"]]
-    edit = {"version": 1, "trim": trim, "subtitles": {"enabled": True}, "items": items,
+    edit = {"version": 1, "window": window, "trim": trim, "subtitles": {"enabled": True}, "items": items,
             "generated_by": f"{version} / {client.model}", "note": out.note[:200]}
     edit, dropped = enforce_density(edit)
     if len(edit["items"]) > int(ac["max_items"]):
