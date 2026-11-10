@@ -76,6 +76,11 @@ def validate_item(it: dict, clip_len: float) -> dict:
         out.update(asset=asset, preset=_choice(it, "preset", STICKER_PRESETS, "pop"), x=_num(it, "x", 0, 1, 0.8),
                    y=_num(it, "y", 0, 1, 0.65), scale=_num(it, "scale", 0.03, 1, 0.22),
                    rotate=_num(it, "rotate", -45, 45, 0))
+    meme = it.get("meme")                       # 梗库里的梗（可选，只有花字 / 贴图能挂）
+    if t in ("text", "sticker") and isinstance(meme, str) and meme.strip():
+        out["meme"] = meme.strip()[:40]
+        if isinstance(it.get("meme_reason"), str) and it["meme_reason"].strip():
+            out["meme_reason"] = it["meme_reason"].strip()[:80]
     return out
 
 

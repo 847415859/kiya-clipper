@@ -257,3 +257,60 @@ def test_check_triggers_live_screen_on_interval(env, tmp_path, monkeypatch):
     km.check(e)                                                      # 下播
     s = state(e)
     assert s["live"] is False and not s.get("live_screen_at") and "live_screen" not in s["alerts"]
+
+
+def test_run_meme_refresh(tmp_path, monkeypatch):
+    """梗库每日刷新：调用 memes.py refresh，取“梗库共”那一行当摘要；脚本不在就跳过。"""
+    sys.path.insert(0, str(HERE))
+    import kiya_monitor as km
+    monkeypatch.setattr(km, "REPO", tmp_path)
+    assert km.run_meme_refresh({})[0] == "skip"
+    worker = tmp_path / "worker"
+    (worker / ".venv" / "bin").mkdir(parents=True)
+    (worker / "scripts").mkdir()
+    (worker / "scripts" / "memes.py").write_text("")
+    log = tmp_path / "args.txt"
+    py = worker / ".venv" / "bin" / "python"
+
+    def fake(script: str, code: int = 0):
+        py.write_text(f'#!/bin/sh\necho "$@" > "{log}"\n{script}\nexit {code}\n'); py.chmod(0o755)
+
+    fake('echo "热门：300 个标题"\necho "梗库共 12 条：已启用 3（其中降温 0）、待确认 9、已停用 0、黑名单 0"')
+    st, msg = km.run_meme_refresh({})
+    assert st == "ok" and msg.startswith("梗库共 12 条") and log.read_text().strip().endswith("refresh")
+    fake('echo "boom" >&2', code=1)
+    assert km.run_meme_refresh({}) == ("error", "boom")
+
+
+def test_check_meme_refresh_once_a_day_not_while_live(env, monkeypatch):
+    """默认开；直播中不跑；每个日历日一次，失败当天不重试、告警一次；KIYA_MEME_REFRESH=0 关闭。"""
+    sys.path.insert(0, str(HERE))
+    import kiya_monitor as km
+    calls, pushes, result = [], [], [("ok", "梗库共 1 条")]
+    monkeypatch.setattr(km, "run_meme_refresh", lambda e: calls.append(1) or result[0])
+    monkeypatch.setattr(km, "notify", lambda e, title, body, dry=False: pushes.append(title))
+    monkeypatch.setattr(km, "live_status", lambda e: (1, "测试"))
+    monkeypatch.setattr(km, "service_active", lambda e: True)
+    monkeypatch.setattr(km, "sync_age_hours", lambda p: None)
+    e = {**env, "KIYA_AUTO_ANALYZE": "0"}
+    km.check(e)                                                      # 开播：直播中不跑
+    km.check(e)
+    assert calls == []
+    monkeypatch.setattr(km, "live_status", lambda e: (0, ""))
+    km.check(e)                                                      # 下播后跑一次
+    assert len(calls) == 1
+    km.check(e)
+    assert len(calls) == 1                                           # 同一天不重复
+    set_state(e, meme_refresh_day="2000-01-01")
+    result[0] = ("error", "炸了")
+    km.check(e)
+    assert len(calls) == 2 and any("梗库刷新失败" in t for t in pushes)
+    km.check(e)
+    assert len(calls) == 2                                           # 失败当天不重试
+    set_state(e, meme_refresh_day="2000-01-01")
+    result[0] = ("ok", "梗库共 2 条")
+    km.check(e)
+    assert len(calls) == 3 and any("已恢复" in t for t in pushes)
+    set_state(e, meme_refresh_day="2000-01-01")
+    km.check({**e, "KIYA_MEME_REFRESH": "0"})
+    assert len(calls) == 3

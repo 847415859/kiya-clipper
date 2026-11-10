@@ -107,9 +107,24 @@ publish:
 
 # 剪辑脚本初稿（scripts/autoedit.py）
 autoedit:
-  prompt: edit_v2            # v2 = v1 + 剪辑师口味（人工改过的初稿攒够 memory.min_edits 条才生效）
+  prompt: edit_v3            # v3 = v2 + 梗库（只用后台确认过的梗；v2 = v1 + 剪辑师口味，人工改过的初稿攒够 memory.min_edits 条才生效）
   model: ""
   max_items: 8               # 一条切片最多几个效果
+
+# 梗库（scripts/memes.py、clipper/memes.py）：B站热门每天抓一次标题 / 热搜，提炼高频短语；新梗要后台确认含义和尺度后才会被剪辑初稿用
+memes:
+  embed_model: ""            # 文本向量模型，空 = 环境变量 DASHSCOPE_EMBED_MODEL 或 text-embedding-v3；没有 Key 时退回字面匹配
+  hot_min_titles: 3          # 一个短语至少在几个热门标题里出现，才算热词
+  hot_pending_max: 60        # 每次最多放多少个新的热词进“待确认”
+  min_heat: 0.5              # 热门梗近 7 天加权日均出现次数低于它算“降温”，检索权重 ×0.3（弹幕 / 转写来的：近 14 天不到 1 次）
+  max_level: 2               # 尺度：1 大众 2 圈层 3 谨慎；大于它的不自动用
+  retrieve_k: 10             # 每条给大模型几个候选
+  min_sim: 0.35              # 向量相似度低于它不给（宁缺毋滥）
+  min_lexical: 0.2           # 没有向量、退回字面匹配时的门槛
+  max_per_clip: 2            # 一条切片最多用几个梗
+  min_gap: 15                # 两个梗至少隔几秒
+  min_uses: 5                # 一个梗被初稿用过、人工看过终稿的次数达到它，才看保留率
+  low_retention: 0.4         # 保留率低于它降权 ×0.5（人总是把这个梗删了）
 
 # 情绪词典：命中即计入“情绪词占比”。按 VTuber 圈和 kiya 粉丝的梗持续扩充
 emotion_words:

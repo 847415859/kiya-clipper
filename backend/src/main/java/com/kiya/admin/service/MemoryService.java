@@ -29,6 +29,8 @@ public class MemoryService {
     private static final Pattern UID = Pattern.compile("^[0-9]{1,20}$");
     private static final Pattern EXAMPLE = Pattern.compile("^[0-9A-Za-z_\\-]{1,64}#[0-9]{1,3}$");
     private static final List<String> LORE_KINDS = List.of("catchphrase", "topic", "meme");
+    private static final List<String> MEME_STATUS = List.of("pending", "approved", "disabled");
+    private static final List<String> MEME_FORMS = List.of("text", "sticker");
     private static final List<String> WEIGHT_KEYS = List.of("llm", "screen", "not_funny");
 
     private final WorkerPaths paths;
@@ -76,6 +78,8 @@ public class MemoryService {
         d.putIfAbsent("published", new LinkedHashMap<>());
         d.putIfAbsent("promoted_lore", new ArrayList<>());
         d.putIfAbsent("taboo", new ArrayList<>());
+        d.putIfAbsent("memes", new LinkedHashMap<>());
+        d.putIfAbsent("meme_blacklist", new ArrayList<>());
         d.putIfAbsent("weights", null);
         return d;
     }
@@ -111,7 +115,7 @@ public class MemoryService {
         return s;
     }
 
-    /** 一次一个操作：action = myUid / reject / unreject / addLore / removeLore / promote / unpromote / addTaboo / removeTaboo
+    /** 一次一个操作：梗库 memeSave / memeRemove / blacklistAdd / blacklistRemove；其余 action = myUid / reject / unreject / addLore / removeLore / promote / unpromote / addTaboo / removeTaboo
      *  / exclude / include / publish / unpublish / applyWeights / resetWeights。 */
     public synchronized Map<String, Object> act(Map<String, Object> req) {
         Map<String, Object> d = decisions();
@@ -179,6 +183,63 @@ public class MemoryService {
                 String t = text(req, "text", 20);
                 list(d, "promoted_lore").removeIf(x -> x instanceof Map<?, ?> m && t.equalsIgnoreCase(String.valueOf(m.get("text"))));
                 d.put("hotwords_dirty", true);
+            }
+            case "memeSave" -> {
+                // 梗库里一个梗的决定：状态（待确认 / 已启用 / 已停用）、含义、来历、用法、尺度、形式、标签；manual = 手动添加的
+                String t = text(req, "text", 40);
+                if (t.length() < 2) {
+                    throw ApiException.badRequest("梗至少 2 个字");
+                }
+                String status = text(req, "status", 16);
+                if (!MEME_STATUS.contains(status)) {
+                    throw ApiException.badRequest("状态只能是 pending / approved / disabled");
+                }
+                int level = req.get("level") == null ? 1 : intOf(req.get("level"), "level");
+                if (level < 1 || level > 3) {
+                    throw ApiException.badRequest("尺度只能是 1 大众 / 2 圈层 / 3 谨慎");
+                }
+                String meaning = text(req, "meaning", 80);
+                if (status.equals("approved") && meaning.isEmpty()) {
+                    throw ApiException.badRequest("启用前请填写含义（剪辑初稿靠它判断什么时候能用）");
+                }
+                Map<String, Object> memes = map(d, "memes");
+                Map<String, Object> item = new LinkedHashMap<>();
+                Object old = memes.get(t.toLowerCase());
+                item.put("text", t);
+                item.put("status", status);
+                item.put("level", level);
+                item.put("meaning", meaning);
+                item.put("origin", text(req, "origin", 100));
+                item.put("usage", text(req, "usage", 80));
+                item.put("forms", strings(req.get("forms"), MEME_FORMS, 2, 10, "形式"));
+                item.put("tags", strings(req.get("tags"), null, 5, 10, "标签"));
+                boolean manual = Boolean.TRUE.equals(req.get("manual")) || (old instanceof Map<?, ?> om0 && Boolean.TRUE.equals(om0.get("manual")));
+                if (manual) {
+                    item.put("manual", true);
+                }
+                item.put("at", LocalDateTime.now().withNano(0).toString());
+                memes.put(t.toLowerCase(), item);
+                if (status.equals("approved")) {
+                    list(d, "meme_blacklist").removeIf(x -> t.toLowerCase().contains(String.valueOf(x).toLowerCase()));
+                }
+            }
+            case "memeRemove" -> {
+                // 去掉后台对这个梗的决定（手动添加的梗会整个消失；自动发现的回到“待确认”）
+                String t = text(req, "text", 40).toLowerCase();
+                map(d, "memes").remove(t);
+            }
+            case "blacklistAdd" -> {
+                String w = text(req, "word", 20);
+                if (w.length() < 2) {
+                    throw ApiException.badRequest("黑名单词至少 2 个字");
+                }
+                List<Object> bl = list(d, "meme_blacklist");
+                bl.removeIf(x -> w.equalsIgnoreCase(String.valueOf(x)));
+                bl.add(w);
+            }
+            case "blacklistRemove" -> {
+                String w = text(req, "word", 20);
+                list(d, "meme_blacklist").removeIf(x -> w.equalsIgnoreCase(String.valueOf(x)));
             }
             case "hotwordsSynced" -> d.remove("hotwords_dirty");
             case "addTaboo" -> {
@@ -265,6 +326,29 @@ public class MemoryService {
         d.put("updated_at", LocalDateTime.now().toString());
         write(d);
         return d;
+    }
+
+    private static List<String> strings(Object v, List<String> allowed, int maxCount, int maxLen, String what) {
+        List<String> out = new ArrayList<>();
+        if (v instanceof List<?> l) {
+            for (Object o : l) {
+                String x = o == null ? "" : String.valueOf(o).strip();
+                if (x.isEmpty() || out.contains(x)) {
+                    continue;
+                }
+                if (x.length() > maxLen || (allowed != null && !allowed.contains(x))) {
+                    throw ApiException.badRequest(what + "不合法：" + x);
+                }
+                out.add(x);
+            }
+        }
+        if (out.size() > maxCount) {
+            throw ApiException.badRequest(what + "最多 " + maxCount + " 个");
+        }
+        if (allowed != null && out.isEmpty()) {
+            out.add("text");
+        }
+        return out;
     }
 
     private void write(Map<String, Object> d) {

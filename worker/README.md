@@ -331,6 +331,19 @@ python scripts/publish_pack.py output/<场次>/candidates.json --rank 3 --cover-
 
 数据来自各场的 `ngrams.json`（转写 + 弹幕，下播后 `learn.py` 或这里第一次用到时生成并缓存，录像 / 弹幕文件被同步走之后也能统计）和 `rerank.json`，所以**要先对这些场次做过转写和精排**，周报才有梗和高光。
 
+## 梗库（热门梗 + 向量检索，让 AI 初稿会用梗）
+
+后台"梗库"页（或 `python scripts/memes.py refresh | search "<情境>"`）。监控脚本默认**每天抓一次**（`KIYA_MEME_REFRESH=1`，不在直播时、低优先级）：
+
+- **来源**：主播档案里的梗 / 口头禅（含"转正"的，默认可用、不衰减）、弹幕 / 转写里发现的说法（`learn.py` 的结果）、**B站热门**（综合热门、每周必看的**标题**和**热搜词**里反复出现的短语，至少在 `memes.hot_min_titles`（3）个标题里出现）、后台手动添加的。
+- **只抓文本、低频**：每天最多 4 个请求（间隔 1 秒），只取标题 / 热搜词，不抓评论、不下载任何视频；快照只存"短语 + 出现次数"，留 14 天（`output/_memory/hot/`）。**没有抓热门评论**。
+- **准入**：新梗（弹幕 / 转写、B站热门来的）默认**待确认**，在后台填好含义、来历、用法、尺度（大众 / 圈层 / 谨慎）点"启用"后才会被剪辑初稿用；"谨慎"级不会自动用；命中**黑名单词**或**禁区话题**的直接拉黑，后台点启用也不行。
+- **热度衰减**：B站热门来的梗按近 7 天加权日均出现次数算热度（越近权重越大），低于 `memes.min_heat` 算"降温"，检索权重 ×0.3；弹幕 / 转写来的，近 14 天没提过同样降温。主播自己的梗是"常青"，不衰减。
+- **检索**：生成初稿时把精排结论（发生了什么 + 铺垫 / 笑点 / 反应）当情境，用百炼文本向量（`text-embedding-v3`，同一个 `DASHSCOPE_API_KEY`，每个文本缓存到磁盘，只在内存里算相似度）在**已启用**的梗里找 Top `retrieve_k`，相似度低于 `min_sim` 的不给——宁缺毋滥；没有 Key 或接口失败时自动退回字面匹配（梗的原话出现在情境里算最像）。
+- **初稿怎么用**：`edit_v3` 提示词的【可用的梗】只列检索到的几个（含义 + 用法 + 尺度），要求模型"说得出为什么好笑才用"、写 `meme` / `meme_reason`；之后代码再卡一遍——一条最多 `max_per_clip`（2）个、两个梗至少隔 `min_gap`（15）秒，不在可用列表里的（模型编的）去掉标记，超出的整个效果去掉。编辑器右侧"用到的梗"列出每个梗和理由，不想要直接删那个效果。`edits/NN.ai.json` 里记了给过哪些梗、用了哪些、被卡掉哪些。
+- **统计与淘汰**：每个梗被初稿用了几次、人工终稿里还留着几次；用过且被人工看过 ≥ `min_uses`（5）次、保留率低于 `low_retention`（40%）的权重 ×0.5（页面标"常被删"）。
+- **后台决定**写在 `config/memory_decisions.json` 的 `memes` / `meme_blacklist`，`output/_memory/memes.json` 是 worker 重建的结果，两边各写各的。
+
 ## 调参（config/kiya.yaml）
 
 - **情绪词**：看 `peaks.csv` 的“高频弹幕”列，把 kiya 粉丝常刷的梗、口头禅加进 `emotion_words` 或 `lore_words`。
@@ -351,6 +364,10 @@ worker/
 ├── scripts/screen.py    # 阶段 1 粗筛入口（--live：边播边筛，只用录完的分段）
 ├── clipper/weekly.py    # 主播周报：梗 TOP5、高光、类型占比、词云；导出文档只渲染给主播看的部分
 ├── scripts/weekly_report.py     # 主播周报入口 → output/_reports/weekly-<日期>.json / .html
+├── clipper/hot.py       # B站热门标题 / 热搜 → 高频短语快照、热度（近 7 天加权）
+├── clipper/embed.py     # 文本向量（百炼 OpenAI 兼容接口）+ 磁盘缓存 + 字面相似度备用
+├── clipper/memes.py     # 梗库：合并来源、准入 / 黑名单 / 降温、使用与保留统计、检索、初稿里梗的数量限制
+├── scripts/memes.py     # 梗库入口：refresh（抓热门 + 重建 + 预热向量）/ search → output/_memory/memes.json
 ├── scripts/cut.py       # 精确剪切（跨分段自动拼接）
 ├── scripts/evaluate.py  # 命中率 / 召回率评测，记录到 eval/results.csv
 ├── scripts/review.py    # 网页标注工具（SSH 隧道访问）

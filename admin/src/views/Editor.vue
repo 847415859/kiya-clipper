@@ -185,6 +185,16 @@
           </el-form>
         </el-card>
 
+        <el-card v-if="usedMemes.length" shadow="never" class="card">
+          <template #header><b>用到的梗</b> <span class="muted">（来自梗库；不想要就删掉那个效果，会记入“保留率”）</span></template>
+          <div v-for="m in usedMemes" :key="m.id" class="meme-row" :class="{ sel: m.id === selected }">
+            <el-button link type="primary" @click="selectMeme(m)">《{{ m.meme }}》</el-button>
+            <span class="muted">{{ fmt(m.start) }} · {{ m.text }}</span>
+            <el-button link type="danger" size="small" class="meme-del" @click="removeMeme(m)">删掉</el-button>
+            <div v-if="m.reason" class="muted">{{ m.reason }}</div>
+          </div>
+        </el-card>
+
         <el-card shadow="never" class="card">
           <template #header><b>成片</b> <span class="muted">（output/{{ name }}/final/）</span></template>
           <div v-if="!info.finals || !info.finals.length" class="muted">还没有渲染过。先“渲染 480p 预览”看效果，满意了再出 1080p。</div>
@@ -512,6 +522,16 @@ function duplicate() {
   const it = selItem.value
   if (!it) return
   add({ ...JSON.parse(JSON.stringify(it)), id: newId(), start: round(Math.min(info.clipLen - 0.2, it.start + it.duration)) })
+}
+const usedMemes = computed(() => edit.items.filter((i) => i.meme).map((i) => ({ id: i.id, meme: i.meme, reason: i.meme_reason || '', start: i.start, text: i.text || i.asset || '' })))
+function selectMeme(m) {
+  selected.value = m.id
+  seek(m.start)
+}
+function removeMeme(m) {
+  const i = edit.items.findIndex((x) => x.id === m.id)
+  if (i >= 0) edit.items.splice(i, 1)
+  if (selected.value === m.id) selected.value = null
 }
 function removeSelected() {
   const i = edit.items.findIndex((x) => x.id === selected.value)
@@ -852,6 +872,9 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .editor { height: 100%; display: flex; flex-direction: column; }
+.meme-row { padding: 4px 0; border-bottom: 1px dashed var(--el-border-color-lighter); }
+.meme-row.sel { background: var(--el-fill-color-light); }
+.meme-del { float: right; }
 .topbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 16px; background: #fff; border-bottom: 1px solid var(--el-border-color-light); }
 .topbar .spacer, .controls .spacer { flex: 1; }
 .empty-all { padding: 60px; text-align: center; color: var(--muted); display: flex; flex-direction: column; gap: 16px; align-items: center; }

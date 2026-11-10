@@ -112,3 +112,24 @@ class Bili:
         return {"bvid": bvid, "title": d.get("title", ""), "pubdate": d.get("pubdate"), "duration": d.get("duration"),
                 "tname": d.get("tname", ""), **{k: s.get(k, 0) for k in
                                                 ("view", "like", "coin", "favorite", "share", "reply", "danmaku")}}
+
+    # ---------------------------------------------------------------- 热门（梗库用，只取标题 / 词条文字）
+    def popular(self, limit: int = 50) -> list[str]:
+        """综合热门视频标题。"""
+        d = self._get("/x/web-interface/popular", {"ps": min(limit, 50), "pn": 1})
+        return [str(v.get("title", "")).strip() for v in d.get("list") or [] if v.get("title")][:limit]
+
+    def weekly_must_watch(self, limit: int = 50) -> list[str]:
+        """最新一期“每周必看”的视频标题。"""
+        series = (self._get("/x/web-interface/popular/series/list", {}).get("list")) or []
+        if not series:
+            return []
+        number = max(int(x.get("number", 0)) for x in series)
+        d = self._get("/x/web-interface/popular/series/one", {"number": number})
+        return [str(v.get("title", "")).strip() for v in d.get("list") or [] if v.get("title")][:limit]
+
+    def hot_search(self, limit: int = 30) -> list[str]:
+        """热搜词。"""
+        d = self._get("/x/web-interface/search/square", {"limit": limit})
+        lst = (d.get("trending") or {}).get("list") or []
+        return [str(x.get("keyword") or x.get("show_name") or "").strip() for x in lst if x.get("keyword") or x.get("show_name")][:limit]

@@ -48,6 +48,7 @@ public class JobService {
             Map.entry("RERANK", "大模型精排"),
             Map.entry("RESCORE", "按新权重重排"),
             Map.entry("LEARN", "更新精排记忆"),
+            Map.entry("MEME_REFRESH", "刷新梗库"),
             Map.entry("CUT", "剪切"),
             Map.entry("PIPELINE", "全流程（转写 → 粗筛 → 剪切）"),
             Map.entry("HOTWORDS_SYNC", "同步热词表"),
@@ -236,6 +237,8 @@ public class JobService {
                     List.of(paths.sessionDir(session).resolve("candidates.json").toString(), "--rescore")));
             case "LEARN" -> steps.add(runner.command("learn.py",
                     Boolean.TRUE.equals(p.get("noFetch")) ? List.of("--no-fetch") : List.of()));
+            case "MEME_REFRESH" -> steps.add(runner.command("memes.py",
+                    Boolean.TRUE.equals(p.get("noFetch")) ? List.of("refresh", "--no-fetch") : List.of("refresh")));
             case "AUTO_EDIT" -> steps.add(autoEdit(session, p));
             case "EDIT_PREVIEW" -> steps.add(editPreview(session, p));
             case "EVAL_RERANK" -> steps.add(runner.command("evaluate.py", List.of("--rerank")));

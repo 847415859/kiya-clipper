@@ -31,6 +31,8 @@ from clipper.context import danmaku_lines, load_events, profile, speech_lines  #
 from clipper.edit import EditError, enforce_density, suggest_window, validate_edit, validate_item  # noqa: E402
 from clipper.editdiff import edit_taste, taste_text  # noqa: E402
 from clipper.llm import LLMClient, fill, load_prompt  # noqa: E402
+from clipper.memes import (enforce_memes, load_library, offer_text, retrieve, settings as meme_settings,  # noqa: E402
+                           situation_text)
 
 COLORS = "#FFE14D|#FFFFFF|#FF7EB6|#7FE3FF"
 
@@ -62,7 +64,7 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg = load_cfg(Path(args.config))
-    ac = {"prompt": "edit_v1", "model": "", "max_items": 8, **(cfg.get("autoedit") or {})}
+    ac = {"prompt": "edit_v3", "model": "", "max_items": 8, **(cfg.get("autoedit") or {})}
     mc = cfg.get("memory") or {}
     cpath = Path(args.candidates)
     sess = cpath.parent
@@ -95,10 +97,18 @@ def main() -> int:
     stickers = sticker_names()
     dm, _ = danmaku_lines(load_events(data["segments"]), a, b, a, float(data.get("delay_seconds") or 0), limit=40)
     version, system, user = load_prompt(ac["prompt"])
-    system = fill(system, max_items=ac["max_items"])
+    ms = meme_settings(cfg)
+    system = fill(system, max_items=ac["max_items"], **({"max_memes": str(ms["max_per_clip"]), "meme_gap": f"{float(ms['min_gap']):.0f}"}
+                                                          if "{{max_memes}}" in system else {}))
     # 剪辑师口味：人改过 AI 初稿的记录攒够了才生效（clipper/editdiff.py）；提示词用 edit_v2 才有这一块
     taste = edit_taste(sess.parent, int(mc.get("min_edits", 5)), int(mc.get("min_edit_sessions", 2)))
     extra = {"taste": taste_text(taste) or "（还没有积累）"} if "{{taste}}" in user else {}
+    # 梗库：用精排结论 + 弹幕当情境去检索，只给大模型“已确认、相符”的几个；提示词用 edit_v3 才有这一块
+    offered, meme_method = [], "none"
+    if "{{memes}}" in user:
+        lib = load_library(Path(os.environ.get("KIYA_MEMES") or sess.parent / "_memory" / "memes.json"))
+        offered, meme_method = retrieve(situation_text(llm, extra=dm), lib, cfg, taboo=cfg.get("taboo") or [])
+        extra["memes"] = offer_text(offered)
     text = fill(user, profile=profile(cfg), **extra, window=f"{clip_len:.0f}", trim_start=f"{t_start:.1f}", trim_end=f"{t_end:.1f}",
                 what_happened=llm.get("what_happened") or "（没有精排结论）",
                 punch=(f"{ca + llm['punch_time'] - a:.1f}" if llm.get("punch_time", -1) >= 0 else "（未知）"),
@@ -129,6 +139,9 @@ def main() -> int:
     edit = {"version": 1, "window": window, "trim": trim, "subtitles": {"enabled": True}, "items": items,
             "generated_by": f"{version} / {client.model}", "note": out.note[:200]}
     edit, dropped = enforce_density(edit)
+    meme_notes: list[str] = []
+    if "{{memes}}" in user:                          # 没提供梗的时候，模型写的梗标记一律去掉
+        edit, meme_notes = enforce_memes(edit, {m["text"] for m in offered}, int(ms["max_per_clip"]), float(ms["min_gap"]))
     if len(edit["items"]) > int(ac["max_items"]):
         dropped += edit["items"][int(ac["max_items"]):]
         edit["items"] = edit["items"][:int(ac["max_items"])]
@@ -143,6 +156,8 @@ def main() -> int:
     # 原稿另存一份：之后和人工终稿对比，剪辑口味才能积累下来
     (dst.parent / f"{args.rank:02d}.ai.json").write_text(json.dumps(
         {"edit": edit, "prompt": version, "model": client.model, "taste_used": bool(extra and taste["active"]),
+         "memes_offered": [{"meme": m["text"], "sim": m["sim"], "score": m["score"]} for m in offered],
+         "meme_method": meme_method, "meme_notes": meme_notes,
          "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S")}, ensure_ascii=False, indent=1), encoding="utf-8")
     kinds = {}
     for i in edit["items"]:
@@ -152,6 +167,11 @@ def main() -> int:
           + (f"；丢掉 {len(dropped) + len(bad)} 个不合规的" if dropped or bad else ""))
     for x in bad[:5]:
         print("  - " + x)
+    used = [i["meme"] for i in edit["items"] if i.get("meme")]
+    if "{{memes}}" in user:
+        print(f"梗库（{meme_method}）：给了 {len(offered)} 个，用了 {len(used)} 个" + (f"：{'、'.join(used)}" if used else ""))
+        for x in meme_notes:
+            print("  - " + x)
     print(f"思路：{edit.get('note') or '—'}")
     print(f"已保存 {dst}，在后台成片编辑器里打开即可微调、渲染")
     return 0

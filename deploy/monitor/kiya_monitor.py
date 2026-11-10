@@ -10,6 +10,7 @@
   - 开播（并附录制是否正常）、下播（本场时长、录像大小、弹幕数）
   - 下播后自动跑弹幕分析，把前 5 个高峰推送过来
   - KIYA_LIVE_SCREEN=1：直播中每 30 分钟对已录完的分段粗筛一次（边播边筛），审核页提前有候选
+  - KIYA_MEME_REFRESH=1（默认）：不在直播时，每天抓一次B站热门标题 / 热搜、重建梗库（失败只告警一次）
 
 同一个问题只推送一次，持续未恢复则每 6 小时提醒一次；恢复时再推一条“已恢复”。
 只用 Python 标准库，不依赖 worker 的虚拟环境（自动分析那一步除外）。
@@ -286,6 +287,24 @@ def run_live_screen(env: dict, rec_dir: Path) -> tuple[str, str]:
     return ("ok" if tops else "empty"), f"{cov.split('，')[0].replace('边播边筛：', '')}，{len(tops)} 个候选"
 
 
+def run_meme_refresh(env: dict) -> tuple[str, str]:
+    """KIYA_MEME_REFRESH=1（默认开）：每天抓一次B站热门标题 / 热搜、重建梗库（worker/scripts/memes.py refresh）。
+    只抓文本、低优先级运行，不在直播时跑。返回 (状态, 说明)：ok / skip（脚本不在）/ error。"""
+    worker = REPO / "worker"
+    py = worker / ".venv" / "bin" / "python"
+    script = worker / "scripts" / "memes.py"
+    if not (py.exists() and script.exists()):
+        return "skip", "worker/.venv 或 memes.py 不存在"
+    try:
+        r = subprocess.run(["nice", "-n", "10", str(py), str(script), "--out", str(worker / "output"), "refresh"],
+                           capture_output=True, text=True, timeout=int(cfg(env, "KIYA_MEME_TIMEOUT", "300")))
+    except Exception as e:
+        return "error", str(e)[:200]
+    if r.returncode != 0:
+        return "error", ((r.stderr or r.stdout).strip().splitlines() or ["未知错误"])[-1][:200]
+    return "ok", next((l.strip() for l in r.stdout.splitlines() if l.startswith("梗库共")), "完成")
+
+
 def latest_candidates(worker: Path, max_age: float = 3600) -> Path | None:
     """刚粗筛完的场次（最近一小时写出的 candidates.json）。"""
     files = [p for p in (worker / "output").glob("*/candidates.json") if time.time() - p.stat().st_mtime < max_age]
@@ -462,6 +481,16 @@ def check(env: dict, dry: bool = False) -> int:
                   f"录像在写入，但 {fmt_dur(fresh_xml)}内弹幕文件没有更新。\n"
                   "如果直播间本来就很安静可忽略；否则检查录播姬弹幕设置和 Cookie",
                   "弹幕文件已恢复更新", now, dry)
+
+    # 2.5 梗库每日刷新：不在直播时、每个日历日一次；失败当天不重试（告警一次），第二天再来
+    if (cfg(env, "KIYA_MEME_REFRESH", "1") == "1" and not dry and not st.data.get("live")
+            and st.data.get("meme_refresh_day") != datetime.now().strftime("%F")):
+        st.data["meme_refresh_day"] = datetime.now().strftime("%F")
+        st.save()
+        status, msg = run_meme_refresh(env)
+        alert(env, st, "meme_refresh", status == "error", "梗库刷新失败",
+              f"{msg}\n不影响录制和剪辑，梗库沿用上次的结果；明天会再试。手动试：worker/.venv/bin/python worker/scripts/memes.py refresh",
+              "梗库刷新已恢复", now, dry)
 
     # 3. 硬盘
     try:
