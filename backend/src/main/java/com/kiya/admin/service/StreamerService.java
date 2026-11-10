@@ -62,7 +62,8 @@ public class StreamerService {
         if (!ID.matcher(id).matches()) {
             return;
         }
-        byId.putIfAbsent(id, readName(p));
+        String name = readName(p);
+        byId.putIfAbsent(id, name == null || name.isBlank() ? id : name);
     }
 
     /** 从主播配置里读 streamer.name（正则提取，避免引入 yaml 解析）；读不到就用主播标识。 */
@@ -71,7 +72,8 @@ public class StreamerService {
             String text = Files.readString(p);
             Matcher m = NAME.matcher(text);
             if (m.find()) {
-                return m.group(1);
+                // 去掉行尾注释（"名字   # 说明"）和引号
+                return m.group(1).replaceFirst("\\s+#.*$", "").replaceAll("^[\"']|[\"']$", "").trim();
             }
         } catch (IOException ignored) {
             // 读不到就用 id
