@@ -39,6 +39,8 @@ fonts/*
 
 # 后台管理写入的覆盖配置（热词、纠错词、默认字幕样式）
 config/admin_overrides.json
+# 后台“精排记忆”页的取舍决定（删梗、绑定 BV 号、应用的权重）
+config/memory_decisions.json
 
 # 后台：前端打包产物（由 admin/ 前端构建生成）
 backend/src/main/resources/static/

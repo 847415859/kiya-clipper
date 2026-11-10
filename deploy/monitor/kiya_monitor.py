@@ -264,6 +264,26 @@ def latest_candidates(worker: Path, max_age: float = 3600) -> Path | None:
     return max(files, key=lambda p: p.stat().st_mtime) if files else None
 
 
+def run_learn(env: dict) -> str | None:
+    """更新精排记忆（梗、审核例子、投稿数据，见 worker/scripts/learn.py）。KIYA_LEARN=0 关闭。返回一行摘要。"""
+    if cfg(env, "KIYA_LEARN", "1") != "1":
+        return None
+    worker = REPO / "worker"
+    py = worker / ".venv" / "bin" / "python"
+    script = worker / "scripts" / "learn.py"
+    if not (py.exists() and script.exists()):
+        return None
+    try:
+        r = subprocess.run(["nice", "-n", "10", str(py), str(script)], capture_output=True, text=True,
+                           timeout=int(cfg(env, "KIYA_LEARN_TIMEOUT", "900")))
+    except Exception as e:
+        return f"精排记忆更新失败：{e}"
+    if r.returncode != 0:
+        return "精排记忆更新失败：" + ((r.stderr or r.stdout).strip().splitlines() or ["未知错误"])[-1][:200]
+    lines = [l.strip() for l in r.stdout.splitlines() if l.startswith(("场次 ", "权重：", "注意："))]
+    return "精排记忆：" + "；".join(lines)[:300] if lines else None
+
+
 def run_rerank(env: dict) -> str | None:
     """KIYA_RERANK=1 时，粗筛后用多模态大模型精排（阶段 2）。需要先有转写；返回推送内容，没做时返回 None。"""
     if cfg(env, "KIYA_RERANK", "0") != "1":
@@ -376,9 +396,10 @@ def check(env: dict, dry: bool = False) -> int:
                 st.save()  # 分析可能较慢，先存状态，避免下一轮重复触发
                 notify(env, f"📈 {name} 弹幕分析", run_analysis(env, rec_dir), dry)
                 if not dry:
+                    learned = run_learn(env)             # 先更新记忆，精排就能用上刚下播这场的梗
                     msg = run_rerank(env)
-                    if msg:
-                        notify(env, f"🤖 {name} 大模型精排", msg, dry)
+                    if msg or learned:
+                        notify(env, f"🤖 {name} 大模型精排", "\n".join(x for x in [msg, learned] if x), dry)
                 if cfg(env, "KIYA_AUTO_CUT", "1") == "1" and not dry:
                     msg = run_cut(env)
                     if msg:

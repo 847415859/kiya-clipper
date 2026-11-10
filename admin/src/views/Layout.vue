@@ -8,6 +8,7 @@
         <el-menu-item index="/jobs">任务</el-menu-item>
         <el-menu-item index="/styles">字幕样式</el-menu-item>
         <el-menu-item index="/eval">评测</el-menu-item>
+        <el-menu-item index="/memory">精排记忆</el-menu-item>
         <el-menu-item index="/settings">配置</el-menu-item>
       </el-menu>
       <div class="user">

@@ -46,6 +46,8 @@ public class JobService {
             Map.entry("TRANSCRIBE", "语音转写"),
             Map.entry("SCREEN", "粗筛"),
             Map.entry("RERANK", "大模型精排"),
+            Map.entry("RESCORE", "按新权重重排"),
+            Map.entry("LEARN", "更新精排记忆"),
             Map.entry("CUT", "剪切"),
             Map.entry("PIPELINE", "全流程（转写 → 粗筛 → 剪切）"),
             Map.entry("HOTWORDS_SYNC", "同步热词表"),
@@ -209,7 +211,7 @@ public class JobService {
     // ------------------------------------------------------------------ 执行
     private static boolean needsSession(String type) {
         return switch (type) {
-            case "TRANSCRIBE", "SCREEN", "RERANK", "CUT", "PIPELINE", "RENDER", "AUTO_EDIT" -> true;
+            case "TRANSCRIBE", "SCREEN", "RERANK", "RESCORE", "CUT", "PIPELINE", "RENDER", "AUTO_EDIT" -> true;
             default -> false;
         };
     }
@@ -229,6 +231,10 @@ public class JobService {
             }
             case "RENDER" -> steps.add(render(session, p));
             case "RERANK" -> steps.add(rerank(session, p));
+            case "RESCORE" -> steps.add(runner.command("rerank.py",
+                    List.of(paths.sessionDir(session).resolve("candidates.json").toString(), "--rescore")));
+            case "LEARN" -> steps.add(runner.command("learn.py",
+                    Boolean.TRUE.equals(p.get("noFetch")) ? List.of("--no-fetch") : List.of()));
             case "AUTO_EDIT" -> steps.add(autoEdit(session, p));
             case "EVAL_RERANK" -> steps.add(runner.command("evaluate.py", List.of("--rerank")));
             case "HOTWORDS_SYNC" -> steps.add(runner.command("hotwords.py", List.of("sync")));

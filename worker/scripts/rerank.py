@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -30,6 +31,7 @@ from clipper.asr import load_transcript  # noqa: E402
 from clipper.boundary import refine_bounds  # noqa: E402
 from clipper.context import danmaku_lines, extract_frames, load_events, profile, speech_lines  # noqa: E402
 from clipper.llm import LLMClient, fill, image_part, load_prompt, text_part  # noqa: E402
+from clipper.memory import active_weights, context_text, final_score, load_memory  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
 
 TYPES = ("破防", "口胡", "互动", "金句", "高能", "整活", "反差", "其他", "无")
@@ -63,17 +65,19 @@ class RerankOut(BaseModel):
     @field_validator("title_candidates")
     @classmethod
     def _titles(cls, v: list[str]) -> list[str]:
-        return [str(t).strip()[:40] for t in v if str(t).strip()][:5]
+        clean = [str(t).strip().strip("《》「」\"“”").strip() for t in v]
+        return [t[:40] for t in clean if t][:5]
 
 
 def build_messages(c: dict, segs: list[dict], sents: list[dict], events, delay: float, cfg: dict,
-                   rc: dict, frames_dir: Path) -> tuple[list, str, int]:
+                   rc: dict, frames_dir: Path, memory: str = "") -> tuple[list, str, int]:
     version, system, user = load_prompt(rc["prompt"])
     a, b = c["clip_start"], c["clip_end"]
     before = float(rc["context_before"])
     frames = extract_frames(segs, a, b, int(rc["frames"]), frames_dir, int(rc["width"]))
     dm, gifts = danmaku_lines(events, a, b, a, delay)
-    text = fill(user, profile=profile(cfg), window=f"{b - a:.0f}", peak=f"{c['t'] - a:.0f}",
+    extra = {"memory": memory or "（还没有积累）"} if "{{memory}}" in user else {}
+    text = fill(user, profile=profile(cfg), **extra, window=f"{b - a:.0f}", peak=f"{c['t'] - a:.0f}",
                 context_before=f"{before:.0f}",
                 before_speech=speech_lines(sents, a - before, a, a, limit=1200) if sents else "（这场还没有转写）",
                 speech=speech_lines(sents, a, b, a) if sents else "（这场还没有转写）",
@@ -92,15 +96,27 @@ def main() -> int:
     ap.add_argument("--ranks", type=int, nargs="+")
     ap.add_argument("--config", default=str(REPO / "config" / "kiya.yaml"))
     ap.add_argument("--dry-run", action="store_true", help="只抽帧、拼提示词，存到 rerank_preview/，不调用接口")
+    ap.add_argument("--rescore", action="store_true", help="不调大模型，按当前权重重算已有 rerank.json 的排序")
     args = ap.parse_args()
 
     cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
     rc = {"prompt": "rerank_v1", "model": "", "frames": 8, "width": 640, "context_before": 60, "workers": 3,
-          "weights": {"llm": 0.8, "screen": 0.2}, "min_len": 30, "max_len": 180, "price_in": None, "price_out": None,
+          "min_len": 30, "max_len": 180, "price_in": None, "price_out": None,
           **(cfg.get("rerank") or {})}
     cpath = Path(args.candidates)
     sess = cpath.parent
     data = json.loads(cpath.read_text(encoding="utf-8"))
+    dec_file = Path(os.environ.get("KIYA_MEMORY_DECISIONS") or REPO / "config" / "memory_decisions.json")
+    try:
+        decisions = json.loads(dec_file.read_text(encoding="utf-8")) if dec_file.exists() else {}
+    except ValueError:
+        decisions = {}
+    w = active_weights(cfg, decisions)
+    n_total = len(data["candidates"])
+    if args.rescore:
+        return rescore(sess / "rerank.json", w, n_total)
+    mem_file = Path(os.environ.get("KIYA_MEMORY_FILE") or sess.parent / "_memory" / "memory.json")
+    memory, mem_version = context_text(load_memory(mem_file), sess.name, cfg, decisions)
     cands = [c for c in data["candidates"] if not args.ranks or c["rank"] in args.ranks]
     if not cands:
         print("没有候选（这场没有达到分数线的片段）")
@@ -113,14 +129,14 @@ def main() -> int:
     events = load_events(segs)
     delay = float(data.get("delay_seconds") or 0)
     client = LLMClient(model=rc["model"] or None)
-    n_total = len(data["candidates"])
-    print(f"精排 {len(cands)} 个候选，模型 {client.model}，提示词 {rc['prompt']}，每个 {rc['frames']} 张图")
+    print(f"精排 {len(cands)} 个候选，模型 {client.model}，提示词 {rc['prompt']}，每个 {rc['frames']} 张图；"
+          f"精排记忆 {mem_version or '（无）'}")
 
     def one(c: dict) -> dict:
         msgs, version, nframes = build_messages(c, segs, sents, events, delay, cfg, rc,
-                                                sess / "rerank_frames" / f"{c['rank']:02d}")
+                                                sess / "rerank_frames" / f"{c['rank']:02d}", memory)
         rec = {"rank": c["rank"], "t": c["t"], "clip_start": c["clip_start"], "clip_end": c["clip_end"],
-               "screen_score": c["score"], "frames": nframes, "prompt_version": version}
+               "screen_score": c["score"], "frames": nframes, "prompt_version": version, "memory_version": mem_version}
         if args.dry_run:
             prev = [m if isinstance(m["content"], str) else {"role": m["role"], "content": [
                 x if x["type"] == "text" else {"type": "image_url", "image_url": "<图片省略>"} for x in m["content"]]}
@@ -150,22 +166,15 @@ def main() -> int:
         print(f"dry-run：提示词预览在 {sess / 'rerank_preview'}，截图在 {sess / 'rerank_frames'}")
         return 0
 
-    w = rc["weights"]
     for r in recs:
-        screen = 1 - (r["rank"] - 1) / max(1, n_total - 1)          # 粗筛名次换成 0~1（第 1 名 = 1）
-        if r.get("llm"):
-            f = w["llm"] * r["llm"]["score"] / 10 + w["screen"] * screen
-            if not r["llm"]["funny"]:
-                f *= 0.6
-        else:
-            f = w["screen"] * screen * 0.5                            # 大模型失败的排后面，但保留
-        r["final"] = round(f, 4)
+        r["final"] = round(final_score(r.get("llm"), r["rank"], n_total, w), 4)
     recs.sort(key=lambda r: -r["final"])
     for i, r in enumerate(recs, 1):
         r["new_rank"] = i
 
     cost = client.cost(rc["price_in"], rc["price_out"])
-    out = {"session": sess.name, "model": client.model, "prompt": rc["prompt"], "generated_at": time.strftime("%F %T"),
+    out = {"session": sess.name, "model": client.model, "prompt": rc["prompt"], "memory_version": mem_version,
+           "generated_at": time.strftime("%F %T"),
            "weights": w, "tokens": client.total, "cost_yuan": round(cost, 4) if cost is not None else None,
            "candidates": recs}
     # 只精排了部分序号时，和已有结果合并
@@ -191,6 +200,26 @@ def main() -> int:
     print(f"\n用时 {time.time() - t0:.0f} 秒；请求 {t['calls']} 次（缓存命中 {t['cached']}），tokens 输入 {t['prompt_tokens']} / 输出 {t['completion_tokens']}"
           + (f"，约 ¥{cost:.3f}" if cost is not None else "（在 config 的 rerank.price_in / price_out 填单价可估算费用）"))
     print(f"结果：{old}")
+    return 0
+
+
+def rescore(path: Path, w: dict, n_total: int) -> int:
+    """后台确认新权重后：不重新请求大模型，只按新权重重排。"""
+    if not path.exists():
+        print("这场还没有精排结果", file=sys.stderr)
+        return 1
+    d = json.loads(path.read_text(encoding="utf-8"))
+    before = [c["rank"] for c in sorted(d["candidates"], key=lambda c: c.get("new_rank", 999))]
+    for c in d["candidates"]:
+        c["final"] = round(final_score(c.get("llm"), c["rank"], n_total, w), 4)
+    d["candidates"].sort(key=lambda c: -c["final"])
+    for i, c in enumerate(d["candidates"], 1):
+        c["new_rank"] = i
+    d["weights"] = w
+    d["rescored_at"] = time.strftime("%F %T")
+    path.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+    after = [c["rank"] for c in d["candidates"]]
+    print(f"按权重 {w} 重排：前 10 名（原序号）{before[:10]} → {after[:10]}")
     return 0
 
 

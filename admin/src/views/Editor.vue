@@ -167,6 +167,14 @@
             <el-button link type="primary" @click="finalFile = f.file">{{ f.file }}</el-button>
             <span class="muted">{{ (f.size / 1048576).toFixed(1) }} MB · {{ new Date(f.modified).toLocaleString() }}</span>
           </div>
+          <div class="publish">
+            <div class="muted">发布到切片号后填 BV 号：精排会参考它的播放数据（“精排记忆”页）</div>
+            <el-input v-model="pub.bvid" placeholder="BV1xxxxxxxxx" size="small" style="width: 150px" maxlength="12" />
+            <el-input v-model="pub.completion" placeholder="完播率 0.35（选填）" size="small" style="width: 140px" />
+            <el-input v-model="pub.followers" placeholder="涨粉（选填）" size="small" style="width: 100px" />
+            <el-button size="small" type="primary" plain :disabled="!pub.bvid" @click="savePublish">保存</el-button>
+            <el-button v-if="pub.saved" size="small" link type="danger" @click="unpublish">解绑</el-button>
+          </div>
         </el-card>
       </aside>
     </div>
@@ -222,6 +230,7 @@ const cutting = ref(false)
 const rendering = ref(false)
 const renderJob = ref(null)
 const drafting = ref(false)
+const pub = reactive({ bvid: '', completion: '', followers: '', saved: '' })
 const warnings = ref([])
 const generatedBy = ref('')
 const aiNote = ref('')
@@ -460,6 +469,7 @@ async function load() {
     Object.assign(info, { clipLen: r.clipLen, clip: r.clip, t: r.t, finals: r.finals || [], llm: r.llm || null, exists: !!r.exists })
     apply(r.edit)
     styles.value = await api.styles()
+    loadPublish()
     loadStickers()
   } finally {
     loading.value = false
@@ -518,6 +528,32 @@ async function render(height) {
   } finally {
     rendering.value = false
   }
+}
+
+async function loadPublish() {
+  try {
+    const d = (await api.memory()).decisions || {}
+    const hit = Object.entries(d.published || {}).find(([, v]) => v.session === name.value && Number(v.rank) === rank.value)
+    Object.assign(pub, hit
+      ? { bvid: hit[0], completion: hit[1].completion ?? '', followers: hit[1].followers ?? '', saved: hit[0] }
+      : { bvid: '', completion: '', followers: '', saved: '' })
+  } catch (e) {
+    // 精排记忆读不到不影响编辑
+  }
+}
+
+async function savePublish() {
+  const bvid = pub.bvid.trim()
+  if (pub.saved && pub.saved !== bvid) await api.memoryAction({ action: 'unpublish', bvid: pub.saved })
+  await api.memoryAction({ action: 'publish', bvid, session: name.value, rank: rank.value,
+    completion: pub.completion === '' ? null : pub.completion, followers: pub.followers === '' ? null : pub.followers })
+  pub.saved = bvid
+  ElMessage.success('已绑定，下次“更新精排记忆”时拉取播放数据')
+}
+
+async function unpublish() {
+  await api.memoryAction({ action: 'unpublish', bvid: pub.saved })
+  Object.assign(pub, { bvid: '', completion: '', followers: '', saved: '' })
 }
 
 async function waitJob(id, every) {
@@ -647,4 +683,6 @@ onBeforeUnmount(() => {
 @media (max-width: 1000px) { .body { grid-template-columns: 1fr; } .right { border-left: none; } }
 .ai-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 12px; font-size: 13px; border-bottom: 1px solid var(--el-border-color-lighter); }
 .ai-bar .warn { width: 100%; padding: 4px 10px; }
+.publish { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--el-border-color); }
+.publish .muted { width: 100%; font-size: 12px; }
 </style>

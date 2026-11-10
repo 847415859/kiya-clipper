@@ -65,7 +65,10 @@ export const api = {
   words: () => http.get('/api/config/words'),
   saveWords: (body) => http.put('/api/config/words', body),
   hotwordsPreview: () => http.get('/api/config/hotwords-preview'),
-  evalResults: () => http.get('/api/eval/results')
+  evalResults: () => http.get('/api/eval/results'),
+
+  memory: () => http.get('/api/memory'),
+  memoryAction: (body) => http.post('/api/memory/actions', body)
 }
 
 export function fmtDuration(sec) {

@@ -218,7 +218,8 @@ def test_rerank_autoedit_evaluate(llm, tmp_path):
     stickers.mkdir()
     (stickers / "doge.png").write_bytes(b"\x89PNG\r\n\x1a\n")
     env = dict(os.environ, DASHSCOPE_BASE_URL=llm.url, DASHSCOPE_API_KEY="sk-test", DASHSCOPE_MODEL="fake-vl",
-               KIYA_LLM_CACHE=str(tmp_path / "cache"), KIYA_STICKERS=str(stickers), KIYA_ENV_FILE=str(tmp_path / "none.env"))
+               KIYA_LLM_CACHE=str(tmp_path / "cache"), KIYA_STICKERS=str(stickers), KIYA_ENV_FILE=str(tmp_path / "none.env"),
+               KIYA_MEMORY_DECISIONS=str(tmp_path / "none.json"), KIYA_MEMORY_FILE=str(tmp_path / "none-mem.json"))
 
     def run(*a):
         return subprocess.run([sys.executable, *map(str, a)], capture_output=True, text=True, env=env)

@@ -45,17 +45,32 @@ asr:
 
 # 精排（scripts/rerank.py）：多模态大模型给每个候选打分、找笑点、建议起止，再和粗筛分数合成排序
 rerank:
-  prompt: rerank_v1          # prompts/ 里的提示词文件
+  prompt: rerank_v2          # prompts/ 里的提示词文件（v2 = v1 + 自动积累的“精排记忆”）
   model: ""                  # 空 = 用 .env 的 DASHSCOPE_MODEL
   frames: 8                  # 每个候选抽几张图（越多越贵）
   width: 640                 # 截图宽度
   context_before: 60         # 前情：片段前多少秒的原话
   workers: 3                 # 并发请求数
-  weights: {llm: 0.8, screen: 0.2}   # 最终分 = 大模型分 × 0.8 + 粗筛名次分 × 0.2；判为不值得切的再 × 0.6
+  # 最终分 = 大模型分 × llm + 粗筛名次分 × screen；判为不值得切的再 × not_funny。
+  # 后台“精排记忆”页确认过的新权重优先于这里（config/memory_decisions.json）
+  weights: {llm: 0.8, screen: 0.2, not_funny: 0.6}
   min_len: 30                # 边界修正后的最短 / 最长时长（秒）
   max_len: 180
   price_in: null             # 单价（元 / 百万 tokens），填了就估算费用
   price_out: null
+
+# 精排记忆（scripts/learn.py）：从录制、审核、投稿里自动积累，填进提示词 rerank_v2 的【积累】
+memory:
+  min_sessions: 2            # 一个说法至少在几场里出现才算梗（只有一场时不会加任何梗）
+  lore_max: 30               # 最多保留多少个自动发现的说法
+  lore_in_prompt: 25         # 提示词里放多少个
+  streamer_uploads: 20       # 拉主播最新多少条投稿
+  streamer_titles: 10        # 提示词里放多少条她的投稿标题
+  my_uploads: 30             # 拉切片号最新多少条投稿（UID 在后台填）
+  min_published: 5           # 切片号绑定满几条才按类型汇总表现
+  min_label_sessions: 3      # 几场“精排 + 标注”后才开始建议新权重
+  examples_yes: 3            # 提示词里放几个“值得切”的审核例子（不含正在精排的这一场）
+  examples_no: 3
 
 # 剪辑脚本初稿（scripts/autoedit.py）
 autoedit:
