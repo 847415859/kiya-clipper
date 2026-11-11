@@ -8,6 +8,10 @@
   python scripts/cut.py output/20261110-2000/candidates.json --height 1080
   python scripts/cut.py output/20261110-2000/candidates.json --sub-style kuaile   # 换字幕样式
   python scripts/cut.py output/20261110-2000/candidates.json --no-subs           # 不加字幕
+  python scripts/cut.py output/20261110-2000/candidates.json --no-refined        # 不按精排，固定剪峰值前后各 30 秒
+
+范围：这场有精排结果（rerank.json）时，按精排修正后的起止剪（审核看到的就是将要成片的长度，30–180 秒）；
+没有精排，或这个候选精排失败，就用粗筛的固定窗口。实际范围记在 clips/windows.json。
 
 字幕：场次已用 transcribe.py 转写过时，自动把主播原话烧录进视频，样式见 config/subtitles.yaml；
 同时在旁边生成同名 .srt（可作为 B 站 CC 字幕上传）和 .ass。--fast 模式不烧录，只生成字幕文件。
@@ -29,6 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from clipper.clipwin import cut_window, write_windows  # noqa: E402
 from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.streamer import resolve_config  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
@@ -97,6 +102,7 @@ def main() -> int:
     ap.add_argument("--fast", action="store_true", help="不重新编码（快，但起点可能偏 1–2 秒）")
     ap.add_argument("--height", type=int, default=720, help="输出高度，默认 720")
     ap.add_argument("--no-subs", action="store_true", help="不加字幕")
+    ap.add_argument("--no-refined", action="store_true", help="不按精排修正后的起止，固定剪粗筛窗口")
     ap.add_argument("--sub-style", help="字幕样式名（config/subtitles.yaml 的 styles），默认用 active")
     ap.add_argument("--sub-style-json", help="直接给一套样式的 JSON 文件（以后后台管理下发任务时用，结构见 schema）")
     ap.add_argument("--config", default=None, help="主播配置（用于关键词换色）；不填时按 candidates.json 所在目录推导主播")
@@ -131,16 +137,28 @@ def main() -> int:
                 print(f"  注意：没找到字体 {style['font']}，字幕可能显示成方块。安装方法见 worker/README.md“字幕”一节")
     elif not args.no_subs:
         print("提示：这场还没有转写（transcript.json），剪出来的视频没有字幕。先运行 transcribe.py")
+    refined_by_rank: dict[int, dict] = {}
+    if not args.no_refined:
+        try:
+            rr = json.loads((path.parent / "rerank.json").read_text(encoding="utf-8"))
+            refined_by_rank = {r["rank"]: r["refined"] for r in rr.get("candidates", [])
+                               if isinstance(r.get("refined"), dict)
+                               and abs(float(r.get("clip_start", -1e9)) - next(
+                                   (c["clip_start"] for c in data["candidates"] if c["rank"] == r["rank"]), 1e9)) <= 1}
+        except (OSError, ValueError, KeyError):
+            refined_by_rank = {}
+    windows: dict[str, dict] = {}
     ok = 0
     for c in cands:
-        parts = pieces(data["segments"], c["clip_start"], c["clip_end"])
+        cs, ce, by_refined = cut_window(c, refined_by_rank.get(c["rank"]))
+        parts = pieces(data["segments"], cs, ce)
         dst = out_dir / f"{c['rank']:02d}_{hhmmss(c['t']).replace(':', '-')}{'.flv' if args.fast else '.mp4'}"
         if not parts:
             print(f"  #{c['rank']:>2} 跳过：找不到对应的录像文件（可能已同步到 OSS 并从本地删除）")
             continue
         ass = None
         if subs:
-            events = build_events(tr["sentences"], c["clip_start"], c["clip_end"], subs["style"], subs["corrections"])
+            events = build_events(tr["sentences"], cs, ce, subs["style"], subs["corrections"])
             w, h = probe_size(parts[0][0])
             dst.with_suffix(".srt").write_text(to_srt(events), encoding="utf-8")
             ass = dst.with_suffix(".ass")
@@ -150,10 +168,13 @@ def main() -> int:
         try:
             cut_one(parts, dst, args.fast, args.height, ass)
             ok += 1
-            print(f"  #{c['rank']:>2} {hhmmss(c['clip_start'])}–{hhmmss(c['clip_end'])} → {dst.name}"
+            windows[f"{c['rank']:02d}"] = {"start": round(cs, 2), "end": round(ce, 2), "refined": by_refined}
+            print(f"  #{c['rank']:>2} {hhmmss(cs)}–{hhmmss(ce)}（{ce - cs:.0f} 秒{'，按精排' if by_refined else ''}）→ {dst.name}"
                   + (f"（跨 {len(parts)} 个分段）" if len(parts) > 1 else ""))
         except subprocess.CalledProcessError as e:
             print(f"  #{c['rank']:>2} 剪切失败：{e}")
+    if windows:
+        write_windows(path.parent, windows)
     print(f"完成 {ok}/{len(cands)} 段，输出在 {out_dir}")
     return 0 if ok else 1
 

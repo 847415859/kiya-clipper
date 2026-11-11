@@ -28,6 +28,9 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent
+sys.path.insert(0, str(ROOT))
+
+from clipper.clipwin import read_windows  # noqa: E402
 MARK_COL, NOTE_COL = "是否有趣(Y/N)", "备注"
 SESSION_RE = re.compile(r"^[\w\-]+$")
 LOCK = threading.Lock()
@@ -64,7 +67,11 @@ class Store:
         data = json.loads((self.out / session / "candidates.json").read_text(encoding="utf-8"))
         marks = {r["序号"]: r for r in self.rows(session)}
         clips_dir = self.out / session / "clips"
+        wins = read_windows(self.out / session)
         for c in data["candidates"]:
+            w = wins.get(f"{c['rank']:02d}") or {}
+            c["cut_start"] = w.get("start", c["clip_start"])         # 审核片段第 0 秒对应的整场时间（按精排剪时和 clip_start 不同）
+            c["cut_end"] = w.get("end", c["clip_end"])
             r = marks.get(str(c["rank"]), {})
             c["mark"] = r.get(MARK_COL, "").strip().upper()
             c["note"] = r.get(NOTE_COL, "")
@@ -262,7 +269,7 @@ function renderList(){const L=$('#list');L.innerHTML='';data.candidates.forEach(
  d.onclick=()=>{cur=i;renderList();show()};L.appendChild(d)});stats();const el=L.children[cur];if(el)el.scrollIntoView({block:'nearest'})}
 function esc(x){return String(x).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
 function speechHtml(c){if(!c.speech)return '';if(!c.speech.length)return '<div class="speech"><div class="keys">主播原话：这段没有识别到说话</div></div>';
- return '<div class="speech"><div class="keys">主播原话（点一句跳到那里；语音识别可能有错字）</div>'+c.speech.map(x=>{const r=Math.max(0,x.t0-c.clip_start);
+ return '<div class="speech"><div class="keys">主播原话（点一句跳到那里；语音识别可能有错字）</div>'+c.speech.map(x=>{const r=Math.max(0,x.t0-c.cut_start);
  return `<div class="sl" data-t="${r}"><span class="st">${Math.floor(r/60)}:${String(Math.floor(r%60)).padStart(2,'0')}</span>${esc(x.text)}</div>`}).join('')+'</div>'}
 function show(){const c=data.candidates[cur];if(!c){$('#view').innerHTML='<div class="empty">这场没有达到分数线的片段，不用审核。</div>';return}const top=Object.entries(c.contrib||{}).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,v])=>`${k} ${v>0?'+':''}${v}`).join('，');
  const video=c.clip?`<video id="v" controls autoplay preload="auto" src="/clip/${encodeURIComponent(S)}/${encodeURIComponent(c.clip)}"></video>`
@@ -271,7 +278,7 @@ function show(){const c=data.candidates[cur];if(!c){$('#view').innerHTML='<div c
  <div class="row"><button class="yes ${c.mark==='Y'?'on':''}" id="by">Y 有趣</button><button class="no ${c.mark==='N'?'on':''}" id="bn">N 不有趣</button>
  <button id="bc">清除</button><button id="bp">← 上一个</button><button id="bx">下一个 →</button><span class="saved" id="saved"></span></div>
  <div class="row"><input type="text" id="note" placeholder="备注：发生了什么 / 为什么不行（例如：舰长互动，笑点在 0:35；边界太早）" value="${esc(c.note||'')}"></div>
- <div class="meta"><span>序号</span><b>#${c.rank} / ${data.candidates.length}</b><span>高峰时间</span><b>${fmt(c.t)}（片段 ${fmt(c.clip_start)}–${fmt(c.clip_end)}）</b>
+ <div class="meta"><span>序号</span><b>#${c.rank} / ${data.candidates.length}</b><span>高峰时间</span><b>${fmt(c.t)}（片段 ${fmt(c.cut_start)}–${fmt(c.cut_end)}）</b>
  <span>分数</span><b>${c.score.toFixed(2)}</b><span>主要信号</span><b>${top||'—'}</b><span>弹幕</span><b>${Math.round(c.danmaku_per_min)} 条/分，情绪词 ${c.emotion_hits}，礼物 ${Math.round(c.gift_value)}</b>
  <span>高频弹幕</span><b>${esc((c.top_danmaku||[]).join(' | '))||'—'}</b><span>本场</span><b>信号 ${data.signals}；弹幕延迟 ${data.delay} 秒</b></div>
  ${speechHtml(c)}<details><summary>本场信号曲线</summary><img src="/curve/${encodeURIComponent(S)}" alt="信号曲线"></details>`;

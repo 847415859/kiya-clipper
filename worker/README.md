@@ -16,6 +16,7 @@ python scripts/screen.py /data/rec --latest
 # 2. 剪出候选片段（默认重新编码成 720p，起点准确；--fast 不重新编码，快但起点可能偏 1–2 秒）
 python scripts/cut.py output/<场次>/candidates.json
 python scripts/cut.py output/<场次>/candidates.json --ranks 1 2 3      # 只剪前 3 个
+python scripts/cut.py output/<场次>/candidates.json --no-refined      # 不按精排，固定剪峰值前后各 30 秒
 
 # 3. 人工标注后评测，并记录这次改动
 python scripts/evaluate.py
@@ -29,7 +30,7 @@ python scripts/evaluate.py --sweep          # 按标注试不同分数线，给�
 | `peaks.csv` | 表格版，“主要信号”列显示是哪两路信号把它推上来的；最后两列给你标注 |
 | `curve.png` | 综合分数和每路信号的曲线，高峰标了序号 |
 | `features.npz` | 音频 / 画面特征缓存；改权重、词典后重跑只要几秒 |
-| `clips/` | cut.py 剪出的小视频 |
+| `clips/` | cut.py 剪出的小视频；`clips/windows.json` 记每条实际剪切的整场时间范围 |
 
 **信号与权重**（`config/kiya.yaml` 的 `weights`）：弹幕密度 0.35、情绪词 0.20、礼物 0.15、响度突增 0.20、画面变化 0.10。录像不在本地时自动只用弹幕三项。
 
@@ -409,3 +410,11 @@ worker/
 ├── scripts/edit_preview.py      # 编辑器预览视频（素材范围超出审核片段时）
 └── tests/               # 合成弹幕 + 合成录像 + 假百炼接口的端到端测试，不需要真实录像（约 1 分钟）
 ```
+
+## 审核片段的长度
+
+`cut.py` 如果这场有精排结果（`rerank.json`），就按精排修正后的起止剪（对齐句子，30–180 秒），审核看到的就是将要成片的长度；这个候选没有精排、精排失败、或精排的起止不包含高峰时间点，就退回粗筛的固定窗口（峰值前后各 30 秒）。顺序是：先 `rerank.py`，再 `cut.py`（监控脚本的自动流程本来就是这个顺序）；已经剪过的场次，精排补跑后重新执行 `cut.py` 即可，会覆盖原来的片段。
+
+候选的 `clip_start` / `clip_end` 不变（标注对齐、评测重叠、精排记忆都靠它），实际剪切范围写在 `clips/windows.json`，格式 `{"01": {"start": 整场秒, "end": 整场秒, "refined": true}}`。审核页的播放起点、`publish_pack.py` 的封面抽帧、`subtitle.py` 重生成字幕都读它；旧场次没有这个文件，等于候选窗口。
+
+注意：审核时点的“开头 / 结尾太早 / 太晚”现在评的是精排修正后的边界，不再对应 `analysis.clip_before_seconds` / `clip_after_seconds` 的调参建议（后者只影响没有精排的候选）。

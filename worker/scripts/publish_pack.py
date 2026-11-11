@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from clipper.kcfg import find_taboo, load_cfg  # noqa: E402
 from clipper.streamer import decisions_path, resolve_config  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
+from clipper.clipwin import clip_origin, read_windows  # noqa: E402
 from clipper.edit import edit_window  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
 from clipper.publish import DEFAULT_TAGS, build_description, build_tags, clean_title, render_cover  # noqa: E402
@@ -72,7 +73,7 @@ def grab_frame(sess: Path, data: dict, cand: dict, edit: dict, t: float, out: Pa
         if grab(f, t - a, out):
             return "编辑预览"
     for f in sorted((sess / "clips").glob(f"{rank:02d}_*.mp4")) if (sess / "clips").exists() else []:
-        if grab(f, t - cand["clip_start"], out):
+        if grab(f, t - clip_origin(read_windows(sess), cand), out):
             return "审核片段"
     return None
 

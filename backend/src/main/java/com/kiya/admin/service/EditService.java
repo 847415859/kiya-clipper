@@ -267,7 +267,9 @@ public class EditService {
         out.put("clipLen", clipLen);
         out.put("clipStart", ws);                                    // 素材范围开头（整场秒数）
         out.put("window", Map.of("start", ws, "end", we));
-        out.put("candidate", Map.of("start", cs, "end", ce));
+        // “审核片段”的实际范围：有精排时 cut.py 按精排起止剪（clips/windows.json），和候选窗口不同；前端据此判断能不能直接用审核片段当预览
+        double[] cw = clipWindow(session, rank, cs, ce);
+        out.put("candidate", Map.of("start", cw[0], "end", cw[1]));
         out.put("t", c.path("t").asDouble());
         // 预览视频：素材范围就是候选片段时前端用审核片段（clip），否则用 edit_preview.py 按素材范围剪好的（preview）
         out.put("clip", findClip(session, rank, c.path("t").asDouble()));
@@ -403,6 +405,22 @@ public class EditService {
             throw ApiException.badRequest("文件名不合法");
         }
         return WorkerPaths.inside(paths.output(), paths.sessionDir(session).resolve("edit_preview").resolve(file));
+    }
+
+    /** 审核片段的剪切范围：读 clips/windows.json，没有就是候选窗口。 */
+    private double[] clipWindow(String session, int rank, double cs, double ce) {
+        try {
+            Path f = paths.sessionDir(session).resolve("clips").resolve("windows.json");
+            if (Files.exists(f)) {
+                JsonNode w = om.readTree(f.toFile()).path(String.format("%02d", rank));
+                if (w.path("start").isNumber() && w.path("end").isNumber()) {
+                    return new double[] {round1(w.path("start").asDouble()), round1(w.path("end").asDouble())};
+                }
+            }
+        } catch (IOException ignored) {
+            // 读不到就当没有
+        }
+        return new double[] {cs, ce};
     }
 
     private String findClip(String session, int rank, double t) {

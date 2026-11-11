@@ -202,6 +202,20 @@ public class SessionService {
                 m.put("llm", info);
             }
         }
+        // 审核片段的实际剪切范围（cut.py 写的 clips/windows.json）：有精排时和候选窗口不同，播放起点要按它算
+        JsonNode wins = readJson(paths.sessionDir(session).resolve("clips").resolve("windows.json"));
+        for (Map<String, Object> m : list) {
+            JsonNode w = wins == null ? null : wins.path(String.format("%02d", (Integer) m.get("rank")));
+            if (w != null && w.path("start").isNumber() && w.path("end").isNumber()) {
+                m.put("cutStart", w.path("start").asDouble());
+                m.put("cutEnd", w.path("end").asDouble());
+                m.put("cutRefined", w.path("refined").asBoolean(false));
+            } else {
+                m.put("cutStart", m.get("clipStart"));
+                m.put("cutEnd", m.get("clipEnd"));
+                m.put("cutRefined", false);
+            }
+        }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("session", session);
         out.put("candidates", list);

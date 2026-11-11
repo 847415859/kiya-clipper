@@ -27,6 +27,7 @@ REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
 from clipper.asr import load_transcript  # noqa: E402
+from clipper.clipwin import read_windows  # noqa: E402
 from clipper.streamer import resolve_config, streamer_from_args  # noqa: E402
 from clipper.subtitles import (StyleError, ass_filter, build_events, font_available, get_style,  # noqa: E402
                                load_config, lore_keywords, to_ass, to_srt, validate_style)
@@ -128,10 +129,13 @@ def cmd_make(args) -> int:
     kw = lore_keywords(streamer_cfg(resolve_config(args.config, streamer=streamer_from_args(args.streamer))))
     out_dir = path.parent / "clips"
     out_dir.mkdir(exist_ok=True)
+    wins = read_windows(path.parent)
     for c in data["candidates"]:
         if args.ranks and c["rank"] not in args.ranks:
             continue
-        ev = build_events(tr["sentences"], c["clip_start"], c["clip_end"], st, cfg.get("corrections") or {})
+        w = wins.get(f"{c['rank']:02d}") or {}           # 审核片段的实际范围（按精排剪时和候选窗口不同）
+        ev = build_events(tr["sentences"], w.get("start", c["clip_start"]), w.get("end", c["clip_end"]), st,
+                          cfg.get("corrections") or {})
         stem = out_dir / f"{c['rank']:02d}_{_hms(c['t'])}"
         stem.with_suffix(".srt").write_text(to_srt(ev), encoding="utf-8")
         stem.with_suffix(".ass").write_text(to_ass(ev, st, keywords=kw, corrections=cfg.get("corrections")),

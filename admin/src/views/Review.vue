@@ -40,6 +40,8 @@
           <span>{{ hms(c.t) }}</span>
           <span v-if="tabooHits(c).length" class="taboo-mark" title="命中禁区话题">禁</span>
           <span v-if="aiVisible(c) && c.llm && !c.llm.error" class="ai" :class="{ hot: c.llm.funny }">AI {{ c.llm.score }}</span>
+          <span v-else-if="aiVisible(c) && c.llm && c.llm.error" class="ai ai-fail" :title="'AI 精排失败：' + c.llm.error">AI 失败</span>
+          <span v-else-if="aiVisible(c) && data.rerank && !c.llm" class="ai ai-fail" title="这个候选没有精排结果（没跑或旧结果）">AI 未跑</span>
           <el-tag size="small" :type="c.mark === 'Y' ? 'success' : c.mark === 'N' ? 'danger' : 'info'" class="badge">
             {{ c.mark === 'Y' ? '有趣' : c.mark === 'N' ? '不有趣' : c.clip ? '未标' : '未剪' }}
           </el-tag>
@@ -83,7 +85,7 @@
 
         <div class="meta">
           <span>序号</span><b>#{{ c.rank }} / {{ list.length }}</b>
-          <span>高峰时间</span><b>{{ hms(c.t) }}（片段 {{ hms(c.clipStart) }}–{{ hms(c.clipEnd) }}）</b>
+          <span>高峰时间</span><b>{{ hms(c.t) }}（片段 {{ hms(c.cutStart ?? c.clipStart) }}–{{ hms(c.cutEnd ?? c.clipEnd) }}，{{ Math.round((c.cutEnd ?? c.clipEnd) - (c.cutStart ?? c.clipStart)) }} 秒{{ c.cutRefined ? '，按精排' : '' }}）</b>
           <span>分数</span><b>{{ (c.score || 0).toFixed(2) }}</b>
           <span>主要信号</span><b>{{ signals(c) }}</b>
           <span>弹幕</span><b>{{ Math.round(c.danmakuPerMin || 0) }} 条/分，情绪词 {{ c.emotionHits }}，礼物 {{ Math.round(c.giftValue || 0) }}</b>
@@ -113,8 +115,8 @@
         <div v-if="c.speech" class="speech">
           <div class="muted">主播原话（点一句跳到那里；语音识别可能有错字）</div>
           <div v-if="!c.speech.length" class="muted">这段没有识别到说话</div>
-          <div v-for="(s, i) in c.speech" :key="i" class="sl" @click="seek(s.t0 - c.clipStart)">
-            <span class="st">{{ mmss(s.t0 - c.clipStart) }}</span><template v-for="(p, k) in pieces(s.text)" :key="k"><mark v-if="p.hit" class="tb">{{ p.t }}</mark><template v-else>{{ p.t }}</template></template>
+          <div v-for="(s, i) in c.speech" :key="i" class="sl" @click="seek(s.t0 - (c.cutStart ?? c.clipStart))">
+            <span class="st">{{ mmss(Math.max(0, s.t0 - (c.cutStart ?? c.clipStart))) }}</span><template v-for="(p, k) in pieces(s.text)" :key="k"><mark v-if="p.hit" class="tb">{{ p.t }}</mark><template v-else>{{ p.t }}</template></template>
           </div>
         </div>
 
@@ -419,6 +421,7 @@ video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; dis
 }
 .ai { font-size: 11px; color: var(--el-text-color-secondary); margin-left: auto; margin-right: 4px; }
 .ai.hot { color: var(--el-color-success); font-weight: 600; }
+.ai.ai-fail { color: var(--el-color-danger); }
 .aibox { margin: 10px 0; padding: 8px 12px; border-left: 3px solid var(--el-color-primary-light-5); background: var(--el-fill-color-light); display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .aibox .el-tag { margin-right: 6px; }
 .adopt { margin: 8px 0 0; padding: 6px 10px; border-radius: 6px; background: var(--el-color-primary-light-9); font-size: 13px; display: flex; gap: 10px; align-items: center; }
