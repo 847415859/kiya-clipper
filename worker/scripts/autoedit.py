@@ -30,7 +30,8 @@ from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.streamer import resolve_config  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.context import danmaku_lines, load_events, profile, speech_lines  # noqa: E402
-from clipper.edit import EditError, enforce_density, ensure_caption, suggest_window, validate_edit, validate_item  # noqa: E402
+from clipper.stickers import offer_text as sticker_offer_text, offered as offered_stickers, sticker_dir, undescribed  # noqa: E402
+from clipper.edit import EditError, enforce_density, ensure_caption, limit_stickers, suggest_window, validate_edit, validate_item  # noqa: E402
 from clipper.editdiff import edit_taste, taste_text  # noqa: E402
 from clipper.llm import LLMClient, fill, load_prompt  # noqa: E402
 from clipper.variants import DEFAULT, STYLES, load as variants_load, resolve, save as save_variants, variants_cfg, wants_variants  # noqa: E402
@@ -52,10 +53,8 @@ class EditOut(BaseModel):
 
 
 def sticker_names() -> list[str]:
-    d = Path(os.environ.get("KIYA_STICKERS") or REPO / "assets" / "stickers")
-    if not d.is_dir():
-        return []
-    return sorted(p.name for p in d.iterdir() if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp"))
+    """能给 AI 用的贴图文件名：只有写了含义说明的才算（clipper/stickers.py）。"""
+    return [s["name"] for s in offered_stickers(sticker_dir())]
 
 
 def shift_beats(beats: list[str], delta: float) -> str:
@@ -109,7 +108,12 @@ def main() -> int:
     if t_end - t_start < 5:
         t_start, t_end = 0.0, clip_len
     story = llm.get("story") or {}
-    stickers = sticker_names()
+    sdir = sticker_dir()
+    offered_st = offered_stickers(sdir)
+    stickers = [s["name"] for s in offered_st]
+    if undescribed(sdir):
+        print(f"提示：贴图库里有 {len(undescribed(sdir))} 个贴图没有含义说明，AI 不会用它们（AI 只看得到文件名）；"
+              "运行 python scripts/describe_stickers.py 自动补，或手写 assets/stickers/stickers.json")
     caption = (llm.get("context_caption") or "").strip()
     handoff = dict(caption=caption or "（不需要）", punch_line=llm.get("punch_line") or "（无）",
                    hook_note=llm.get("hook_note") or "（不需要）", pace=llm.get("pace") or "（未知，按精排结论自己判断）",
@@ -159,7 +163,7 @@ def main() -> int:
                     punch=(f"{ca + llm['punch_time'] - a:.1f}" if llm.get("punch_time", -1) >= 0 else "（未知）"),
                     setup=story.get("setup") or "—", punchline=story.get("punch") or "—", reaction=story.get("reaction") or "—",
                     speech=speech_lines(sents, a, b, a) if sents else "（这场还没有转写）",
-                    danmaku=dm, stickers="\n".join(stickers) or "（贴图库是空的，不要用贴图）", colors=COLORS)
+                    danmaku=dm, stickers=sticker_offer_text(offered_st), colors=COLORS)
         print(f"#{args.rank} 生成剪辑脚本初稿{'（' + v['label'] + '版）' if multi or key != DEFAULT else ''}（{client.model}，{version}）…")
         r = client.chat_json([{"role": "system", "content": system}, {"role": "user", "content": text}], EditOut, tag=version)
         if r.data is None:
@@ -180,6 +184,7 @@ def main() -> int:
         if out.trim and 0 <= out.trim.start < out.trim.end <= clip_len and out.trim.end - out.trim.start >= 5:
             trim = {"start": round(out.trim.start, 2), "end": round(out.trim.end, 2)}
         items = [i for i in items if trim["start"] <= i["start"] < trim["end"]]
+        items, st_dropped = limit_stickers(items, int(ac.get("max_stickers", 2)))
         if "{{caption}}" in user:                        # edit_v5：精排要求补的前情字幕，模型漏了就在开头补上
             items = ensure_caption(items, caption, trim)
         edit = {"version": 1, "window": window, "trim": trim, "subtitles": {"enabled": True}, "items": items,

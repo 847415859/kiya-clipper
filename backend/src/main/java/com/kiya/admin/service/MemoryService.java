@@ -212,6 +212,7 @@ public class MemoryService {
                 item.put("origin", text(req, "origin", 100));
                 item.put("usage", text(req, "usage", 80));
                 item.put("forms", strings(req.get("forms"), MEME_FORMS, 2, 10, "形式"));
+                item.put("sticker", text(req, "sticker", 80));
                 item.put("tags", strings(req.get("tags"), null, 5, 10, "标签"));
                 boolean manual = Boolean.TRUE.equals(req.get("manual")) || (old instanceof Map<?, ?> om0 && Boolean.TRUE.equals(om0.get("manual")));
                 if (manual) {

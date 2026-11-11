@@ -265,3 +265,26 @@ def test_danmaku_lines_gifts_prefer_sc():
 def test_prompt_mentions_sc_as_cause():
     _, system, user = load_prompt("rerank_v4")
     assert "（SC）的文字" in system and "先读它" in user
+
+
+def test_evaluate_reports_pick_precision(tmp_path):
+    import csv
+    import json
+    import os
+    import subprocess
+    out, rv = tmp_path / "output", tmp_path / "reviews"
+    rv.mkdir()
+    for sess, picks, marks in [("20261101-2000", {1, 3}, {1: "Y", 2: "N", 3: "N", 4: "Y"}), ("20261102-2000", set(), {1: "N", 2: "Y"})]:
+        d = out / sess
+        d.mkdir(parents=True)
+        cands = [{"rank": r, "new_rank": r, "llm": {"funny": r in picks, "score": 8 if r in picks else 4}, "pick": r in picks} for r in marks]
+        (d / "rerank.json").write_text(json.dumps({"prompt": "rerank-v4", "candidates": cands}), encoding="utf-8")
+        with open(rv / f"{sess}.csv", "w", newline="", encoding="utf-8-sig") as f:
+            w = csv.writer(f)
+            w.writerow(["序号", "片段起", "片段止", "分数", "是否有趣(Y/N)"])
+            for r, m in marks.items():
+                w.writerow([r, "00:00:00", "00:01:00", "2", m])
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "evaluate.py"), "--rerank", "--out", str(out), "--reviews", str(rv)],
+                       capture_output=True, text=True, env=dict(os.environ, KIYA_STREAMER="kiya"))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "共推荐 2 条，其中你标 Y 的 1 条（精确率 50%）" in r.stdout and "被推荐了 1 条（召回 33%）" in r.stdout

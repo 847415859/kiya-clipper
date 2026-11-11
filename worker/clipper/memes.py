@@ -87,7 +87,7 @@ def build_library(cfg: dict, decisions: dict, memory: dict | None, history: dict
     def ent(text: str, src: str) -> dict:
         k = _key(text)
         e = lib.setdefault(k, {"text": str(text).strip(), "sources": [], "status": "pending", "level": 1, "meaning": "",
-                               "origin": "", "usage": "", "forms": ["text"], "tags": [], "evergreen": False,
+                               "origin": "", "usage": "", "forms": ["text"], "sticker": "", "tags": [], "evergreen": False,
                                "heat": None, "heat_days": 0})
         if src not in e["sources"]:
             e["sources"].append(src)
@@ -122,7 +122,7 @@ def build_library(cfg: dict, decisions: dict, memory: dict | None, history: dict
         d = dm.get(k) or {}
         if d.get("status") in STATUSES:
             e["status"] = d["status"]
-        for f in ("level", "meaning", "origin", "usage", "forms", "tags", "note"):
+        for f in ("level", "meaning", "origin", "usage", "forms", "sticker", "tags", "note"):
             if f in d and d[f] not in (None, ""):
                 e[f] = d[f]
         e["level"] = int(e["level"]) if str(e["level"]).isdigit() else 1
@@ -226,6 +226,7 @@ def offer_text(rows: list[dict]) -> str:
     out = []
     for r in rows:
         bits = [f"《{r['text']}》", f"含义：{r['meaning']}" if r.get("meaning") else "", f"用法：{r['usage']}" if r.get("usage") else "",
+                f"对应贴图：{r['sticker']}（挂这个梗时就用它，不要另选贴图）" if r.get("sticker") else "",
                 f"尺度：{LEVELS.get(int(r.get('level', 1)), '')}"]
         out.append("- " + "；".join(b for b in bits if b))
     return "\n".join(out)

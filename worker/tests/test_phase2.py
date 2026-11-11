@@ -144,6 +144,8 @@ class FakeLLM:
                 {"type": "zoom", "start": 23, "duration": 2, "scale": 1.4},                  # 和上一个推镜太近 → 丢
                 {"type": "sticker", "start": 21, "duration": 1.5, "asset": "不存在.png"},   # 不在贴图库 → 丢
                 {"type": "sticker", "start": 30, "duration": 1.5, "asset": "doge.png"},
+                {"type": "sticker", "start": 40, "duration": 1.5, "asset": "doge.png"},          # 同一个贴图再用一次 → 丢
+                {"type": "sticker", "start": 42, "duration": 1.5, "asset": "1743.png"},          # 没有含义说明（不在可用列表）→ 丢
                 {"type": "text", "start": 31, "duration": 2, "text": ""}]}, ensure_ascii=False)
         if "【前情" in text:                                     # 精排
             n = self.mode.get("rerank_calls", 0)
@@ -221,6 +223,8 @@ def test_rerank_autoedit_evaluate(llm, tmp_path):
     stickers = tmp_path / "stickers"
     stickers.mkdir()
     (stickers / "doge.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (stickers / "1743.png").write_bytes(b"\x89PNG\r\n\x1a\n")                                       # 没有含义说明：AI 看不到，也不能用
+    (stickers / "stickers.json").write_text(json.dumps({"doge.png": {"meaning": "柴犬狗头，一脸无语", "mood": "无语、吐槽"}}, ensure_ascii=False), encoding="utf-8")
     env = dict(os.environ, DASHSCOPE_BASE_URL=llm.url, DASHSCOPE_API_KEY="sk-test", DASHSCOPE_MODEL="fake-vl",
                KIYA_LLM_CACHE=str(tmp_path / "cache"), KIYA_STICKERS=str(stickers), KIYA_ENV_FILE=str(tmp_path / "none.env"),
                KIYA_MEMORY_DECISIONS=str(tmp_path / "none.json"), KIYA_MEMORY_FILE=str(tmp_path / "none-mem.json"))
@@ -256,6 +260,7 @@ def test_rerank_autoedit_evaluate(llm, tmp_path):
     assert e["items"][0]["text"] == "她说要寄舰礼" and e["items"][0]["preset"] == "fade"          # 精排给的前情字幕：模型没放，脚本在开头补上
     assert e["trim"] == {"start": 2.0, "end": 50.0} and e["generated_by"].startswith("edit-v5")
     handoff = [b for b in llm.calls if "综艺版" in b["messages"][0]["content"]][-1]["messages"][1]["content"]
+    assert "doge.png：柴犬狗头，一脸无语；适合：无语、吐槽" in handoff and "1743.png" not in handoff
     assert "前情字幕：她说要寄舰礼" in handoff and "笑点那一句原话：结果寄了一盒内衣" in handoff and "起因：说寄舰礼" in handoff
     assert "笑点类型：反差、互动" in handoff and "表情最夸张的时刻（秒）：" in handoff and "（没有）\n精排的剪辑建议" not in handoff and "建议放大" in handoff
     assert not density_problems(e)

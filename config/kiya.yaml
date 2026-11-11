@@ -120,6 +120,7 @@ publish:
 autoedit:
   prompt: edit_v5            # v5 = v4 + 照着精排的交接编排（前情字幕 / 节拍 / 笑点原话 / 开头怎么改）；v4 = v3 + 多版本风格档位；v3 = v2 + 梗库（只用后台确认过的梗；v2 = v1 + 剪辑师口味，人工改过的初稿攒够 memory.min_edits 条才生效）
   model: ""
+  max_stickers: 2            # 一条切片最多几个贴图，同一个贴图整条只能用一次（贴图要先写含义说明：scripts/describe_stickers.py）
   max_items: 8               # 一条切片最多几个效果（标准版；克制版最多 3 个，热闹版多 3 个）
   variants:                  # 多版本初稿：前 top_n 个候选各出一版，其余只出标准版（多一版 = 多一次大模型调用）
     top_n: 5

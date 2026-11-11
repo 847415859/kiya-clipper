@@ -270,21 +270,40 @@
       </aside>
     </div>
 
-    <el-dialog v-model="gallery" title="贴图库" width="720px">
-      <div class="toolbar">
-        <el-upload :show-file-list="false" accept=".png,.jpg,.jpeg,.gif,.webp" :http-request="upload">
-          <el-button type="primary">上传图片</el-button>
-        </el-upload>
-        <span class="muted">PNG（透明背景最好）/ JPG / GIF / WEBP，最大 5 MB。只用有授权或可商用的素材。</span>
-      </div>
-      <div v-if="!stickers.length" class="muted">贴图库是空的，先上传几张表情包。</div>
-      <div class="gallery">
-        <div v-for="s in stickers" :key="s.name" class="cell" @click="pickSticker(s.name)">
-          <img :src="api.stickerUrl(s.name)" :alt="s.name" />
-          <div class="nm">{{ s.name }}</div>
-          <el-button link size="small" type="danger" class="del" @click.stop="delSticker(s.name)">删除</el-button>
-        </div>
-      </div>
+    <el-dialog v-model="gallery" title="贴图库" width="860px">
+      <el-tabs v-model="galleryTab">
+        <el-tab-pane label="我的贴图" name="mine">
+          <div class="toolbar">
+            <el-upload :show-file-list="false" accept=".png,.jpg,.jpeg,.gif,.webp" :http-request="upload">
+              <el-button type="primary">上传图片</el-button>
+            </el-upload>
+            <span class="muted">PNG（透明背景最好）/ JPG / GIF / WEBP，最大 5 MB。只用有授权或可商用的素材。</span>
+          </div>
+          <div v-if="!stickers.length" class="muted">贴图库是空的，先上传几张表情包，或到「网络搜索」里找。</div>
+          <div class="gallery">
+            <div v-for="s in stickers" :key="s.name" class="cell" @click="pickSticker(s.name)">
+              <img :src="api.stickerUrl(s.name)" :alt="s.name" />
+              <div class="nm">{{ s.name }}</div>
+              <el-button link size="small" type="danger" class="del" @click.stop="delSticker(s.name)">删除</el-button>
+            </div>
+          </div>
+        </el-tab-pane>
+        <el-tab-pane label="网络搜索" name="search">
+          <div class="toolbar">
+            <el-input v-model="searchQ" placeholder="搜梗图：破防、问号、惊讶、大笑…" style="width: 240px" clearable
+                      @keyup.enter="doSearch" />
+            <el-button type="primary" :loading="searching" @click="doSearch">搜索</el-button>
+            <span class="muted">来自斗图吧，仅内部测试用；下载后文件名带 net_ 前缀，商用前换成授权素材。</span>
+          </div>
+          <div v-if="searchQ && !searchResults.length && !searching" class="muted">没搜到，换个词试试。</div>
+          <div class="gallery">
+            <div v-for="(u, i) in searchResults" :key="i" class="cell">
+              <img :src="u" :alt="`${searchQ}${i}`" loading="lazy" />
+              <el-button size="small" type="primary" class="add" @click="addNetSticker(u, i)">添加</el-button>
+            </div>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
     </el-dialog>
 
     <el-dialog :model-value="!!finalFile" :title="finalFile" width="900px" destroy-on-close @close="finalFile = ''">
@@ -562,6 +581,11 @@ function removeSelected() {
 }
 
 // ---------------------------------------------------------------- 贴图库
+const galleryTab = ref('mine')
+const searchQ = ref('')
+const searchResults = ref([])
+const searching = ref(false)
+
 async function loadStickers() {
   stickers.value = await api.stickers()
 }
@@ -574,6 +598,24 @@ async function delSticker(n) {
   await ElMessageBox.confirm(`从贴图库删除 ${n}？已经用了它的片段渲染时会报错。`, '删除贴图', { type: 'warning' })
   await api.deleteSticker(n)
   loadStickers()
+}
+async function doSearch() {
+  const q = searchQ.value.trim()
+  if (!q) return
+  searching.value = true
+  searchResults.value = []
+  try {
+    searchResults.value = await api.searchSticker(q)
+    if (!searchResults.value.length) ElMessage.info('没搜到，换个词试试')
+  } finally {
+    searching.value = false
+  }
+}
+async function addNetSticker(url, i) {
+  const name = `net_${searchQ.value.trim()}_${String(i + 1).padStart(2, '0')}`
+  const r = await api.fetchSticker(url, name)
+  ElMessage.success(`已添加 ${r.name}`)
+  await loadStickers()
 }
 
 // ---------------------------------------------------------------- 加载 / 保存 / 渲染
@@ -964,6 +1006,7 @@ onBeforeUnmount(() => {
 .cell img { max-width: 100%; height: 80px; object-fit: contain; background: repeating-conic-gradient(#eee 0 25%, #fff 0 50%) 0 0 / 12px 12px; }
 .cell .nm { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cell .del { position: absolute; top: 2px; right: 4px; }
+.cell .add { margin-top: 4px; width: 100%; }
 @media (max-width: 1000px) { .body { grid-template-columns: 1fr; } .right { border-left: none; } }
 .style-pick { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
 .style-pick :deep(.el-checkbox) { margin-right: 0; height: auto; padding: 8px 12px; }

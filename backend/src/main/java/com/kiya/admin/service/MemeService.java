@@ -22,7 +22,7 @@ import com.kiya.admin.common.ApiException;
  */
 @Service
 public class MemeService {
-    private static final List<String> OVERLAY = List.of("level", "meaning", "origin", "usage", "forms", "tags");
+    private static final List<String> OVERLAY = List.of("level", "meaning", "origin", "usage", "forms", "sticker", "tags");
 
     private final WorkerPaths paths;
     private final MemoryService memory;

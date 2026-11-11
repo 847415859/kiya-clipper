@@ -193,6 +193,20 @@ def enforce_density(edit: dict) -> tuple[dict, list[dict]]:
     return dict(edit, items=kept), dropped
 
 
+def limit_stickers(items: list[dict], max_per_clip: int = 2) -> tuple[list[dict], list[dict]]:
+    """贴图：同一个贴图整条只能用一次，整条最多 max_per_clip 个（按时间先后留，其余丢掉）。返回 (新列表, 被丢掉的)。"""
+    kept, dropped, seen, n = [], [], set(), 0
+    for it in sorted(items, key=lambda i: i["start"]):
+        if it["type"] == "sticker":
+            if it["asset"] in seen or n >= max_per_clip:
+                dropped.append(it)
+                continue
+            seen.add(it["asset"])
+            n += 1
+        kept.append(it)
+    return kept, dropped
+
+
 def ensure_caption(items: list[dict], caption: str, trim: dict) -> list[dict]:
     """精排给了前情字幕，但大模型没放（或放歪了）：在成片开头补一条。不需要字幕、或开头 6 秒内已有这段字就原样返回。"""
     caption = (caption or "").strip()[:40]

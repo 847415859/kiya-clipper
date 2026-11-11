@@ -141,6 +141,7 @@ def rerank_report(reviews: Path, out: Path) -> int:
     rows = []
     agree = {"TP": 0, "FP": 0, "FN": 0, "TN": 0}
     ys, ns = [], []
+    pk = {"n": 0, "hit": 0, "y": 0, "y_picked": 0, "sess": 0}          # ★推荐：推荐了几条、其中你标 Y 的几条；你标 Y 的有几条被推荐
     for sess, mk in sorted(marks.items()):
         rp = out / sess / "rerank.json"
         if not rp.exists():
@@ -152,6 +153,14 @@ def rerank_report(reviews: Path, out: Path) -> int:
         screen_order = sorted(cands, key=lambda c: c["rank"])
         llm_order = sorted(cands, key=lambda c: c["new_rank"])
         total_y = sum(mk[c["rank"]] == "Y" for c in cands)
+        if any("pick" in c for c in cands):                                    # 旧版精排结果没有 pick，不统计
+            pk["sess"] += 1
+            pk["y"] += total_y
+            for c in cands:
+                if c.get("pick"):
+                    pk["n"] += 1
+                    pk["hit"] += mk[c["rank"]] == "Y"
+                    pk["y_picked"] += mk[c["rank"]] == "Y"
 
         def at(order, k):
             y = sum(mk[c["rank"]] == "Y" for c in order[:k])
@@ -179,6 +188,11 @@ def rerank_report(reviews: Path, out: Path) -> int:
               f"（你 Y 它也说值得：{agree['TP']}，你 Y 它说不值得：{agree['FN']}，你 N 它说值得：{agree['FP']}，都说不行：{agree['TN']}）")
         if ys and ns:
             print(f"平均分：你标 Y 的 {sum(ys) / len(ys):.1f}，标 N 的 {sum(ns) / len(ns):.1f}（差得越多，分数越有区分度）")
+    if pk["sess"]:
+        prec = f"{pk['hit'] / pk['n']:.0%}" if pk["n"] else "—"
+        rec = f"{pk['y_picked'] / pk['y']:.0%}" if pk["y"] else "—"
+        print(f"\n★推荐发布（{pk['sess']} 场）：共推荐 {pk['n']} 条，其中你标 Y 的 {pk['hit']} 条（精确率 {prec}）；"
+              f"你标 Y 的 {pk['y']} 条里被推荐了 {pk['y_picked']} 条（召回 {rec}）。精确率比召回重要：推荐的得是真值得发的")
     print("只有 1–2 场时波动很大，别据此调提示词；攒够 3 场再看")
     return 0
 

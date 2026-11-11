@@ -91,6 +91,21 @@ public class EditController {
         return stickers.upload(file);
     }
 
+    /** 网络搜索梗图（斗图吧），返回图片直链列表，前端预览后点「添加」再走 fetch 下载入库。 */
+    @GetMapping("/api/stickers/search")
+    public List<String> searchSticker(@RequestParam("q") String q,
+                                      @RequestParam(value = "limit", defaultValue = "20") int limit) {
+        return stickers.search(q, limit);
+    }
+
+    public record FetchReq(String url, String name) {}
+
+    /** 把网络图片下载进贴图库（文件名带 net_ 前缀，标记版权未验证）。 */
+    @PostMapping("/api/stickers/fetch")
+    public Map<String, Object> fetchSticker(@RequestBody FetchReq req) {
+        return stickers.fetch(req.url(), req.name());
+    }
+
     @DeleteMapping("/api/stickers/{name}")
     public Map<String, Object> deleteSticker(@PathVariable String name) {
         stickers.delete(name);

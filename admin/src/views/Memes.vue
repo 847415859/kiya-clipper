@@ -95,6 +95,11 @@
             <el-checkbox value="sticker">贴图</el-checkbox>
           </el-checkbox-group>
         </el-form-item>
+        <el-form-item label="绑定贴图">
+          <el-select v-model="dlg.sticker" clearable filterable placeholder="选填：挂这个梗时自动用这张图（可选一张贴图库里的图）" style="width: 100%">
+            <el-option v-for="s in stickerList" :key="s.name" :label="s.name" :value="s.name" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="标签"><el-select v-model="dlg.tags" multiple filterable allow-create default-first-option :multiple-limit="5" placeholder="选填，如：翻车、钓鱼" style="width: 100%" /></el-form-item>
       </el-form>
       <template #footer>
@@ -132,7 +137,8 @@ const newBlack = ref('')
 const levelName = { 1: '大众', 2: '圈层', 3: '谨慎' }
 const statusName = { pending: '待确认', approved: '已启用', disabled: '已停用', blacklisted: '黑名单' }
 const statusType = { pending: 'warning', approved: 'success', disabled: 'info', blacklisted: 'danger' }
-const dlg = reactive({ show: false, manual: false, text: '', status: 'approved', meaning: '', origin: '', usage: '', level: 1, forms: ['text'], tags: [] })
+const dlg = reactive({ show: false, manual: false, text: '', status: 'approved', meaning: '', origin: '', usage: '', level: 1, forms: ['text'], sticker: '', tags: [] })
+const stickerList = ref([])
 
 const memes = computed(() => (lib.value ? lib.value.memes : []))
 const counts = computed(() => (lib.value ? lib.value.counts : {}))
@@ -156,6 +162,7 @@ async function load() {
   loading.value = true
   try {
     lib.value = await api.memes()
+    stickerList.value = await api.stickers().catch(() => [])
   } finally {
     loading.value = false
   }
@@ -176,19 +183,19 @@ function isManual(row) {
 function fill(row) {
   Object.assign(dlg, {
     show: true, manual: false, text: row.text, status: 'approved', meaning: row.meaning || '', origin: row.origin || '', usage: row.usage || '',
-    level: row.level || 1, forms: row.forms && row.forms.length ? [...row.forms] : ['text'], tags: [...(row.tags || [])]
+    level: row.level || 1, forms: row.forms && row.forms.length ? [...row.forms] : ['text'], sticker: row.sticker || '', tags: [...(row.tags || [])]
   })
 }
 function openEdit(row) {
   fill(row)
 }
 function openAdd() {
-  Object.assign(dlg, { show: true, manual: true, text: '', status: 'approved', meaning: '', origin: '', usage: '', level: 1, forms: ['text'], tags: [] })
+  Object.assign(dlg, { show: true, manual: true, text: '', status: 'approved', meaning: '', origin: '', usage: '', level: 1, forms: ['text'], sticker: '', tags: [] })
 }
 async function save() {
   await act({
     action: 'memeSave', text: dlg.text.trim(), status: 'approved', meaning: dlg.meaning.trim(), origin: dlg.origin.trim(), usage: dlg.usage.trim(),
-    level: dlg.level, forms: dlg.forms.length ? dlg.forms : ['text'], tags: dlg.tags, manual: dlg.manual || undefined
+    level: dlg.level, forms: dlg.forms.length ? dlg.forms : ['text'], sticker: dlg.sticker || '', tags: dlg.tags, manual: dlg.manual || undefined
   })
   dlg.show = false
   ElMessage.success('已启用，下一次生成剪辑初稿就会用上')
@@ -196,7 +203,7 @@ async function save() {
 function setStatus(row, status) {
   return act({
     action: 'memeSave', text: row.text, status, meaning: row.meaning || '', origin: row.origin || '', usage: row.usage || '',
-    level: row.level || 1, forms: row.forms && row.forms.length ? row.forms : ['text'], tags: row.tags || [], manual: isManual(row) || undefined
+    level: row.level || 1, forms: row.forms && row.forms.length ? row.forms : ['text'], sticker: row.sticker || '', tags: row.tags || [], manual: isManual(row) || undefined
   })
 }
 function blacklist(row) {
