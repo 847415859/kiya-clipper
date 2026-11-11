@@ -42,6 +42,7 @@
           <span v-if="aiVisible(c) && c.llm && !c.llm.error" class="ai" :class="{ hot: c.llm.funny }">AI {{ c.llm.score }}</span>
           <span v-else-if="aiVisible(c) && c.llm && c.llm.error" class="ai ai-fail" :title="'AI 精排失败：' + c.llm.error">AI 失败</span>
           <span v-else-if="aiVisible(c) && data.rerank && !c.llm" class="ai ai-fail" title="这个候选没有精排结果（没跑或旧结果）">AI 未跑</span>
+          <span v-if="aiVisible(c) && c.llm && c.llm.pick" class="ai pick" title="AI 推荐发布：有趣 + 能单独看懂 + 起承转合完整 + 分数达标">★推荐</span>
           <el-tag size="small" :type="c.mark === 'Y' ? 'success' : c.mark === 'N' ? 'danger' : 'info'" class="badge">
             {{ c.mark === 'Y' ? '有趣' : c.mark === 'N' ? '不有趣' : c.clip ? '未标' : '未剪' }}
           </el-tag>
@@ -97,14 +98,38 @@
           <template v-else>
             <div>
               <el-tag size="small" :type="c.llm.funny ? 'success' : 'info'">{{ c.llm.funny ? '有梗' : '一般' }} {{ c.llm.score }}/10</el-tag>
-              <el-tag size="small" effect="plain">{{ c.llm.type }}</el-tag>
+              <el-tag v-for="t in (c.llm.types && c.llm.types.length ? c.llm.types : [c.llm.type])" :key="t" size="small" effect="plain">{{ t }}</el-tag>
+              <el-tag v-if="c.llm.pick" size="small" type="warning">★ 推荐发布</el-tag>
               <el-tag v-if="c.llm.standalone" size="small" effect="plain" type="success">能单独看懂</el-tag>
+              <el-tag v-if="c.llm.needsContext" size="small" effect="plain" type="info">要前情才懂</el-tag>
+              <el-tag v-if="c.llm.complete === false" size="small" effect="plain" type="info">起承转合不完整</el-tag>
+              <el-tag v-if="c.llm.tier" size="small" effect="plain" :type="c.llm.tier === '推荐' ? 'warning' : c.llm.tier === '淘汰' ? 'danger' : 'info'"
+                      :title="c.llm.tierReason">同场比较：{{ c.llm.tier }}</el-tag>
+              <el-tag v-if="c.llm.riskLevel === 'high'" size="small" type="danger">风险高</el-tag>
+              <el-tag v-else-if="c.llm.riskLevel === 'low'" size="small" effect="plain" type="warning">有风险</el-tag>
+              <el-tag v-if="c.llm.asrDoubt" size="small" effect="plain" type="warning">听写存疑</el-tag>
+              <el-tag v-if="c.llm.hookOk === false" size="small" effect="plain" type="info">开头{{ c.llm.hook || '弱' }}</el-tag>
+              <el-tag v-if="c.llm.inCharacter === false" size="small" type="danger" :title="c.llm.inCharacterNote">可能被误读 / 不符人设</el-tag>
+              <el-tag v-if="c.llm.pace" size="small" effect="plain">{{ c.llm.pace }}</el-tag>
+              <el-tag v-if="c.llm.confidence < 0.6" size="small" type="warning">AI 不确定 {{ Math.round(c.llm.confidence * 100) }}%（重点看）</el-tag>
               <span class="muted">精排后第 {{ c.llm.newRank }} 名（综合 {{ c.llm.final }}）</span>
             </div>
             <div><b>{{ c.llm.whatHappened }}</b> <span class="muted">{{ c.llm.reason }}</span></div>
             <div v-if="c.llm.story && c.llm.story.punch" class="muted">
               铺垫：{{ c.llm.story.setup || '—' }}｜笑点：{{ c.llm.story.punch }}｜反应：{{ c.llm.story.reaction || '—' }}
             </div>
+            <div v-if="c.llm.evidence && c.llm.evidence.length" class="muted">
+              证据：<template v-for="(e, i) in c.llm.evidence" :key="i">{{ i ? ' ／ ' : '' }}[{{ Math.round(e.t) }}s {{ e.src || '原话' }}] {{ e.quote }}</template>
+            </div>
+            <div v-if="c.llm.risks && c.llm.risks.length" class="muted">风险：{{ c.llm.risks.join('；') }}</div>
+            <div v-if="!c.llm.pick && c.llm.failReason" class="muted">没推荐的原因：{{ failLabel(c.llm.failReason) }}<template v-if="c.llm.tierReason">（{{ c.llm.tierReason }}）</template></div>
+            <div v-if="c.llm.hookOk === false && c.llm.hookNote" class="muted">开头：{{ c.llm.hookNote }}</div>
+            <div v-if="c.llm.inCharacter === false && c.llm.inCharacterNote" class="muted">人设：{{ c.llm.inCharacterNote }}</div>
+            <div v-if="c.llm.highlightDanmaku && c.llm.highlightDanmaku.length" class="muted">高能弹幕：{{ c.llm.highlightDanmaku.join(' ｜ ') }}</div>
+            <div v-if="c.llm.startReason || c.llm.endReason" class="muted">边界：{{ c.llm.startReason || '—' }}｜{{ c.llm.endReason || '—' }}</div>
+            <div v-if="c.llm.editHints && c.llm.editHints.length" class="muted">剪辑建议：{{ c.llm.editHints.join('｜') }}</div>
+            <div v-if="c.llm.contextCaption" class="muted">建议补前情字幕：{{ c.llm.contextCaption }}</div>
+            <div v-if="c.llm.beats && c.llm.beats.length" class="muted">节拍：{{ c.llm.beats.join('｜') }}</div>
             <div v-if="c.llm.refined" class="muted">
               建议切 {{ hms(c.llm.refined.start) }}–{{ hms(c.llm.refined.end) }}（{{ Math.round(c.llm.refined.end - c.llm.refined.start) }} 秒，{{ c.llm.refined.note }}）
             </div>
@@ -237,6 +262,12 @@ function pieces(text) {
   if (!words.length) return [{ t: text, hit: false }]
   const re = new RegExp('(' + words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'gi')
   return text.split(re).filter((t) => t !== '').map((t) => ({ t, hit: words.some((w) => w.toLowerCase() === t.toLowerCase()) }))
+}
+
+const FAIL_LABELS = { not_funny: '不好笑', need_context: '要前情才看得懂', read_sc: '只是在念留言 / SC', repeat_meme: '重复的梗',
+  taboo: '敏感 / 主播不想发', incomplete: '起承转合不完整', weak_hook: '开头太拖', other: '其他' }
+function failLabel(k) {
+  return FAIL_LABELS[k] || k
 }
 
 function mmss(sec) {
@@ -422,6 +453,7 @@ video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; dis
 .ai { font-size: 11px; color: var(--el-text-color-secondary); margin-left: auto; margin-right: 4px; }
 .ai.hot { color: var(--el-color-success); font-weight: 600; }
 .ai.ai-fail { color: var(--el-color-danger); }
+.ai.pick { color: var(--el-color-warning); font-weight: 600; margin-left: 4px; }
 .aibox { margin: 10px 0; padding: 8px 12px; border-left: 3px solid var(--el-color-primary-light-5); background: var(--el-fill-color-light); display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .aibox .el-tag { margin-right: 6px; }
 .adopt { margin: 8px 0 0; padding: 6px 10px; border-radius: 6px; background: var(--el-color-primary-light-9); font-size: 13px; display: flex; gap: 10px; align-items: center; }

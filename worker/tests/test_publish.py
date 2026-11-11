@@ -53,7 +53,7 @@ def test_publish_pack(tmp_path):
     subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=640x360:r=10:d=120",
                     "-f", "lavfi", "-i", "sine=d=120", "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
                     "-c:a", "aac", str(video)], check=True)
-    sess = tmp_path / "out" / "20261109-2014"
+    sess = tmp_path / "output" / "20261109-2014"
     sess.mkdir(parents=True)
     (sess / "candidates.json").write_text(json.dumps({"segments": [{"video": str(video), "offset": 0}],
         "candidates": [{"rank": 1, "t": 60, "clip_start": 30, "clip_end": 90}]}), encoding="utf-8")
@@ -96,3 +96,24 @@ def test_publish_pack(tmp_path):
     shutil.rmtree(sess / "clips")
     r = run("--cover-t", 60)
     assert r.returncode == 1 and "找不到可以截图的视频" in r.stderr
+
+
+def test_cover_prefers_rerank_cover_time(tmp_path):
+    """精排 v4 选了封面帧（cover_time）就用它，不再用笑点时刻。"""
+    video = tmp_path / "seg.flv"
+    subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=640x360:r=10:d=120",
+                    "-f", "lavfi", "-i", "sine=d=120", "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-c:a", "aac", str(video)], check=True)
+    sess = tmp_path / "output" / "20261109-2014"
+    sess.mkdir(parents=True)
+    (sess / "candidates.json").write_text(json.dumps({"segments": [{"video": str(video), "offset": 0}],
+        "candidates": [{"rank": 1, "t": 60, "clip_start": 30, "clip_end": 90}]}), encoding="utf-8")
+    (sess / "rerank.json").write_text(json.dumps({"candidates": [{"rank": 1, "llm": {
+        "type": "破防", "what_happened": "抹精油手滑", "punch_time": 29, "cover_time": 12, "title_candidates": ["做局失败"]}}]},
+        ensure_ascii=False), encoding="utf-8")
+    (sess / "transcript.json").write_text(json.dumps({"sentences": []}), encoding="utf-8")
+    env = dict(os.environ, KIYA_MEMORY_DECISIONS=str(tmp_path / "none.json"))
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "publish_pack.py"), str(sess / "candidates.json"), "--rank", "1"],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert json.loads(r.stdout.strip().splitlines()[-1])["cover_t"] == 42        # 30 + 12，而不是笑点的 59

@@ -46,15 +46,45 @@ def speech_lines(sentences: list[dict], a: float, b: float, origin: float, limit
     return "\n".join(out) or "（这段没有识别到说话）"
 
 
-def danmaku_lines(events: list[Event], a: float, b: float, origin: float, delay: float, limit: int = 60) -> tuple[str, str]:
-    """(弹幕采样, 礼物 / SC / 上舰)。弹幕按延迟前移，与画面对齐；超过 limit 条时均匀抽样。"""
-    dm = [e for e in events if e.kind == "danmaku" and a <= e.t - delay < b and e.text]
-    if len(dm) > limit:
+def pick_danmaku(dm: list[Event], limit: int, delay: float = 0.0, peak: float | None = None, hit=None) -> list[Event]:
+    """弹幕超过 limit 条时的取舍。没给 peak / hit：均匀抽样（老办法）。
+    给了：约 2/3 的名额按“命中情绪词 / 专属梗 + 离粗筛高峰近”打分取最高的（笑点处那条“绷不住了”别漏掉），
+    剩下 1/3 在其余弹幕里均匀抽样，保留整体氛围。返回按时间排序。"""
+    if len(dm) <= limit:
+        return dm
+    if peak is None and hit is None:
         step = len(dm) / limit
-        dm = [dm[int(i * step)] for i in range(limit)]
+        return [dm[int(i * step)] for i in range(limit)]
+
+    def score(e: Event) -> float:
+        s = 2.0 if hit is not None and hit(e.text) else 0.0
+        if peak is not None:
+            s += 1.5 / (1 + abs(e.t - delay - peak) / 8)
+        return s
+
+    k = limit * 2 // 3
+    order = sorted(range(len(dm)), key=lambda i: -score(dm[i]))
+    chosen = set(order[:k])
+    rest = [i for i in range(len(dm)) if i not in chosen]
+    n_rest = limit - k
+    if rest and n_rest > 0:
+        step = len(rest) / n_rest
+        chosen |= {rest[int(j * step)] for j in range(min(n_rest, len(rest)))}
+    return [dm[i] for i in sorted(chosen)]
+
+
+def danmaku_lines(events: list[Event], a: float, b: float, origin: float, delay: float, limit: int = 60,
+                  peak: float | None = None, hit=None) -> tuple[str, str]:
+    """(弹幕采样, 礼物 / SC / 上舰)。弹幕按延迟前移，与画面对齐；超过 limit 条时的取舍见 pick_danmaku；
+    礼物超过 30 条时 SC（文字常常就是这一段的起因）和上舰优先保留。"""
+    dm = [e for e in events if e.kind == "danmaku" and a <= e.t - delay < b and e.text]
+    dm = pick_danmaku(dm, limit, delay, peak, hit)
     dm_txt = "\n".join(f"[{e.t - delay - origin:.0f}] {e.text}" for e in dm) or "（无）"
     names = {"gift": "礼物", "sc": "SC", "guard": "上舰"}
     gifts = [e for e in events if e.kind in names and a <= e.t < b]
+    if len(gifts) > 30:
+        pri = {"sc": 0, "guard": 1, "gift": 2}
+        gifts = sorted(sorted(gifts, key=lambda e: pri[e.kind])[:30], key=lambda e: e.t)
     g_txt = "\n".join(f"[{e.t - origin:.0f}] {names[e.kind]} {e.text or ''} {e.value:g}".rstrip() for e in gifts[:30]) or "（无）"
     return dm_txt, g_txt
 
@@ -68,18 +98,36 @@ def locate(segments: list[dict], t: float) -> tuple[Path, float] | None:
     return best
 
 
-def extract_frames(segments: list[dict], a: float, b: float, n: int, out_dir: Path, width: int = 640) -> list[tuple[float, Path]]:
-    """在 [a, b) 里均匀抽 n 帧，返回 [(相对片段开头的秒数, 图片)]；录像不在本地时返回空列表。"""
+def frame_times(a: float, b: float, n: int, peak: float | None = None, mode: str = "uniform") -> list[float]:
+    """抽帧的时刻（整场秒），恰好 n 个。uniform：均匀。peak：一半集中在粗筛高峰前后（笑点的表情多半在那里），
+    另一半在其余位置均匀取（看全貌，和高峰帧至少隔 2 秒）。窗口短于 18 秒 / 没有高峰 / 帧数少于 4 时退回均匀。"""
+    uniform = [a + (b - a) * (i + 0.5) / n for i in range(n)]
+    if mode != "peak" or peak is None or not (a <= peak < b) or n < 4 or b - a < 18:
+        return uniform
+    n_pk = n // 2
+    n_uni = n - n_pk
+    spread = min(8.0, (b - a) / 6)
+    pk = [min(max(peak - spread + 2 * spread * k / (n_pk - 1), a), b - 0.1) for k in range(n_pk)]
+    m = n_uni * 4
+    eligible = [t for t in (a + (b - a) * (i + 0.5) / m for i in range(m)) if all(abs(t - x) >= 2.0 for x in pk)]
+    if len(eligible) < n_uni:
+        return uniform
+    step = len(eligible) / n_uni
+    return sorted(pk + [eligible[int(i * step)] for i in range(n_uni)])
+
+
+def extract_frames(segments: list[dict], a: float, b: float, n: int, out_dir: Path, width: int = 640,
+                   peak: float | None = None, mode: str = "uniform") -> list[tuple[float, Path]]:
+    """按 frame_times 在 [a, b) 里抽 n 帧左右，返回 [(相对片段开头的秒数, 图片)]；录像不在本地时返回空列表。"""
     if not shutil.which("ffmpeg"):
         return []
     out_dir.mkdir(parents=True, exist_ok=True)
     frames = []
-    for i in range(n):
-        t = a + (b - a) * (i + 0.5) / n
+    for i, t in enumerate(frame_times(a, b, n, peak, mode)):
         loc = locate(segments, t)
         if not loc:
             continue
-        dst = out_dir / f"f{i:02d}.jpg"
+        dst = out_dir / (f"f{i:02d}.jpg" if mode != "peak" else f"p{round((t - a) * 10):05d}.jpg")      # 取帧方式不同，文件名不同，不会误用旧图
         if not dst.exists():
             r = subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-ss", f"{loc[1]:.2f}", "-i", str(loc[0]),
                                 "-frames:v", "1", "-vf", f"scale={width}:-2", "-q:v", "4", str(dst)], capture_output=True)

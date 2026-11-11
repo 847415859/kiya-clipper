@@ -583,7 +583,10 @@ public class SessionService {
             m.put("error", c.path("error").isTextual() ? c.path("error").asText() : null);
             m.put("promptVersion", c.path("prompt_version").asText(""));
             m.put("clipStart", c.path("clip_start").asDouble());
+            m.put("pick", c.path("pick").asBoolean(false));          // 推荐发布（v3 精排）：有趣 + 能单独看懂 + 起承转合完整 + 分数达标
             if (l.isObject()) {
+                m.put("needsContext", l.path("needs_context").asBoolean(false));
+                m.put("complete", l.path("complete").asBoolean(true));
                 m.put("funny", l.path("funny").asBoolean(false));
                 m.put("score", l.path("score").asDouble(0));
                 m.put("type", l.path("type").asText(""));
@@ -592,6 +595,31 @@ public class SessionService {
                 m.put("reason", l.path("reason").asText(""));
                 m.put("story", om.convertValue(l.path("story"), new TypeReference<Map<String, Object>>() {}));
                 m.put("titles", om.convertValue(l.path("title_candidates"), new TypeReference<List<String>>() {}));
+                // 精排 v4：把关与交接字段（旧结果没有，给默认值）
+                m.put("confidence", l.path("confidence").asDouble(1.0));
+                m.put("riskLevel", l.path("risk_level").asText("none"));
+                m.put("risks", om.convertValue(l.path("risks"), new TypeReference<List<String>>() {}));
+                m.put("asrDoubt", l.path("asr_doubt").asBoolean(false));
+                m.put("hookOk", l.path("hook_ok").asBoolean(true));
+                m.put("hookNote", l.path("hook_note").asText(""));
+                m.put("hook", l.path("hook").asText(""));
+                m.put("inCharacter", l.path("in_character").asBoolean(true));
+                m.put("inCharacterNote", l.path("in_character_note").asText(""));
+                m.put("pace", l.path("pace").asText(""));
+                m.put("types", om.convertValue(l.path("types"), new TypeReference<List<String>>() {}));
+                m.put("startReason", l.path("start_reason").asText(""));
+                m.put("endReason", l.path("end_reason").asText(""));
+                m.put("highlightTimes", om.convertValue(l.path("highlight_times"), new TypeReference<List<Double>>() {}));
+                m.put("editHints", om.convertValue(l.path("edit_hints"), new TypeReference<List<String>>() {}));
+                m.put("highlightDanmaku", om.convertValue(l.path("highlight_danmaku"), new TypeReference<List<String>>() {}));
+                m.put("failReason", l.path("fail_reason").asText(""));
+                m.put("punchLine", l.path("punch_line").asText(""));
+                m.put("contextCaption", l.path("context_caption").asText(""));
+                m.put("beats", om.convertValue(l.path("beats"), new TypeReference<List<String>>() {}));
+                m.put("evidence", om.convertValue(l.path("evidence"), new TypeReference<List<Map<String, Object>>>() {}));
+                m.put("coverTime", l.path("cover_time").asDouble(-1));
+                m.put("tier", l.path("tier").asText(""));
+                m.put("tierReason", c.path("listwise").path("reason").asText(""));
             }
             JsonNode r = c.path("refined");
             if (r.isObject()) {

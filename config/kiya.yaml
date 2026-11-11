@@ -50,17 +50,28 @@ asr:
 
 # 精排（scripts/rerank.py）：多模态大模型给每个候选打分、找笑点、建议起止，再和粗筛分数合成排序
 rerank:
-  prompt: rerank_v2          # prompts/ 里的提示词文件（v2 = v1 + 自动积累的“精排记忆”）
+  prompt: rerank_v4          # prompts/ 里的提示词文件（v4 = v3 + 证据 / 风险 / 置信度 / 失败原因 + 给剪辑的交接字段；效果不好改回 rerank_v3）
   model: ""                  # 空 = 用 .env 的 DASHSCOPE_MODEL
   frames: 8                  # 每个候选抽几张图（越多越贵）
   width: 640                 # 截图宽度
-  context_before: 60         # 前情：片段前多少秒的原话
+  frames_mode: peak          # 抽帧方式：uniform = 均匀；peak = 一半集中在粗筛高峰前后（表情多半在那里）、一半均匀看全貌
+  danmaku_smart: true        # 弹幕超过 danmaku_limit 条时：优先保留情绪词 / 专属梗和离高峰近的，其余均匀抽样；false = 全部均匀抽样
+  danmaku_limit: 60
+  context_before: 120        # 前情：片段前多少秒的原话（起止最多往前取这么多）
+  context_after: 240         # 后续：片段后多少秒的原话（看笑点之后的反应；起止也最多往后取这么多）
+  pick_score: 8              # 推荐发布的最低分（还要求：有趣 + 能单独看懂 + 起承转合完整 + 风险不是 high）
+  pick_confidence: 0.6       # 推荐发布要求大模型的把握（confidence）不低于这个值；0 = 不看
+  listwise: true             # 同场二次比较：通过单条评审的候选再横向比一次，分 推荐 / 备选 / 淘汰（多一次文本请求，很便宜；失败不影响单条结果）
+  listwise_prompt: rerank_list_v1
+  listwise_min_score: 7      # 单条分数达到这个值的才进二次比较
+  listwise_top_n: 10         # 最多拿几条进二次比较
+  listwise_max_pick: 3       # 一场最多推荐几条
   workers: 3                 # 并发请求数
   # 最终分 = 大模型分 × llm + 粗筛名次分 × screen；判为不值得切的再 × not_funny。
   # 后台“精排记忆”页确认过的新权重优先于这里（config/memory_decisions.json）
-  weights: {llm: 0.8, screen: 0.2, not_funny: 0.6}
-  min_len: 30                # 边界修正后的最短 / 最长时长（秒）
-  max_len: 180
+  weights: {llm: 0.8, screen: 0.2, not_funny: 0.6, not_standalone: 0.7}
+  min_len: 20                # 边界修正后的最短 / 最长时长（秒）；按内容定，最短 20 秒、最长 480 秒
+  max_len: 480
   price_in: null             # 单价（元 / 百万 tokens），填了就估算费用
   price_out: null
 
@@ -107,7 +118,7 @@ publish:
 
 # 剪辑脚本初稿（scripts/autoedit.py）
 autoedit:
-  prompt: edit_v4            # v4 = v3 + 多版本风格档位；v3 = v2 + 梗库（只用后台确认过的梗；v2 = v1 + 剪辑师口味，人工改过的初稿攒够 memory.min_edits 条才生效）
+  prompt: edit_v5            # v5 = v4 + 照着精排的交接编排（前情字幕 / 节拍 / 笑点原话 / 开头怎么改）；v4 = v3 + 多版本风格档位；v3 = v2 + 梗库（只用后台确认过的梗；v2 = v1 + 剪辑师口味，人工改过的初稿攒够 memory.min_edits 条才生效）
   model: ""
   max_items: 8               # 一条切片最多几个效果（标准版；克制版最多 3 个，热闹版多 3 个）
   variants:                  # 多版本初稿：前 top_n 个候选各出一版，其余只出标准版（多一版 = 多一次大模型调用）

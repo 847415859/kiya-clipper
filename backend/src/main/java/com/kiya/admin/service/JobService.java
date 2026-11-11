@@ -370,8 +370,8 @@ public class JobService {
         if (p.get("start") != null && p.get("end") != null) {
             double s0 = numParam(p, "start");
             double e0 = numParam(p, "end");
-            if (s0 < 0 || e0 - s0 < 5 || e0 - s0 > 300) {
-                throw ApiException.badRequest("素材范围要在 5 秒到 5 分钟之间");
+            if (s0 < 0 || e0 - s0 < 5 || e0 - s0 > 500) {
+                throw ApiException.badRequest("素材范围要在 5 秒到 500 秒之间");
             }
             a.addAll(List.of("--start", String.format(java.util.Locale.ROOT, "%.1f", s0),
                     "--end", String.format(java.util.Locale.ROOT, "%.1f", e0)));

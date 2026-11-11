@@ -134,8 +134,8 @@ def test_window_beyond_candidate(tmp_path):
     from clipper.edit import suggest_window
     assert suggest_window({"clip_start": 30, "clip_end": 90}, {"start": 22, "end": 97}) == {"start": 17.0, "end": 102.0}
     assert suggest_window({"clip_start": 3, "clip_end": 63}, {"start": 1, "end": 70}) == {"start": 0.0, "end": 75.0}
-    w = suggest_window({"clip_start": 100, "clip_end": 160}, {"start": 100, "end": 500})
-    assert w["end"] - w["start"] == 300 and w["start"] == 100
+    w = suggest_window({"clip_start": 100, "clip_end": 160}, {"start": 100, "end": 900})
+    assert w["end"] - w["start"] == 500 and w["start"] == 100          # 素材范围上限 500 秒
     with pytest.raises(EditError, match="素材范围"):
         validate_edit({"window": {"start": 10, "end": 12}}, 60)
     e = validate_edit({"window": {"start": 20, "end": 100}, "trim": {"start": 5, "end": 70},

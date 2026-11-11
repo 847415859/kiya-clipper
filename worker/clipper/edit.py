@@ -14,7 +14,7 @@ STICKER_PRESETS = ("pop", "slide", "shake", "bounce", "fade", "slam")
 COLOR = re.compile(r"^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 ASSET = re.compile(r"^[\w\-.一-鿿]{1,80}\.(png|jpg|jpeg|gif|webp)$", re.I)
 MAX_ITEMS = 100
-MAX_WINDOW = 300.0       # 素材范围最长 5 分钟（成片最长 3 分钟，留出前后余量）
+MAX_WINDOW = 500.0       # 素材范围最长 500 秒（成片最长 480 秒，留出前后余量）
 MIN_WINDOW = 5.0
 
 
@@ -191,6 +191,21 @@ def enforce_density(edit: dict) -> tuple[dict, list[dict]]:
             last_zoom = it["start"]
         kept.append(it)
     return dict(edit, items=kept), dropped
+
+
+def ensure_caption(items: list[dict], caption: str, trim: dict) -> list[dict]:
+    """精排给了前情字幕，但大模型没放（或放歪了）：在成片开头补一条。不需要字幕、或开头 6 秒内已有这段字就原样返回。"""
+    caption = (caption or "").strip()[:40]
+    if not caption or caption.startswith("（"):
+        return items
+    head = caption[:4]
+    t0, t1 = float(trim["start"]), float(trim["end"])
+    if any(i["type"] == "text" and head in i.get("text", "") and i["start"] < t0 + 6 for i in items):
+        return items
+    dur = round(min(3.0, max(1.0, t1 - t0 - 0.4)), 2)
+    cap = validate_item({"type": "text", "text": caption, "start": round(t0 + 0.2, 2), "duration": dur, "preset": "fade",
+                         "x": 0.5, "y": 0.12, "size": 70, "color": "#FFFFFF"}, t1)
+    return [cap] + [i for i in items]
 
 
 def missing_assets(edit: dict, sticker_dir) -> list[str]:

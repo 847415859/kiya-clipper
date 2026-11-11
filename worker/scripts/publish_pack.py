@@ -140,6 +140,8 @@ def main() -> int:
 
     if not args.no_cover and (args.cover_t is not None or args.cover_text is not None or not pack.get("cover")):
         punch = cand["clip_start"] + llm["punch_time"] if llm.get("punch_time", -1) >= 0 else cand["t"]
+        if llm.get("cover_time", -1) >= 0:                    # 精排 v4 选的封面帧（有表情 / 关键动作的那一秒）优先于笑点时刻
+            punch = cand["clip_start"] + llm["cover_time"]
         t = args.cover_t if args.cover_t is not None else pack.get("cover_t", punch)
         t = min(max(t, a), b - 0.1)
         text = args.cover_text if args.cover_text is not None else pack.get("cover_text", (titles[0] if titles else "")[:24])

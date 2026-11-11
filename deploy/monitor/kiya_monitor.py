@@ -376,7 +376,10 @@ def run_rerank(env: dict) -> str | None:
     out = r.stdout.splitlines()
     tops = [l.rstrip() for l in out if re.match(r"\s*\d+ #\d+", l)][:5]
     usage = next((l.strip() for l in out if l.startswith("用时")), "")
-    return "\n".join([f"场次 {cands.parent.name} 精排完成，新的前 5（新名次 #原序号）："] + tops + ([usage] if usage else []))
+    picks = next((l.strip() for l in out if l.startswith("推荐发布")), "")
+    return "\n".join([f"场次 {cands.parent.name} 精排完成，新的前 5（新名次 #原序号）："] + tops
+                     + ([picks.split("（")[0] + ("：" + picks.split("：", 1)[1] if "：" in picks else "")] if picks else [])
+                     + ([usage] if usage else []))
 
 
 def run_cut(env: dict) -> str | None:

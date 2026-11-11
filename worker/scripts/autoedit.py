@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -29,7 +30,7 @@ from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.streamer import resolve_config  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.context import danmaku_lines, load_events, profile, speech_lines  # noqa: E402
-from clipper.edit import EditError, enforce_density, suggest_window, validate_edit, validate_item  # noqa: E402
+from clipper.edit import EditError, enforce_density, ensure_caption, suggest_window, validate_edit, validate_item  # noqa: E402
 from clipper.editdiff import edit_taste, taste_text  # noqa: E402
 from clipper.llm import LLMClient, fill, load_prompt  # noqa: E402
 from clipper.variants import DEFAULT, STYLES, load as variants_load, resolve, save as save_variants, variants_cfg, wants_variants  # noqa: E402
@@ -55,6 +56,15 @@ def sticker_names() -> list[str]:
     if not d.is_dir():
         return []
     return sorted(p.name for p in d.iterdir() if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp"))
+
+
+def shift_beats(beats: list[str], delta: float) -> str:
+    """精排的节拍是“12s 起因：…”（相对候选片段开头）→ 换成相对素材范围开头，和下面的原话时间对得上。"""
+    out = []
+    for b in beats:
+        m = re.match(r"\s*(-?\d+(?:\.\d+)?)\s*s?\s*(.*)", str(b), re.S)
+        out.append(f"[{float(m.group(1)) + delta:.0f}s] {m.group(2).strip()}" if m else str(b))
+    return "\n".join(f"- {x}" for x in out)
 
 
 def main() -> int:
@@ -100,6 +110,14 @@ def main() -> int:
         t_start, t_end = 0.0, clip_len
     story = llm.get("story") or {}
     stickers = sticker_names()
+    caption = (llm.get("context_caption") or "").strip()
+    handoff = dict(caption=caption or "（不需要）", punch_line=llm.get("punch_line") or "（无）",
+                   hook_note=llm.get("hook_note") or "（不需要）", pace=llm.get("pace") or "（未知，按精排结论自己判断）",
+                   highlight_danmaku=" ｜ ".join(llm.get("highlight_danmaku") or []) or "（没有）",
+                   types="、".join(llm.get("types") or [llm.get("type") or ""]).strip("、") or "（未知）",
+                   zoom_times="、".join(f"{ca + float(x) - a:.0f}" for x in llm.get("highlight_times") or []) or "（没有）",
+                   edit_hints=shift_beats(llm.get("edit_hints") or [], ca - a) or "（没有）",
+                   beats=shift_beats(llm.get("beats") or [], ca - a) or "（没有节拍，按精排结论自己判断）")
     dm, _ = danmaku_lines(load_events(data["segments"]), a, b, a, float(data.get("delay_seconds") or 0), limit=40)
     version, system_t, user = load_prompt(ac["prompt"])
     ms = meme_settings(cfg)
@@ -136,7 +154,7 @@ def main() -> int:
         system = fill(system_t, max_items=v["max_items"], **({"max_memes": str(v["max_memes"]), "meme_gap": f"{float(ms['min_gap']):.0f}"}
                                                             if "{{max_memes}}" in system_t else {}))
         vx = {"variant": v["brief"]} if "{{variant}}" in user else {}
-        text = fill(user, profile=profile(cfg), **extra, **vx, window=f"{clip_len:.0f}", trim_start=f"{t_start:.1f}", trim_end=f"{t_end:.1f}",
+        text = fill(user, profile=profile(cfg), **extra, **vx, **handoff, window=f"{clip_len:.0f}", trim_start=f"{t_start:.1f}", trim_end=f"{t_end:.1f}",
                     what_happened=llm.get("what_happened") or "（没有精排结论）",
                     punch=(f"{ca + llm['punch_time'] - a:.1f}" if llm.get("punch_time", -1) >= 0 else "（未知）"),
                     setup=story.get("setup") or "—", punchline=story.get("punch") or "—", reaction=story.get("reaction") or "—",
@@ -162,6 +180,8 @@ def main() -> int:
         if out.trim and 0 <= out.trim.start < out.trim.end <= clip_len and out.trim.end - out.trim.start >= 5:
             trim = {"start": round(out.trim.start, 2), "end": round(out.trim.end, 2)}
         items = [i for i in items if trim["start"] <= i["start"] < trim["end"]]
+        if "{{caption}}" in user:                        # edit_v5：精排要求补的前情字幕，模型漏了就在开头补上
+            items = ensure_caption(items, caption, trim)
         edit = {"version": 1, "window": window, "trim": trim, "subtitles": {"enabled": True}, "items": items,
                 "generated_by": f"{version} / {client.model}" + (f" / {v['label']}" if multi or key != DEFAULT else ""), "note": out.note[:200]}
         edit, dropped = enforce_density(edit)

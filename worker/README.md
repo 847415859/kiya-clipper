@@ -418,3 +418,41 @@ worker/
 候选的 `clip_start` / `clip_end` 不变（标注对齐、评测重叠、精排记忆都靠它），实际剪切范围写在 `clips/windows.json`，格式 `{"01": {"start": 整场秒, "end": 整场秒, "refined": true}}`。审核页的播放起点、`publish_pack.py` 的封面抽帧、`subtitle.py` 重生成字幕都读它；旧场次没有这个文件，等于候选窗口。
 
 注意：审核时点的“开头 / 结尾太早 / 太晚”现在评的是精排修正后的边界，不再对应 `analysis.clip_before_seconds` / `clip_after_seconds` 的调参建议（后者只影响没有精排的候选）。
+
+## 精排 v3：更严、按内容定范围
+
+`config/kiya.yaml` 的 `rerank.prompt` 现在是 `rerank_v3`（旧的 `rerank_v2` 保留，改回去即可）。和 v2 的区别：分数校准（1–4 普通、5–6 小插曲、7 勉强、8 好、9–10 极少，一场 8 分以上通常不超过 2–3 个）；有趣必须同时满足“有明确笑点 / 不看直播也能看懂 / 起承转合完整”；除了前情（`context_before`，120 秒）还给“后续原话”（`context_after`，240 秒）；起止按内容完整性定，不凑整分钟（`min_len` 20 秒、`max_len` 480 秒；成片编辑器的素材范围上限同步放宽到 500 秒）。结果里多了 `needs_context`、`complete` 和 `pick`（推荐发布：有趣 + 能单独看懂 + 完整 + 分数 ≥ `pick_score`），审核页列表标“★推荐”；`weights.not_standalone`（默认 0.7）让不能单独看懂的往下排。
+
+换了提示词版本，缓存不命中，要对整场重新精排（几十个请求，费用很小）：
+
+```bash
+python scripts/rerank.py output/<场次>/candidates.json     # 结尾会打印“推荐发布 N 条”
+python scripts/cut.py output/<场次>/candidates.json        # 再按精排范围重新剪
+python scripts/evaluate.py --rerank                         # 和人工标注对比（至少看两三场，别只看一场）
+```
+
+## 精排 v4：当“审核员”，并让下游用上精排结论
+
+`config/kiya.yaml` 的 `rerank.prompt` 现在是 `rerank_v4`（`rerank_v3` 保留，改回去即可回滚；新字段缺失时全部按旧逻辑兜底）。和 v3 的区别：
+
+- **去锚定**：不再告诉模型“粗筛认为高峰在第 N 秒”，只说这是程序按热度圈出的候选、热度不等于好笑，让模型自己找笑点。
+- **四个角色把关**：主播（不想提的话题、隐私）、观众（前 5 秒抓不抓人、路人能不能看懂）、审核（政治 / 低俗 / 引战 / 隐私 / 导流 / 未成年人）、剪辑师（起止、前情字幕、封面帧）。
+- **证据与风险**：`evidence`（1–3 句原话 + 秒数，引不出就不算有笑点）、`asr_doubt`（笑点依赖的词可能听错）、`confidence`（把握）、`risk_level` + `risks`、`hook_ok` + `hook_note`（开头拖沓要降 1 分）；`fail_reason` 在不推荐时必选（取值 = 审核页原因标签 + `incomplete` / `weak_hook` / `other`），方便和人工标注直接对照。
+- **前情字幕**：只差一句背景的，不再判“不能单独看懂”，而是给 `context_caption`（≤20 字）；一句补不了的才是 `needs_context`。
+- **给剪辑的交接**：`context_caption`、`beats`（2–4 个节拍）、`punch_line`、`cover_time`。
+- **断章取义与人设**：她的人设是抽象 / 自黑 / 玩梗，单独剪出来容易被路人当成真失态、真冒犯。风险里单列“断章取义”（补一句字幕能避免的算 low，补不了的算 high），并新增 `in_character` / `in_character_note` 判断会不会误读她的性格。
+- **开头三档**：`hook` 强 / 弱 / 无（看前 3 秒）；弱和无要写最炸的 1–2 秒在哪、能不能倒叙（`hook_ok` 由它推出，旧结果仍用 `hook_ok`）。
+- **标题不得编造**：`title_candidates` 必须基于片段里真实发生的事。
+- **节奏与高能弹幕**：`pace`（单笑点 / 连续 / 渐强）决定编排效果的疏密，`highlight_danmaku`（≤5 条弹幕原文）给编排当花字素材。
+- **审核一眼验证**：`evidence` 每条带来源（原话 / 弹幕 / 画面）；`start_reason` / `end_reason` 说明为什么从这里切、到这里停；`types` 多类型标签（第一个 = `type`）；置信度低于 0.6 的审核页标“AI 不确定”，重点看。
+- **剪辑线索更细**：`types` 决定手法（反差推镜放大表情、破防震屏 + 花字、金句大字 + 慢推、口胡吐槽花字），`highlight_times`（表情最夸张的时刻）是放大候选点，`edit_hints` 是带秒数的具体建议；`edit_v5` 全部带上。
+- **输入构造**（`context.py`）：抽帧 `rerank.frames_mode: peak`——一半帧集中在粗筛高峰前后（笑点的表情多半在那里），另一半在其余位置均匀取（和高峰帧至少隔 2 秒），仍然恰好 `frames` 张；`uniform` 恢复均匀。弹幕超过 `danmaku_limit`（60）条时（`danmaku_smart: true`）约 2/3 名额按“命中情绪词 / 专属梗 + 离高峰近”取最高分的，剩下 1/3 均匀抽样保留氛围；礼物 / SC / 上舰超过 30 条时 SC 和上舰优先保留；提示词里强调 SC 的文字往往就是这一段的起因。
+- **推荐（pick）更严**：除 v3 的条件外，`risk_level` 不能是 high、`in_character` 不能是 false、`confidence` ≥ `rerank.pick_confidence`（0.6）。
+
+**同场二次比较**（`rerank.listwise: true`，提示词 `rerank_list_v1`）：单条评完后，分数 ≥ `listwise_min_score`（7）的前 `listwise_top_n`（10）条再横向比一次，分 推荐 / 备选 / 淘汰；同一个笑点被切成几条的只留一条；一场最多推荐 `listwise_max_pick`（3）条。档位写进 `llm.tier`：综合分 推荐 ×1.1、淘汰 ×0.75，`pick` 要求档位是“推荐”。只有 1 条候选、请求失败时跳过，沿用单条结论；`--ranks` 只精排部分序号时，二次比较只看这次精排的那几条。
+
+**积累里优先放“AI 判错”的例子**：AI 给了 ≥7 分但人工标 N（误报）、AI 给了 ≤6 分但人工标 Y（漏报），排在最前，并在提示词里写明 AI 当时的分数和结论错在哪。
+
+**下游用上精排结论**：编排提示词 `edit_v5`（`autoedit.prompt`）照着交接来编排——开头补前情字幕（模型漏了，`ensure_caption` 会在成片开头补一条）、花字对齐节拍并紧跟原话、推镜放在笑点原话前 0.2 秒、贴图只放在反应节拍；`publish_pack.py` 的封面优先用 `cover_time`；审核页展示同场档位、风险、证据、没推荐的原因、前情字幕和节拍。
+
+没有做：短 / 长多版本剪辑、跳切（编排脚本目前只支持裁剪 + 效果，没有消费方）。

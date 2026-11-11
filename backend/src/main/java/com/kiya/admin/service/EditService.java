@@ -31,7 +31,7 @@ import com.kiya.admin.entity.SubtitleStyle;
 public class EditService {
     private static final Pattern FINAL = Pattern.compile("^[0-9]{2,3}_[0-9\\-]{1,16}_[0-9]{3,4}p\\.mp4$");
     private static final Pattern PREVIEW = Pattern.compile("^([0-9]{2,3})_([0-9]+\\.[0-9])_([0-9]+\\.[0-9])\\.mp4$");
-    static final double MAX_WINDOW = 300;
+    static final double MAX_WINDOW = 500;
 
     private final WorkerPaths paths;
     private final ProcessRunner runner;

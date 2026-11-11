@@ -103,7 +103,7 @@ def make_sessions(out, reviews, n, start=0):
 
 
 def test_calibrate(tmp_path):
-    out, reviews = tmp_path / "out", tmp_path / "reviews"
+    out, reviews = tmp_path / "output", tmp_path / "reviews"
     make_sessions(out, reviews, 2)
     from clipper.memory import load_marks
     bad = {"llm": 0.5, "screen": 0.5, "not_funny": 1.0}
@@ -175,7 +175,7 @@ def test_bili_client(tmp_path):
 
 def test_learn_end_to_end(tmp_path):
     fb = FakeBili()
-    out, reviews = tmp_path / "out", tmp_path / "reviews"
+    out, reviews = tmp_path / "output", tmp_path / "reviews"
     make_sessions(out, reviews, 3)
     for i, d in enumerate(sorted(p for p in out.iterdir())):
         (d / "transcript.json").write_text(json.dumps({"sentences": [

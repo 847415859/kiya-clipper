@@ -826,7 +826,7 @@ function setWindow(start, end) {
   start = Math.round(Math.max(0, start) * 10) / 10
   end = Math.round(end * 10) / 10
   const len = end - start
-  if (len < 5 || len > 300) return ElMessage.warning('素材范围要在 5 秒到 5 分钟之间')
+  if (len < 5 || len > 500) return ElMessage.warning('素材范围要在 5 秒到 500 秒之间')
   const d = Math.round((edit.window.start - start) * 10) / 10
   const outside = []
   for (const it of edit.items) it.start = round(it.start + d)

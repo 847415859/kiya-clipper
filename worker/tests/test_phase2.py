@@ -148,10 +148,14 @@ class FakeLLM:
         if "【前情" in text:                                     # 精排
             n = self.mode.get("rerank_calls", 0)
             self.mode["rerank_calls"] = n + 1
-            if "高峰大约在第 30 秒" in text and "舰礼" in text:       # 第 2 个候选：真有梗
+            own = text.split("【片段内主播原话】", 1)[-1].split("【", 1)[0]       # 只看片段自己的原话（v3 还会给“后续原话”，别的候选的话会混进来）
+            if "舰礼" in own:                                       # 第 2 个候选：真有梗（v4 不再提示“粗筛高峰在第几秒”）
                 return 200, ("好的，结论如下：```json\n" + json.dumps({
                     "funny": True, "score": 8.5, "type": "互动", "standalone": True, "what_happened": "舰礼寄了内衣",
-                    "reason": "反差", "punch_time": 21, "start_time": 7, "end_time": 35,
+                    "reason": "反差", "punch_time": 21, "start_time": 7, "end_time": 35, "context_caption": "她说要寄舰礼",
+                    "punch_line": "结果寄了一盒内衣", "beats": ["16s 起因：说寄舰礼", "21s 笑点：寄了内衣"], "confidence": 0.9,
+                    "evidence": [{"t": 19, "src": "原话", "quote": "结果寄了一盒内衣"}], "risk_level": "none", "types": ["反差", "互动"],
+                    "highlight_times": [21], "edit_hints": ["21s 表情夸张，建议放大"], "start_reason": "从起因切", "end_reason": "余韵结束",
                     "story": {"setup": "说寄舰礼", "punch": "寄了内衣", "reaction": "弹幕哈哈"},
                     "title_candidates": ["舰礼寄成了内衣！？", "x" * 60]}, ensure_ascii=False) + "\n```")
             return 200, json.dumps({"funny": False, "score": 3, "type": "未知类型", "what_happened": "打招呼",
@@ -206,7 +210,7 @@ def test_rerank_autoedit_evaluate(llm, tmp_path):
     subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=5:d=300",
                     "-f", "lavfi", "-i", "sine=d=300", "-shortest", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
                     str(stem.with_suffix(".flv"))], check=True)
-    sess = tmp_path / "out" / "20261112-2000"
+    sess = tmp_path / "output" / "20261112-2000"
     sess.mkdir(parents=True)
     (sess / "candidates.json").write_text(json.dumps({"delay_seconds": 5, "segments": [{"video": str(stem.with_suffix(".flv")), "offset": 0}],
         "candidates": [{"rank": 1, "t": 60, "clip_start": 30, "clip_end": 90, "score": 2.4},
@@ -234,7 +238,11 @@ def test_rerank_autoedit_evaluate(llm, tmp_path):
     assert rr["candidates"][1]["llm"]["type"] == "其他"                 # 未知类型归为“其他”
     ref = top["refined"]
     assert ref["start"] == pytest.approx(125.7) and ref["end"] >= 160 + 1.5 - 1e-6   # 对齐到句首 / 句末
-    sent = [b for b in llm.calls if "寄舰礼" in json.dumps(b, ensure_ascii=False)][-1]
+    def own_speech(b):          # 只看片段自己的原话（v3 还会给“后续原话”，别的候选的话会混进来）
+        c = b["messages"][1]["content"]
+        t = c[-1].get("text", "") if isinstance(c, list) else ""
+        return t.split("【片段内主播原话】", 1)[-1].split("【", 1)[0] if "【片段内主播原话】" in t else ""
+    sent = [b for b in llm.calls if "寄舰礼" in own_speech(b)][-1]
     assert any(c.get("type") == "image_url" for c in sent["messages"][1]["content"])      # 带了截图
     assert "[-20.0] 前情：今天说说舰长" in json.dumps(sent, ensure_ascii=False)          # 前情（负秒数）
     n = len(llm.calls)
@@ -244,14 +252,18 @@ def test_rerank_autoedit_evaluate(llm, tmp_path):
     r = run(ROOT / "scripts" / "autoedit.py", sess / "candidates.json", "--rank", 2)
     assert r.returncode == 0, r.stdout + r.stderr
     e = json.loads((sess / "edits" / "02.json").read_text(encoding="utf-8"))
-    assert [(i["type"], i["start"]) for i in e["items"]] == [("zoom", 19.8), ("text", 20.0), ("sticker", 30.0)]
-    assert e["trim"] == {"start": 2.0, "end": 50.0} and e["generated_by"].startswith("edit-v4")
+    assert [(i["type"], i["start"]) for i in e["items"]] == [("text", 2.2), ("zoom", 19.8), ("text", 20.0), ("sticker", 30.0)]
+    assert e["items"][0]["text"] == "她说要寄舰礼" and e["items"][0]["preset"] == "fade"          # 精排给的前情字幕：模型没放，脚本在开头补上
+    assert e["trim"] == {"start": 2.0, "end": 50.0} and e["generated_by"].startswith("edit-v5")
+    handoff = [b for b in llm.calls if "综艺版" in b["messages"][0]["content"]][-1]["messages"][1]["content"]
+    assert "前情字幕：她说要寄舰礼" in handoff and "笑点那一句原话：结果寄了一盒内衣" in handoff and "起因：说寄舰礼" in handoff
+    assert "笑点类型：反差、互动" in handoff and "表情最夸张的时刻（秒）：" in handoff and "（没有）\n精排的剪辑建议" not in handoff and "建议放大" in handoff
     assert not density_problems(e)
     r = run(ROOT / "scripts" / "autoedit.py", sess / "candidates.json", "--rank", 2)
     assert r.returncode == 1 and "不覆盖" in r.stderr                   # 已有脚本不覆盖
     assert run(ROOT / "scripts" / "autoedit.py", sess / "candidates.json", "--rank", 2, "--force").returncode == 0
     ai = json.loads((sess / "edits" / "02.ai.json").read_text(encoding="utf-8"))          # AI 原稿另存
-    assert [(i["type"], i["start"]) for i in ai["edit"]["items"]] == [(i["type"], i["start"]) for i in e["items"]] and ai["prompt"].startswith("edit-v4") and not ai["taste_used"]
+    assert [(i["type"], i["start"]) for i in ai["edit"]["items"]] == [(i["type"], i["start"]) for i in e["items"]] and ai["prompt"].startswith("edit-v5") and not ai["taste_used"]
     assert "【剪辑师的习惯】\n（还没有积累）" in json.dumps(llm.calls[-1], ensure_ascii=False).replace("\\n", "\n")
 
     reviews = tmp_path / "reviews"
@@ -259,7 +271,7 @@ def test_rerank_autoedit_evaluate(llm, tmp_path):
     with open(reviews / "20261112-2000.csv", "w", newline="", encoding="utf-8-sig") as f:
         csv.writer(f).writerows([["序号", "片段起", "片段止", "分数", "是否有趣(Y/N)"], [1, "00:00:30", "00:01:30", "2.4", "N"],
                                  [2, "00:02:00", "00:03:00", "2.1", "Y"]])
-    r = run(ROOT / "scripts" / "evaluate.py", "--rerank", "--out", tmp_path / "out", "--reviews", reviews)
+    r = run(ROOT / "scripts" / "evaluate.py", "--rerank", "--out", tmp_path / "output", "--reviews", reviews)
     assert r.returncode == 0 and "一致 2/2 = 100%" in r.stdout, r.stdout + r.stderr
 
 

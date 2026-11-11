@@ -241,10 +241,18 @@ def build_examples(out_dir: Path, marks: dict, excluded: set[str], limit: int = 
     return ex[:limit]
 
 
+def is_hard(e: dict) -> bool:
+    """AI 判错的例子：AI 给了高分但人工标 N（误报），或 AI 给了低分但人工标 Y（漏报）。"""
+    sc = e.get("llm_score")
+    if sc is None:
+        return False
+    return (e["mark"] == "N" and float(sc) >= 7) or (e["mark"] == "Y" and float(sc) <= 6)
+
+
 def pick_examples(examples: list[dict], session: str | None, n_yes: int, n_no: int) -> list[dict]:
-    """给某一场精排挑例子：排除这一场本身、排除后台标记不用的；有备注的优先，越新越优先。"""
+    """给某一场精排挑例子：排除这一场本身、排除后台标记不用的；AI 判错的优先（最该学的），其次有备注的，越新越优先。"""
     pool = [e for e in examples if not e.get("excluded") and e["session"] != session and (e["note"] or e["what_happened"] or e["speech"])]
-    key = lambda e: (bool(e["note"] or e.get("reasons")), e["session"], -e["rank"])
+    key = lambda e: (is_hard(e), bool(e["note"] or e.get("reasons")), e["session"], -e["rank"])
     yes = sorted((e for e in pool if e["mark"] == "Y"), key=key, reverse=True)[:n_yes]
     no = sorted((e for e in pool if e["mark"] == "N"), key=key, reverse=True)[:n_no]
     return yes + no
@@ -272,12 +280,18 @@ def type_stats(my_uploads: list[dict], min_n: int) -> dict:
 DEFAULT_WEIGHTS = {"llm": 0.8, "screen": 0.2, "not_funny": 0.6}
 
 
+TIER_MUL = {"推荐": 1.1, "备选": 1.0, "淘汰": 0.75}          # 同场二次比较的档位对综合分的加减
+
+
 def final_score(llm: dict | None, rank: int, n_total: int, w: dict, taboo: bool = False) -> float:
     if taboo:
         return 0.0                                  # 命中禁区话题：判不切，排到最后
     screen = 1 - (rank - 1) / max(1, n_total - 1)
     if llm:
         f = w["llm"] * llm["score"] / 10 + w["screen"] * screen
+        if not llm.get("standalone", True):            # 不能单独看懂（要前情 / 圈内梗）：往下排（权重没配就不惩罚）
+            f *= w.get("not_standalone", 1.0)
+        f *= TIER_MUL.get(llm.get("tier") or "", 1.0)
         return f * (w.get("not_funny", 0.6) if not llm["funny"] else 1.0)
     return w["screen"] * screen * 0.5
 
@@ -350,7 +364,11 @@ def context_text(mem: dict | None, session: str | None, cfg: dict, decisions: di
         for e in ex:
             desc = e["what_happened"] or e["speech"]
             why = "、".join(REASON_LABELS[r] for r in e.get("reasons") or [] if r in CONTENT_REASONS)
-            lines.append(f"- {'值得切' if e['mark'] == 'Y' else '不值得切'}：{desc}" + (f"（原因：{why}）" if why else "")
+            miss = ""
+            if is_hard(e):
+                miss = (f"【AI 当时给了 {float(e['llm_score']):g} 分，判断错了：它其实不值得切】" if e["mark"] == "N"
+                        else f"【AI 当时只给了 {float(e['llm_score']):g} 分，漏掉了：它其实值得切】")
+            lines.append(f"- {'值得切' if e['mark'] == 'Y' else '不值得切'}：{desc}" + (f"（原因：{why}）" if why else "") + miss
                          + (f"（审核备注：{e['note']}）" if e["note"] else ""))
         parts.append("【过去的人工审核结果（按这个口味判断）】\n" + "\n".join(lines))
     vetoes = [e for e in mem.get("examples") or [] if e.get("veto") and not e.get("excluded") and e["id"] not in excluded
