@@ -24,6 +24,7 @@ import java.util.stream.Stream;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kiya.admin.common.ApiException;
@@ -192,6 +193,47 @@ public class StickerService {
             throw ApiException.badRequest("保存失败：" + e.getMessage());
         }
         return Map.of("name", fname);
+    }
+
+    /** 读 stickers.json（贴图含义描述）：{文件名: {meaning, mood, avoid, auto}}。没有就是空表。 */
+    public Map<String, Object> meta() {
+        Path f = dir().resolve("stickers.json");
+        if (!Files.exists(f)) {
+            return new LinkedHashMap<>();
+        }
+        try {
+            Map<String, Object> m = om.readValue(f.toFile(), new TypeReference<LinkedHashMap<String, Object>>() {});
+            return m == null ? new LinkedHashMap<>() : m;
+        } catch (IOException e) {
+            throw ApiException.badRequest("stickers.json 损坏：" + e.getMessage());
+        }
+    }
+
+    /** 保存某个贴图的含义描述（mood / avoid 可空）。人工改过的去掉 auto 标记。 */
+    public Map<String, Object> saveMeta(String name, String meaning, String mood, String avoid) {
+        if (name == null || !NAME.matcher(name).matches()) {
+            throw ApiException.badRequest("文件名不合法");
+        }
+        if (meaning == null || meaning.trim().isEmpty()) {
+            throw ApiException.badRequest("含义不能为空");
+        }
+        Map<String, Object> meta = meta();
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("meaning", meaning.trim());
+        item.put("mood", mood == null ? "" : mood.trim());
+        item.put("avoid", avoid == null ? "" : avoid.trim());
+        item.put("auto", false);
+        meta.put(name, item);
+        Path f = dir().resolve("stickers.json");
+        try {
+            Files.createDirectories(dir());
+            Path tmp = f.resolveSibling("stickers.json.tmp");
+            Files.writeString(tmp, om.writerWithDefaultPrettyPrinter().writeValueAsString(meta), StandardCharsets.UTF_8);
+            Files.move(tmp, f, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException e) {
+            throw ApiException.badRequest("保存失败：" + e.getMessage());
+        }
+        return Map.of("name", name);
     }
 
     public Path file(String name) {

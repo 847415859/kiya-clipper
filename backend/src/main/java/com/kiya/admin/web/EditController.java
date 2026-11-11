@@ -112,6 +112,20 @@ public class EditController {
         return Map.of("ok", true);
     }
 
+    /** 贴图含义描述（stickers.json）：{文件名: {meaning, mood, avoid, auto}}。 */
+    @GetMapping("/api/stickers/meta")
+    public Map<String, Object> stickerMeta() {
+        return stickers.meta();
+    }
+
+    public record MetaReq(String meaning, String mood, String avoid) {}
+
+    /** 保存某张贴图的含义描述（人工改过的去掉 auto 标记）。 */
+    @PutMapping("/api/stickers/{name}/meta")
+    public Map<String, Object> saveStickerMeta(@PathVariable String name, @RequestBody MetaReq req) {
+        return stickers.saveMeta(name, req.meaning(), req.mood(), req.avoid());
+    }
+
     @GetMapping("/api/stickers/{name}")
     public ResponseEntity<Resource> sticker(@PathVariable String name) {
         Path p = stickers.file(name);

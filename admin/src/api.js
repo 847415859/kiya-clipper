@@ -68,6 +68,8 @@ export const api = {
   deleteSticker: (n) => http.delete(`/api/stickers/${encodeURIComponent(n)}`),
   searchSticker: (q, limit) => http.get('/api/stickers/search', { params: { q, limit: limit || 20 } }),
   fetchSticker: (url, name) => http.post('/api/stickers/fetch', { url, name }),
+  stickerMeta: () => http.get('/api/stickers/meta'),
+  saveStickerMeta: (name, meaning, mood, avoid) => http.put(`/api/stickers/${encodeURIComponent(name)}/meta`, { meaning, mood, avoid }),
 
   words: () => http.get('/api/config/words'),
   saveWords: (body) => http.put('/api/config/words', body),
