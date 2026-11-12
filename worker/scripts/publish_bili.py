@@ -40,7 +40,7 @@ from clipper.streamer import resolve_config  # noqa: E402
 MIN_AHEAD = 4 * 3600 + 600          # B站要求定时发布晚于提交 4 小时以上，多留 10 分钟余量
 MAX_AHEAD = 15 * 24 * 3600 - 3600   # 上限约 15 天，少 1 小时留余量
 MODES = ("hold", "now", "timed", "private")
-DEFAULTS = {"hold_days": 14, "min_interval_sec": 600, "tid": 21, "line": "", "submit": "", "limit": 3, "retry": 3,
+DEFAULTS = {"hold_days": 14, "min_interval_sec": 600, "tid": 21, "line": "", "submit": "", "limit": 3, "retry": 0,
             "timeout_sec": 3600}
 
 
@@ -113,7 +113,11 @@ def build_cmd(bin_: str, cookie: Path, video: Path, pack: dict, cover: Path | No
               extra: list[str]) -> list[str]:
     cmd = [bin_, "-u", str(cookie), "upload", str(video), "--copyright", "2", "--source", pack.get("source") or "",
            "--tid", str(bc["tid"]), "--title", pack["title"], "--desc", pack.get("description") or "",
-           "--tag", ",".join(pack.get("tags") or []), "--limit", str(bc["limit"]), "--retry", str(bc["retry"])]
+           "--tag", ",".join(pack.get("tags") or [])]
+    if bc.get("limit"):
+        cmd += ["--limit", str(bc["limit"])]
+    if bc.get("retry"):                                   # 有的 biliup 版本没有 --retry，默认不传（配置里填了才传）
+        cmd += ["--retry", str(bc["retry"])]
     if bc.get("submit"):
         cmd += ["--submit", str(bc["submit"])]
     if bc.get("line"):

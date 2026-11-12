@@ -114,6 +114,8 @@ publish:
     tid: 21                  # 投稿分区 id（21 = 生活·日常；按你的账号习惯改）
     submit: ""               # biliup 的提交接口：空 = 用它的默认；也可填 web / client / app
     line: ""                 # 上传线路，空 = 自动
+    limit: 3                 # 上传并发数（--limit），0 = 不传
+    retry: 0                 # 失败重试次数（--retry）；有的 biliup 版本没有这个参数，所以默认不传
     # private_args: []       # “仅自己可见”：biliup 没有这个参数，验证过能用的参数填这里才会出现在弹窗里
   # 简介模板：{what_happened} 精排的一句话、{streamer} {space_url} {live_url}、{date} 场次日期、{time} 片段在直播里的时间
   desc_template: |

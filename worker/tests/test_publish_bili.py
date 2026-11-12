@@ -20,7 +20,7 @@ if [ "$1" = "-u" ]; then shift; shift; fi
 if [ "$2" = "--help" ]; then echo "$FAKE_FLAGS"; exit 0; fi
 echo "uploading..."; echo "投稿成功 BV1ab411c7de"; exit ${FAKE_EXIT:-0}
 """
-ALL_FLAGS = "--copyright --source --tid --title --desc --tag --limit --retry --submit --line --cover --dtime"
+ALL_FLAGS = "--copyright --source --tid --title --desc --tag --limit --submit --line --cover --dtime"
 
 
 def setup(tmp_path, taboo=(), final=True, extra_cfg=""):
@@ -85,6 +85,7 @@ def test_hold_uploads_with_timer_and_records_result(tmp_path):
     line = (tmp_path / "log.txt").read_text(encoding="utf-8").splitlines()
     cmd = next(x for x in line if " upload " in x and "--help" not in x)
     assert "--copyright 2" in cmd and "--source https://live.bilibili.com/1724773744" in cmd and "--dtime" in cmd
+    assert "--retry" not in cmd and "--limit 3" in cmd
     assert "--tag 虚拟主播,金油" in cmd and "720p.mp4" in cmd and "01_cover.jpg" in cmd and "--submit web" in cmd
     assert json.loads((sess / "publish" / "01.bili.json").read_text(encoding="utf-8"))["status"] == "ok"
 
