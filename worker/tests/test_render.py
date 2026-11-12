@@ -55,7 +55,7 @@ def test_render_pipeline(tmp_path):
     subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=640x360:r=10:d=120",
                     "-f", "lavfi", "-i", "sine=d=120", "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
                     "-c:a", "aac", str(video)], check=True)
-    sess = tmp_path / "out" / "20261112-2000"
+    sess = tmp_path / "output" / "20261112-2000"
     (sess / "edits").mkdir(parents=True)
     (sess / "candidates.json").write_text(json.dumps({"segments": [{"video": str(video), "offset": 0}],
         "candidates": [{"rank": 3, "t": 60, "clip_start": 30, "clip_end": 90}]}), encoding="utf-8")
@@ -146,7 +146,7 @@ def test_window_beyond_candidate(tmp_path):
     subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=10:d=120",
                     "-f", "lavfi", "-i", "sine=d=120", "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
                     "-c:a", "aac", str(video)], check=True)
-    sess = tmp_path / "out" / "20261112-2000"
+    sess = tmp_path / "output" / "20261112-2000"
     (sess / "edits").mkdir(parents=True)
     (sess / "candidates.json").write_text(json.dumps({"segments": [{"video": str(video), "offset": 0}],
         "candidates": [{"rank": 2, "t": 60, "clip_start": 30, "clip_end": 90}]}), encoding="utf-8")

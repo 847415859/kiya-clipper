@@ -12,7 +12,7 @@ from pathlib import Path
 
 MATCH_WITHIN = 2.0          # 同类型的效果，开始时间差在这个范围内算“同一个效果”
 RETIME = 0.5                # 开始时间挪动超过这个算“被调过时间”
-TYPE_NAME = {"text": "花字", "zoom": "推镜", "sticker": "贴图"}
+TYPE_NAME = {"text": "花字", "zoom": "推镜", "sticker": "贴图", "narration": "吐槽旁白", "fakeui": "伪UI"}
 
 
 def _read(p: Path):
@@ -97,7 +97,7 @@ def edit_taste(out_dir: Path, min_edits: int = 5, min_sessions: int = 2) -> dict
              "avg_human_items": round(sum(sum(r["human_counts"].values()) for r in rows) / len(rows), 1) if rows else 0,
              "text_changes": [dict(c, session=r["session"], rank=r["rank"]) for r in latest for c in r["text_changed"]][:8],
              "removed_examples": [dict(x, session=r["session"], rank=r["rank"]) for r in latest for x in r["removed"]
-                                  if x["type"] in ("text", "sticker") and x["text"]][:8],
+                                  if x["type"] in ("text", "sticker", "narration", "fakeui") and x["text"]][:8],
              "trim_shift": {"start": round(sum(s["start"] for s in shifts) / len(shifts), 1),
                             "end": round(sum(s["end"] for s in shifts) / len(shifts), 1)} if shifts else None,
              "recent": [{k: r[k] for k in ("session", "rank", "at", "kept", "retimed", "changed", "trim_shift")}
@@ -132,7 +132,7 @@ def taste_text(t: dict | None) -> str:
             lines.append(f"- {name}：剪辑师还自己另外加了 {b['added']} 个，可以适当多排一点")
     if t["avg_human_items"] or t["avg_ai_items"]:
         lines.append(f"- 数量：AI 平均排 {t['avg_ai_items']:g} 个效果，改完剩 {t['avg_human_items']:g} 个")
-    ex = [x for x in t.get("removed_examples") or [] if x["type"] == "text"][:4]
+    ex = [x for x in t.get("removed_examples") or [] if x["type"] in ("text", "narration")][:4]
     if ex:
         lines.append("- 被删掉的花字：" + "；".join(f"“{x['text']}”" for x in ex))
     tc = t.get("text_changes") or []

@@ -61,6 +61,7 @@ public class JobService {
             Map.entry("AUTO_EDIT", "AI 剪辑初稿"),
             Map.entry("EDIT_PREVIEW", "剪编辑预览"),
             Map.entry("PUBLISH_BILI", "发布到B站"),
+            Map.entry("INDEX_TRANSCRIPT", "转写入全文索引"),
             Map.entry("RENDER", "渲染成片"));
 
     private final JobMapper mapper;
@@ -216,7 +217,7 @@ public class JobService {
     // ------------------------------------------------------------------ 执行
     private static boolean needsSession(String type) {
         return switch (type) {
-            case "TRANSCRIBE", "SCREEN", "RERANK", "RESCORE", "CUT", "PIPELINE", "RENDER", "AUTO_EDIT", "EDIT_PREVIEW", "PUBLISH_BILI" -> true;
+            case "TRANSCRIBE", "SCREEN", "RERANK", "RESCORE", "CUT", "PIPELINE", "RENDER", "AUTO_EDIT", "EDIT_PREVIEW", "PUBLISH_BILI", "INDEX_TRANSCRIPT" -> true;
             default -> false;
         };
     }
@@ -226,11 +227,16 @@ public class JobService {
         String rec = paths.recDir().toString();
         List<List<String>> steps = new ArrayList<>();
         switch (type) {
-            case "TRANSCRIBE" -> steps.add(transcribe(rec, session, p));
+            case "TRANSCRIBE" -> {
+                steps.add(transcribe(rec, session, p));
+                steps.add(indexTranscript(session, true));
+            }
+            case "INDEX_TRANSCRIPT" -> steps.add(indexTranscript(session, false));
             case "SCREEN" -> steps.add(screen(rec, session, p));
             case "CUT" -> steps.add(cut(session, p));
             case "PIPELINE" -> {
                 steps.add(transcribe(rec, session, p));
+                steps.add(indexTranscript(session, true));
                 steps.add(screen(rec, session, p));
                 steps.add(cut(session, p));
             }
@@ -259,6 +265,15 @@ public class JobService {
             default -> throw ApiException.badRequest("不支持的任务类型");
         }
         return steps;
+    }
+
+    /** 转写入全文索引（跨场次呼应用）。soft：MySQL / pymysql 用不了时只提示、不让任务失败。 */
+    private List<String> indexTranscript(String session, boolean soft) {
+        List<String> a = new ArrayList<>(List.of("index", paths.sessionDir(session).toString()));
+        if (soft) {
+            a.add("--soft");
+        }
+        return runner.command("transcript_index.py", a);
     }
 
     private List<String> transcribe(String rec, String session, Map<String, Object> p) {

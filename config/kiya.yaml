@@ -102,7 +102,7 @@ memory:
 
 # 发布包（scripts/publish_pack.py）：B站投稿用的封面、标题、简介、标签，后台成片编辑页“发布”卡片里改和复制
 publish:
-  fixed_tags: [虚拟主播, 直播切片, VTuber, 娜由纪雅]   # 每条都带；再加主播名、类型、片段里出现的梗，最多 10 个
+  fixed_tags: [虚拟主播, 直播切片, VTuber, 娜由纪雅kiya,kiya]   # 每条都带；再加主播名、类型、片段里出现的梗，最多 10 个
   cover_font: "Noto Sans CJK SC:bold"   # fc-match 的写法；装了综艺体可以换成 "ZCOOL KuaiLe"
   cover_color: "#FFE14D"
   cover_stroke: "#E0457B"
@@ -111,6 +111,7 @@ publish:
     cookie: ~/.config/biliup/cookies.json   # biliup login 生成的登录文件（权限 600，别提交到 git）
     hold_days: 14            # “先放着”：定时发布设到几天后（B站最长约 15 天，创作中心里能改 / 撤回）
     min_interval_sec: 600    # 同一主播两次上传的最短间隔，防止连点触发风控
+    height: 720              # 发布用哪个分辨率的成片：不超过它的最高一份（没有就用最接近的更高一份）；上行带宽小就别设 1080
     tid: 21                  # 投稿分区 id（21 = 生活·日常；按你的账号习惯改）
     submit: ""               # biliup 的提交接口：空 = 用它的默认；也可填 web / client / app
     line: ""                 # 上传线路，空 = 自动
@@ -119,23 +120,34 @@ publish:
     # private_args: []       # “仅自己可见”：biliup 没有这个参数，验证过能用的参数填这里才会出现在弹窗里
   # 简介模板：{what_happened} 精排的一句话、{streamer} {space_url} {live_url}、{date} 场次日期、{time} 片段在直播里的时间
   desc_template: |
-    {what_happened}
 
-    主播：{streamer} {space_url}
+
+    主播：{streamer} 
+    主页：{space_url}
     直播间：{live_url}
-    出自 {date} 的直播（约 {time}）
 
-    非官方切片，仅为推广主播；如有不妥请联系删除。
 
 # 剪辑脚本初稿（scripts/autoedit.py）
 autoedit:
-  prompt: edit_v5            # v5 = v4 + 照着精排的交接编排（前情字幕 / 节拍 / 笑点原话 / 开头怎么改）；v4 = v3 + 多版本风格档位；v3 = v2 + 梗库（只用后台确认过的梗；v2 = v1 + 剪辑师口味，人工改过的初稿攒够 memory.min_edits 条才生效）
+  prompt: edit_v6            # v6 = v5 + 吐槽旁白 / 伪 UI 两种新模板（效果不好改回 edit_v5）；v5 = v4 + 照着精排的交接编排（前情字幕 / 节拍 / 笑点原话 / 开头怎么改）；v4 = v3 + 多版本风格档位；v3 = v2 + 梗库（只用后台确认过的梗；v2 = v1 + 剪辑师口味，人工改过的初稿攒够 memory.min_edits 条才生效）
   model: ""
+  music: true                # 曲库里有“可吸附”的曲子时，AI 初稿自动配 BGM 并把效果吸附到鼓点；曲库为空时什么都不做（曲库见 scripts/music.py）
   max_stickers: 2            # 一条切片最多几个贴图，同一个贴图整条只能用一次（贴图要先写含义说明：scripts/describe_stickers.py）
   max_items: 8               # 一条切片最多几个效果（标准版；克制版最多 3 个，热闹版多 3 个）
   variants:                  # 多版本初稿：前 top_n 个候选各出一版，其余只出标准版（多一版 = 多一次大模型调用）
     top_n: 5
     styles: [restrained, standard, lively]   # 克制 / 标准 / 热闹
+
+# 跨场次呼应（scripts/callbacks.py、clipper/callbacks.py）：AI 初稿时去历史场次里找“她以前说过的话”（立 flag 与打脸、话题前后反转），命中就并入标准版：
+# 成片开头插一小段旧场次的画面（“11月5日｜她说：…”），旧录像不在本地时退回开头的文字卡。需要先有转写；有 MySQL 用 ngram 全文索引，没有就直接读各场 transcript.json
+callbacks:
+  enabled: true
+  top_n: 8                   # 只给精排前 N 的候选找呼应（有命中才多花一次大模型调用）
+  min_confidence: 0.7        # 大模型判断的把握低于它就不用
+  max_per_session: 2         # 一场最多几条切片带呼应，免得条条都是“前情提要”
+  max_seconds: 8             # 插进来的旧画面最长几秒
+  min_overlap: 2             # 检索命中句和本片原话至少共有几个“非通用”二字组
+  index: auto                # auto = 有 MySQL 用 MySQL，否则读文件；files = 只读文件
 
 # 梗库（scripts/memes.py、clipper/memes.py）：B站热门每天抓一次标题 / 热搜，提炼高频短语；新梗要后台确认含义和尺度后才会被剪辑初稿用
 memes:

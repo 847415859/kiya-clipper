@@ -152,6 +152,21 @@ chmod 600 ~/.config/biliup/cookies.json
 - 第一次：先点“先预演”看命令，再用“先放着”真投一条，到 B站创作中心确认标题 / 分区 / 来源 / 定时时间，没问题再用别的方式。
 - 分区 id 在 `publish.bili.tid`，默认 21（生活·日常），按你的习惯改。
 
+## 跨场次呼应的全文索引（可选）
+
+“跨场次呼应”要在历史场次的转写里找原话。有 MySQL 时用 ngram 全文索引（表 `transcript_segment` 由 worker 第一次入库时自己建，需要 MySQL 5.7.6+，库账号要有建表权限，后台那个账号就行）；没有也能用，会退回直接读各场的 `transcript.json`。
+
+```bash
+cd /opt/kiya-clipper/worker && source .venv/bin/activate
+pip install PyMySQL                                      # 国内装不动就加 -i https://mirrors.aliyun.com/pypi/simple/
+set -a; source /etc/kiya-admin.env; set +a               # 带上 DB_PASSWORD（后台启动的任务会自动带）
+python scripts/transcript_index.py status                # 能看到“MySQL 索引里有 N 场”就连上了
+python scripts/transcript_index.py index --all           # 历史场次一次性补入库；之后每次转写完会自动入库
+python scripts/transcript_index.py search "再也不吃辣了" --flag
+```
+
+连不上库时转写任务不会失败，日志里会写“没有写入全文索引”。
+
 ## 附录：不用 Docker，直接运行录播姬
 
 到录播姬的 GitHub Releases 下载 Linux x64 的命令行版（CLI），解压到 `/opt/brec`，然后：

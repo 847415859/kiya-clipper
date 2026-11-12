@@ -5,3 +5,4 @@ PyYAML>=6.0
 pydantic>=2.5
 Pillow>=10.0
 pytest>=8.0
+PyMySQL>=1.1          # 跨场次呼应的全文索引（可选：没装就退回直接读 transcript.json）

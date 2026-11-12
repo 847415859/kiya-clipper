@@ -18,7 +18,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 const TYPES = {
   '.mp4': 'video/mp4', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
-  '.webp': 'image/webp', '.ttf': 'font/ttf', '.otf': 'font/otf', '.ttc': 'font/collection', '.woff2': 'font/woff2'
+  '.webp': 'image/webp', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.ogg': 'audio/ogg', '.flac': 'audio/flac', '.ttf': 'font/ttf', '.otf': 'font/otf', '.ttc': 'font/collection', '.woff2': 'font/woff2'
 };
 
 function serve(root) {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""剪辑脚本初稿（综艺版）：大模型按精排结论和原话，给候选片段编排花字 / 放大运镜 / 贴图，存成剪辑脚本，
+"""剪辑脚本初稿（综艺版）：大模型按精排结论和原话，给候选片段编排花字 / 放大运镜 / 贴图 / 吐槽旁白 / 伪 UI（曲库里有可用曲子时再配 BGM、效果吸附鼓点），存成剪辑脚本，
 在后台成片编辑器里打开就是初稿，微调后渲染。
 
 用法：
@@ -27,11 +27,15 @@ REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
 from clipper.kcfg import load_cfg  # noqa: E402
-from clipper.streamer import resolve_config  # noqa: E402
+from clipper.streamer import resolve_config, streamer_from_session_dir  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.context import danmaku_lines, load_events, profile, speech_lines  # noqa: E402
 from clipper.stickers import offer_text as sticker_offer_text, offered as offered_stickers, sticker_dir, undescribed  # noqa: E402
-from clipper.edit import EditError, enforce_density, ensure_caption, limit_stickers, suggest_window, validate_edit, validate_item  # noqa: E402
+from clipper import callbacks as cb_lib  # noqa: E402
+from clipper import music as music_lib  # noqa: E402
+from clipper.transcript_index import open_index  # noqa: E402
+from clipper.edit import (EditError, enforce_density, ensure_caption, limit_overlays, limit_stickers, snap_to_beats,  # noqa: E402
+                          suggest_window, validate_edit, validate_item)
 from clipper.editdiff import edit_taste, taste_text  # noqa: E402
 from clipper.llm import LLMClient, fill, load_prompt  # noqa: E402
 from clipper.variants import DEFAULT, STYLES, load as variants_load, resolve, save as save_variants, variants_cfg, wants_variants  # noqa: E402
@@ -152,6 +156,34 @@ def main() -> int:
         styles = vc["styles"] if multi else [DEFAULT]
     client = LLMClient(model=ac["model"] or None, cache_dir=sess.parent / "_llm_cache")
 
+    # 跨场次呼应：每个候选找一次（检索 + 一次大模型判定），只并入标准版（clipper/callbacks.py）
+    cbc = cb_lib.settings(cfg)
+    owner = f"{sess.name}#{args.rank}"
+    cb_plan = None
+    pos = (rr or {}).get("new_rank") or args.rank
+    if not cbc["enabled"] or not sents:
+        pass
+    elif pos > int(cbc["top_n"]):
+        print(f"呼应：排名第 {pos}，不在前 {cbc['top_n']} 个，不找呼应（callbacks.top_n）")
+    elif cb_lib.count_owned(sess.parent, sess.name, owner) >= int(cbc["max_per_session"]):
+        print(f"呼应：这一场已经有 {cbc['max_per_session']} 条带呼应的切片了（callbacks.max_per_session），这条不再找")
+    else:
+        try:
+            sid = streamer_from_session_dir(sess)
+            index, how = open_index(sid, sess.parent, cbc["index"])
+            punch_abs = ca + float(llm["punch_time"]) if llm.get("punch_time", -1) >= 0 else None
+            cb_plan, cb_notes, _ = cb_lib.find_callback(
+                index=index, streamer=sid, session=sess.name, sents=sents, a=a, b=b, punch=punch_abs,
+                what_happened=llm.get("what_happened") or "", cfg=cbc, client=client, prompt=load_prompt("callback_v1"),
+                sess_root=sess.parent, owner=owner, speech_text=speech_lines(sents, a, b, a))
+            print(f"呼应检索（{how}）：" + (f"找到「{cb_plan['label']}」（{cb_lib.RELATION_NAME[cb_plan['relation']]}，置信度 {cb_plan['confidence']}，"
+                                         f"{'插旧画面' if cb_plan['mode'] == 'clip' else '文字卡'}）" if cb_plan else "没有合适的呼应"))
+            for x in cb_notes:
+                print("  - " + x)
+        except Exception as e:                                  # 呼应只是锦上添花：任何错误都不能让初稿失败
+            print(f"呼应检索出错，跳过：{type(e).__name__}: {e}", file=sys.stderr)
+            cb_plan = None
+
     def make(key: str):
         """某个档位的一版初稿：(edit, bad, dropped, meme_notes)，大模型失败返回 None。"""
         v = resolve(key, int(ac["max_items"]), int(ms["max_per_clip"]))
@@ -185,10 +217,26 @@ def main() -> int:
             trim = {"start": round(out.trim.start, 2), "end": round(out.trim.end, 2)}
         items = [i for i in items if trim["start"] <= i["start"] < trim["end"]]
         items, st_dropped = limit_stickers(items, int(ac.get("max_stickers", 2)))
+        items, fx_dropped = limit_overlays(items)         # 吐槽旁白 / 伪 UI 不能泛滥（旁白最多 2 条、伪 UI 最多 2 个）
         if "{{caption}}" in user:                        # edit_v5：精排要求补的前情字幕，模型漏了就在开头补上
             items = ensure_caption(items, caption, trim)
         edit = {"version": 1, "window": window, "trim": trim, "subtitles": {"enabled": True}, "items": items,
                 "generated_by": f"{version} / {client.model}" + (f" / {v['label']}" if multi or key != DEFAULT else ""), "note": out.note[:200]}
+        track = music_lib.pick_track(args.rank, str(llm.get("type") or "")) if ac.get("music", True) else None
+        if track:                                          # 曲库里有可用的曲子：配 BGM，效果吸附到鼓点（没有曲库就跳过）
+            beats = music_lib.load_beats(track["id"])["beats"]
+            edit["items"], moved = snap_to_beats(edit["items"], beats, 0.0, clip_len)
+            edit["music"] = {"track": track["id"], "start": 0.0, "volume": 0.18, "duck": True, "snap": True}
+            print(f"  背景音乐：{track['title']}，{moved} 个效果吸附到鼓点")
+        if cb_plan and key == DEFAULT:
+            if cb_plan["mode"] == "clip":
+                edit["callback"] = {k: v for k, v in cb_plan.items()}
+            else:                                              # 旧录像不在了：开头放一张“前情提要”文字卡
+                try:
+                    edit["items"].append(validate_item({"type": "fakeui", "kind": "notice", "title": "前情提要", "text": cb_plan["label"],
+                                                        "start": round(trim["start"] + 0.3, 2), "duration": 3.5, "preset": "slide"}, clip_len))
+                except EditError as e:
+                    print(f"  呼应文字卡加不上：{e}", file=sys.stderr)
         edit, dropped = enforce_density(edit)
         meme_notes: list[str] = []
         if "{{memes}}" in user:                          # 没提供梗的时候，模型写的梗标记一律去掉
@@ -218,6 +266,8 @@ def main() -> int:
     chosen_key = DEFAULT if any(k == DEFAULT for k, _ in made) else made[0][0]
     chosen = next(r for k, r in made if k == chosen_key)
     edit = chosen[0]
+    if cb_plan and chosen_key == DEFAULT:
+        cb_lib.mark_used(sess.parent, cb_plan["session"], cb_plan["start"], owner)
     dst.parent.mkdir(exist_ok=True)
     dst.write_text(json.dumps(edit, ensure_ascii=False, indent=1), encoding="utf-8")
     ai_meta = {"prompt": version, "model": client.model, "taste_used": bool(extra and taste["active"]),
@@ -238,7 +288,8 @@ def main() -> int:
             kinds[i["type"]] = kinds.get(i["type"], 0) + 1
         label = f"【{STYLES[key]['label']}】" if multi or key != DEFAULT else ""
         print(f"{label}初稿：成片 {e['trim']['start']:.1f}–{e['trim']['end']:.1f} 秒，效果 {len(e['items'])} 个 "
-              f"（花字 {kinds.get('text', 0)}、运镜 {kinds.get('zoom', 0)}、贴图 {kinds.get('sticker', 0)}）"
+              f"（花字 {kinds.get('text', 0)}、运镜 {kinds.get('zoom', 0)}、贴图 {kinds.get('sticker', 0)}、"
+              f"旁白 {kinds.get('narration', 0)}、伪UI {kinds.get('fakeui', 0)}）"
               + (f"；丢掉 {len(dropped) + len(bad)} 个不合规的" if dropped or bad else ""))
         for x in bad[:5]:
             print("  - " + x)

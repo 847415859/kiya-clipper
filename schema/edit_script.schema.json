@@ -55,7 +55,9 @@
             "enum": [
               "text",
               "zoom",
-              "sticker"
+              "sticker",
+              "narration",
+              "fakeui"
             ]
           },
           "start": {
@@ -70,8 +72,8 @@
           },
           "text": {
             "type": "string",
-            "maxLength": 40,
-            "description": "花字内容（text）"
+            "maxLength": 50,
+            "description": "花字内容（text，≤40）/ 吐槽旁白（narration，≤50）/ 伪 UI 正文（fakeui，≤40）"
           },
           "preset": {
             "enum": [
@@ -99,7 +101,7 @@
             "type": "number",
             "minimum": 24,
             "maximum": 300,
-            "description": "花字字号（1080p 基准）"
+            "description": "花字字号（text，1080p 基准）/ 旁白字号（narration，24–120，默认 54）"
           },
           "color": {
             "type": "string",
@@ -124,7 +126,7 @@
           },
           "scale": {
             "type": "number",
-            "description": "zoom：放大倍数 1.05–3；sticker：宽度占画面比例 0.03–1"
+            "description": "zoom：放大倍数 1.05–3；sticker：宽度占画面比例 0.03–1；fakeui 为宽度占画面宽度的比例 0.15–0.8"
           },
           "shake": {
             "type": "number",
@@ -145,6 +147,34 @@
           "asset": {
             "type": "string",
             "description": "sticker：assets/stickers/ 里的文件名"
+          },
+          "tag": {
+            "type": "string",
+            "maxLength": 8,
+            "default": "吐槽",
+            "description": "吐槽旁白的小标签，可留空（narration）"
+          },
+          "style": {
+            "enum": [
+              "strip",
+              "bubble"
+            ],
+            "default": "strip",
+            "description": "吐槽旁白样式：深色条 / 白色气泡（narration）"
+          },
+          "kind": {
+            "enum": [
+              "popup",
+              "chat",
+              "achievement",
+              "notice"
+            ],
+            "description": "伪 UI 种类：系统弹窗 / 聊天消息 / 成就解锁 / 任务通知（fakeui，必填）"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 16,
+            "description": "伪 UI 标题（fakeui；不填用该种类的默认标题）"
           }
         }
       }
@@ -167,6 +197,118 @@
         }
       },
       "additionalProperties": false
+    },
+    "music": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "背景音乐（曲库为空时不用填）；渲染时混入，主播说话自动压低",
+      "required": [
+        "track"
+      ],
+      "properties": {
+        "track": {
+          "type": "string",
+          "description": "曲库里的曲子 id（worker/scripts/music.py list）"
+        },
+        "start": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 3600,
+          "default": 0,
+          "description": "素材范围开头对应曲子的第几秒"
+        },
+        "volume": {
+          "type": "number",
+          "minimum": 0.02,
+          "maximum": 1,
+          "default": 0.18
+        },
+        "duck": {
+          "type": "boolean",
+          "default": true,
+          "description": "主播说话时压低音乐"
+        },
+        "snap": {
+          "type": "boolean",
+          "default": false,
+          "description": "保存时把效果开始时间吸附到最近的鼓点（0.2 秒内，节拍清晰的曲子才有效）"
+        }
+      }
+    },
+    "callback": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "跨场次呼应：成片开头插一段旧场次的画面（mode=clip）或放一张文字卡（mode=card）；由 AI 初稿并入标准版，编辑器里可改",
+      "required": [
+        "session",
+        "start",
+        "end",
+        "label"
+      ],
+      "properties": {
+        "session": {
+          "type": "string",
+          "description": "旧场次名"
+        },
+        "start": {
+          "type": "number",
+          "minimum": 0,
+          "description": "旧场次录像里的开始秒数"
+        },
+        "end": {
+          "type": "number",
+          "minimum": 0,
+          "description": "结束秒数；end-start 1.5–12 秒"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "屏幕上的标签，例如 11月5日｜她说：「再也不碰辣椒酱了」"
+        },
+        "relation": {
+          "enum": [
+            "flag_payoff",
+            "reversal"
+          ],
+          "description": "立 flag 与打脸 / 话题前后反转"
+        },
+        "mode": {
+          "enum": [
+            "clip",
+            "card"
+          ],
+          "default": "clip"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "date": {
+          "type": "string",
+          "maxLength": 12
+        },
+        "quote": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "current_quote": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
     }
   }
 }

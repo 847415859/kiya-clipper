@@ -76,6 +76,7 @@
                    @pointerdown.stop="startDrag($event, it)">{{ it.text }}</div>
               <img v-else-if="it.type === 'sticker'" class="ov" :class="{ sel: it.id === selected }" :src="api.stickerUrl(it.asset)"
                    :style="stickerStyle(it)" draggable="false" @pointerdown.stop="startDrag($event, it)" />
+              <FxView v-else :node="fxNode(it)" class="fx" :class="{ sel: it.id === selected }" @pointerdown.stop="startDrag($event, it)" />
             </template>
             <div v-if="selItem && selItem.type === 'zoom'" class="cross" :style="{ left: selItem.x * 100 + '%', top: selItem.y * 100 + '%' }"
                  @pointerdown.stop="startDrag($event, selItem)" title="拖动设置放大焦点" />
@@ -89,6 +90,15 @@
           <el-button size="small" @click="addText">+ 花字</el-button>
           <el-button size="small" @click="addZoom">+ 放大运镜</el-button>
           <el-button size="small" @click="gallery = true">+ 贴图</el-button>
+          <el-button size="small" @click="addNarration">+ 吐槽旁白</el-button>
+          <el-dropdown size="small" @command="addFakeUi">
+            <el-button size="small">+ 伪 UI</el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item v-for="k in fakeKinds" :key="k.v" :command="k.v">{{ k.l }}</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <span class="spacer" />
           <span class="muted">在当前时间添加 · 画面上可拖动位置 · 空格播放 · Delete 删除选中</span>
         </div>
@@ -97,6 +107,7 @@
           <div class="mask" :style="{ left: 0, width: pct(edit.trim.start) }" />
           <div class="mask" :style="{ left: pct(edit.trim.end), right: 0 }" />
           <div v-for="(row, ri) in rows" :key="row.type" class="row-label" :style="{ top: 18 + ri * 28 + 'px' }">{{ row.label }}</div>
+          <div v-for="b in beatTicks" :key="b" class="beat" :style="{ left: pct(b) }" />
           <div v-for="it in edit.items" :key="it.id" class="block" :class="[it.type, { sel: it.id === selected }]"
                :style="blockStyle(it)" @pointerdown.stop="startMove($event, it)">{{ blockLabel(it) }}</div>
           <div class="playhead" :style="{ left: pct(time) }" />
@@ -189,10 +200,88 @@
               <el-form-item label="旋转"><el-slider v-model="selItem.rotate" :min="-45" :max="45" /></el-form-item>
             </template>
 
+            <template v-if="selItem.type === 'narration'">
+              <el-form-item label="内容"><el-input v-model="selItem.text" type="textarea" :rows="2" maxlength="50" show-word-limit /></el-form-item>
+              <el-form-item label="小标签"><el-input v-model="selItem.tag" maxlength="8" placeholder="吐槽（可留空）" /></el-form-item>
+              <el-form-item label="样式">
+                <el-radio-group v-model="selItem.style"><el-radio-button value="strip">深色条</el-radio-button><el-radio-button value="bubble">白色气泡</el-radio-button></el-radio-group>
+              </el-form-item>
+              <el-form-item label="动画"><el-select v-model="selItem.preset"><el-option v-for="p in stickerPresets" :key="p.v" :value="p.v" :label="p.l" /></el-select></el-form-item>
+              <el-form-item label="字号"><el-slider v-model="selItem.size" :min="24" :max="120" /></el-form-item>
+              <el-form-item label="标签色"><el-color-picker :model-value="selItem.color" @change="(v) => (selItem.color = hex(v, selItem.color))" /></el-form-item>
+              <p class="muted">画面上的一句文字吐槽（不配音），适合“旁观者视角”的补刀。</p>
+            </template>
+
+            <template v-if="selItem.type === 'fakeui'">
+              <el-form-item label="种类">
+                <el-select v-model="selItem.kind"><el-option v-for="k in fakeKinds" :key="k.v" :value="k.v" :label="k.l" /></el-select>
+              </el-form-item>
+              <el-form-item label="标题"><el-input v-model="selItem.title" maxlength="16" /></el-form-item>
+              <el-form-item label="内容"><el-input v-model="selItem.text" type="textarea" :rows="2" maxlength="40" show-word-limit /></el-form-item>
+              <el-form-item label="动画"><el-select v-model="selItem.preset"><el-option v-for="p in stickerPresets" :key="p.v" :value="p.v" :label="p.l" /></el-select></el-form-item>
+              <el-form-item label="宽度"><el-slider v-model="selItem.scale" :min="0.15" :max="0.8" :step="0.01" /></el-form-item>
+              <p class="muted">通用的假界面（系统弹窗 / 聊天 / 成就 / 任务通知），不模仿任何真实平台。</p>
+            </template>
+
             <template v-if="selItem.type !== 'zoom'">
               <el-form-item label="横向"><el-slider v-model="selItem.x" :min="0" :max="1" :step="0.01" /></el-form-item>
               <el-form-item label="纵向"><el-slider v-model="selItem.y" :min="0" :max="1" :step="0.01" /></el-form-item>
             </template>
+          </el-form>
+        </el-card>
+
+        <el-card shadow="never" class="card">
+          <template #header><b>背景音乐</b> <span class="muted">（曲库里有授权的曲子才能选）</span></template>
+          <div v-if="!tracks.length" class="muted">曲库是空的，背景音乐和“卡点”暂不可用。把有授权的曲子放进服务器 assets/music，用 worker/scripts/music.py 登记并检测鼓点（见 worker/README）。</div>
+          <el-form v-else label-width="64px" size="small" @submit.prevent>
+            <el-form-item label="曲子">
+              <el-select :model-value="edit.music ? edit.music.track : ''" clearable placeholder="不加背景音乐" style="width: 100%" @change="pickTrack">
+                <el-option v-for="t in tracks" :key="t.id" :value="t.id" :disabled="!t.exists || !t.analyzed"
+                           :label="`${t.title || t.id}${t.bpm ? ' · ' + t.bpm + ' BPM' : ''}${!t.exists ? '（文件缺失）' : !t.analyzed ? '（还没检测鼓点）' : !t.snap_ok ? '（节拍不清晰）' : ''}`" />
+              </el-select>
+            </el-form-item>
+            <template v-if="edit.music">
+              <el-form-item label="起点"><el-input-number v-model="edit.music.start" :min="0" :max="3600" :step="0.5" :precision="1" controls-position="right" />
+                <span class="muted" style="margin-left: 6px">曲子第几秒对上片段开头；时间轴上的竖线是鼓点</span></el-form-item>
+              <el-form-item label="音量"><el-slider v-model="edit.music.volume" :min="0.02" :max="1" :step="0.01" /></el-form-item>
+              <el-form-item label="压低"><el-switch v-model="edit.music.duck" /><span class="muted" style="margin-left: 8px">主播说话时自动降低音乐</span></el-form-item>
+              <el-form-item label="卡点">
+                <el-switch v-model="edit.music.snap" :disabled="musicInfo && !musicInfo.snap_ok" />
+                <span class="muted" style="margin-left: 8px">{{ musicInfo && !musicInfo.snap_ok ? '这首节拍不清晰，不建议卡点' : '保存时把效果的开始时间吸附到最近的鼓点（0.2 秒内）' }}</span>
+              </el-form-item>
+              <p class="muted">编辑器里不播放音乐，只画鼓点刻度；音乐在渲染成片时才混进去。</p>
+            </template>
+          </el-form>
+        </el-card>
+
+        <el-card v-if="edit.callback" shadow="never" class="card">
+          <template #header>
+            <b>跨场次呼应</b>
+            <el-tag size="small" effect="plain" style="margin-left: 6px">{{ callbackRelation[edit.callback.relation] || edit.callback.relation }}</el-tag>
+            <el-button style="float: right" link size="small" type="danger" @click="removeCallback">去掉</el-button>
+          </template>
+          <el-form label-width="64px" size="small" @submit.prevent>
+            <el-form-item label="启用">
+              <el-switch v-model="edit.callback.enabled" />
+              <span class="muted" style="margin-left: 8px">成片开头多出一段“前情”（约 {{ callbackLen }} 秒），编辑器预览里看不到，渲染成片才有</span>
+            </el-form-item>
+            <el-form-item label="旧场次"><span>{{ edit.callback.date }} · {{ edit.callback.session }}</span></el-form-item>
+            <el-form-item v-if="edit.callback.quote" label="她说"><span>{{ edit.callback.quote }}</span></el-form-item>
+            <el-form-item v-if="edit.callback.current_quote" label="这次"><span>{{ edit.callback.current_quote }}</span></el-form-item>
+            <el-form-item label="标签"><el-input v-model="edit.callback.label" maxlength="40" show-word-limit /></el-form-item>
+            <el-form-item label="方式">
+              <el-radio-group v-model="edit.callback.mode">
+                <el-radio-button value="clip">插旧画面</el-radio-button>
+                <el-radio-button value="card">只放文字卡</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item v-if="edit.callback.mode === 'clip'" label="旧画面">
+              <el-input-number v-model="edit.callback.start" :min="0" :step="0.5" :precision="1" controls-position="right" style="width: 120px" />
+              <span class="muted" style="margin: 0 6px">到</span>
+              <el-input-number v-model="edit.callback.end" :min="0" :step="0.5" :precision="1" controls-position="right" style="width: 120px" />
+              <div class="muted">那场录像里的秒数，1.5–12 秒；旧录像不在了渲染时会自动改成文字卡</div>
+            </el-form-item>
+            <p v-if="edit.callback.note" class="muted">AI 判断：{{ edit.callback.note }}{{ edit.callback.confidence != null ? `（把握 ${edit.callback.confidence}）` : '' }}</p>
           </el-form>
         </el-card>
 
@@ -284,7 +373,7 @@
         <el-descriptions-item label="标题">{{ pack.title }}</el-descriptions-item>
         <el-descriptions-item label="标签">{{ (pack.tags || []).join('、') }}</el-descriptions-item>
         <el-descriptions-item label="类型">转载，来源 {{ pack.source }}</el-descriptions-item>
-        <el-descriptions-item label="视频">渲染好的成片里最高清的一份（没有就先去渲染）</el-descriptions-item>
+        <el-descriptions-item label="视频">渲染好的成片里 {{ bili.env?.height || 720 }}p 的那份（没有就用最接近的；一份都没有请先渲染）</el-descriptions-item>
       </el-descriptions>
       <el-alert v-if="(pack.taboo_hits || []).length" type="error" :closable="false" show-icon style="margin-top: 10px"
                 :title="`命中禁区词：${pack.taboo_hits.join('、')}`" />
@@ -380,14 +469,24 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, hms } from '../api'
 // 与渲染器共用同一份动画代码：预览里的弹出、抖动、放大和成片一致
 import { cameraAt, enterExit, outlineShadow } from '../../../renderer/src/anim.js'
+import { narrationView, fakeUiView } from '../../../renderer/src/fakeui.js'
+import FxView from '../components/FxView.vue'
 
 const route = useRoute()
 const router = useRouter()
 const name = computed(() => route.params.name)
 const rank = computed(() => Number(route.params.rank))
 
-const typeName = { text: '花字', zoom: '放大运镜', sticker: '贴图' }
-const rows = [{ type: 'text', label: '花字' }, { type: 'zoom', label: '运镜' }, { type: 'sticker', label: '贴图' }]
+const typeName = { text: '花字', zoom: '放大运镜', sticker: '贴图', narration: '吐槽旁白', fakeui: '伪 UI' }
+const rows = [{ type: 'text', label: '花字' }, { type: 'zoom', label: '运镜' }, { type: 'sticker', label: '贴图' },
+              { type: 'narration', label: '旁白' }, { type: 'fakeui', label: '伪UI' }]
+// 与 worker/clipper/edit.py 的 FAKEUI_DEFAULTS 对应
+const fakeKinds = [
+  { v: 'popup', l: '系统弹窗', title: '系统提示', scale: 0.34, x: 0.5, y: 0.4, text: '你的快乐已超载', duration: 2.5 },
+  { v: 'chat', l: '聊天消息', title: '路人', scale: 0.36, x: 0.27, y: 0.3, text: '哈哈哈哈哈', duration: 2.5 },
+  { v: 'achievement', l: '成就解锁', title: '成就解锁', scale: 0.4, x: 0.5, y: 0.14, text: '当场社死', duration: 3 },
+  { v: 'notice', l: '任务通知', title: '任务', scale: 0.5, x: 0.5, y: 0.1, text: '新任务：憋住别笑', duration: 3 }
+]
 const textPresets = [{ v: 'pop', l: '弹出' }, { v: 'slam', l: '砸下（带震动）' }, { v: 'shake', l: '持续抖动' }, { v: 'bounce', l: '掉落弹跳' }, { v: 'fade', l: '淡入' }]
 const stickerPresets = [{ v: 'pop', l: '弹出' }, { v: 'slide', l: '右侧滑入' }, { v: 'shake', l: '持续抖动' }, { v: 'bounce', l: '掉落弹跳' }, { v: 'slam', l: '砸下' }, { v: 'fade', l: '淡入' }]
 const fonts = ['Noto Sans CJK SC', 'ZCOOL KuaiLe']
@@ -413,7 +512,22 @@ const aiNote = ref('')
 let restoredAi = false           // 刚点了“还原 AI 原稿”：下一次保存不算人工修改
 const info = reactive({ aiDraft: null, clipLen: 60, clip: null, preview: null, t: 0, finals: [], llm: null, exists: false,
   candidate: { start: 0, end: 60 }, videoWindow: null, variants: [], chosenVariant: null })
-const edit = reactive({ window: { start: 0, end: 60 }, trim: { start: 0, end: 60 }, subtitles: { enabled: true }, items: [] })
+const edit = reactive({ window: { start: 0, end: 60 }, trim: { start: 0, end: 60 }, subtitles: { enabled: true }, items: [], music: null, callback: null })
+const callbackRelation = { flag_payoff: '立 flag 与打脸', reversal: '话题前后反转' }
+const callbackLen = computed(() => {
+  const c = edit.callback
+  return c ? (c.mode === 'clip' ? Math.max(0, c.end - c.start) : 0).toFixed(1) : '0.0'
+})
+function removeCallback() { edit.callback = null }
+const tracks = ref([])
+const beatsOf = ref([])           // 当前曲子的鼓点（曲子里的秒数）
+const musicInfo = computed(() => (edit.music ? tracks.value.find((t) => t.id === edit.music.track) || null : null))
+// 鼓点换算成“相对素材范围开头”的秒数，只画片段范围内的
+const beatTicks = computed(() => {
+  if (!edit.music) return []
+  const off = edit.music.start || 0
+  return beatsOf.value.map((b) => round(b - off)).filter((t) => t >= 0 && t <= info.clipLen)
+})
 const styleId = ref(null)
 const styles = ref([])
 const stickers = ref([])
@@ -481,7 +595,7 @@ const cameraStyle = computed(() => {
 
 function anim(it) {
   const seed = edit.items.indexOf(it) + 1
-  return enterExit(it.preset || 'pop', time.value - it.start, it.duration, stageSize.w, stageSize.h, seed)
+  return enterExit(it.preset || (it.type === 'narration' ? 'fade' : 'pop'), time.value - it.start, it.duration, stageSize.w, stageSize.h, seed)
 }
 
 function textStyle(it) {
@@ -495,6 +609,13 @@ function textStyle(it) {
     fontSize: it.size * k + 'px', color: it.color,
     textShadow: outlineShadow((it.stroke_width ?? 8) * k, it.stroke, 6 * k, 'rgba(0,0,0,0.45)')
   }
+}
+
+// 旁白 / 伪 UI：和成片同一份样式树；预览里最低留一点透明度，免得刚出现时完全看不见、没法选中
+function fxNode(it) {
+  const a = anim(it)
+  const b = { ...a, opacity: Math.max(0.15, a.opacity) }
+  return (it.type === 'narration' ? narrationView : fakeUiView)(it, stageSize.w, stageSize.h, b)
 }
 
 function stickerStyle(it) {
@@ -584,6 +705,7 @@ function blockStyle(it) {
 function blockLabel(it) {
   if (it.type === 'text') return it.text
   if (it.type === 'zoom') return `×${it.scale}`
+  if (it.type === 'narration' || it.type === 'fakeui') return it.text
   return it.asset
 }
 
@@ -599,6 +721,16 @@ function addText() {
 function addZoom() {
   add({ id: newId(), type: 'zoom', start: round(Math.max(0, time.value - 0.2)), duration: 2.5, scale: 1.5, x: 0.5, y: 0.45,
         shake: 0, ease_in: 0.25, ease_out: 0.3 })
+}
+function addNarration() {
+  add({ id: newId(), type: 'narration', start: round(time.value), duration: 2.5, text: '这波属于是自己把自己整笑了', tag: '吐槽', style: 'strip',
+        preset: 'fade', x: 0.5, y: 0.16, size: 54, color: '#FF6B8B' })
+}
+function addFakeUi(kind) {
+  const k = fakeKinds.find((x) => x.v === kind)
+  if (!k) return
+  add({ id: newId(), type: 'fakeui', kind: k.v, start: round(time.value), duration: k.duration, title: k.title, text: k.text, preset: 'pop',
+        x: k.x, y: k.y, scale: k.scale })
 }
 function pickSticker(asset) {
   gallery.value = false
@@ -627,6 +759,38 @@ function removeSelected() {
   const i = edit.items.findIndex((x) => x.id === selected.value)
   if (i >= 0) edit.items.splice(i, 1)
   selected.value = null
+}
+
+// ---------------------------------------------------------------- 背景音乐
+async function loadTracks() {
+  try {
+    tracks.value = await api.music()
+  } catch (e) {
+    tracks.value = []          // 曲库读不到不影响编辑
+  }
+}
+const beatCache = {}
+async function loadBeats() {
+  const id = edit.music && edit.music.track
+  if (!id) { beatsOf.value = []; return }
+  if (!beatCache[id]) {
+    try {
+      beatCache[id] = (await api.musicBeats(id)).beats || []
+    } catch (e) {
+      beatCache[id] = []
+    }
+  }
+  if (edit.music && edit.music.track === id) beatsOf.value = beatCache[id]
+}
+function pickTrack(id) {
+  if (!id) {
+    edit.music = null
+  } else {
+    const t = tracks.value.find((x) => x.id === id)
+    edit.music = { track: id, start: 0, volume: 0.18, duck: true, snap: false }
+    if (t && !t.snap_ok) ElMessage.info('这首节拍不清晰，只当背景音乐用，不建议开卡点')
+  }
+  loadBeats()
 }
 
 // ---------------------------------------------------------------- 贴图库
@@ -675,6 +839,9 @@ function apply(e) {
   edit.subtitles.enabled = e.subtitles ? e.subtitles.enabled !== false : true
   styleId.value = (e.subtitles && e.subtitles.style_id) || null
   edit.items.splice(0, edit.items.length, ...(e.items || []).map((i) => ({ ...i, id: i.id || newId() })))
+  edit.music = e.music ? { track: e.music.track, start: e.music.start ?? 0, volume: e.music.volume ?? 0.18, duck: e.music.duck !== false, snap: !!e.music.snap } : null
+  edit.callback = e.callback ? { ...e.callback } : null
+  loadBeats()
   generatedBy.value = e.generated_by || ''
   aiNote.value = e.note || ''
 }
@@ -691,6 +858,7 @@ async function load() {
     pickVideo()
     apply(r.edit)
     styles.value = await api.styles()
+    loadTracks()
     loadPublish()
     loadPack()
     loadStickers()
@@ -715,6 +883,8 @@ async function save(quiet) {
   saving.value = true
   try {
     const body = { version: 1, window: { ...edit.window }, trim: { ...edit.trim }, subtitles: { enabled: edit.subtitles.enabled }, items: edit.items }
+    if (edit.music && edit.music.track) body.music = { ...edit.music }
+    if (edit.callback) body.callback = { ...edit.callback }
     if (generatedBy.value) Object.assign(body, { generated_by: generatedBy.value, note: aiNote.value })
     const r = await api.saveEdit(name.value, rank.value, body, edit.subtitles.enabled ? styleId.value : null, restoredAi)
     restoredAi = false
@@ -883,11 +1053,12 @@ async function submitBili(dryRun) {
     const lines = (lg.text || '').trim().split('\n')
     if (s.status === 'SUCCESS') {
       bili.resultOk = true
-      bili.result = dryRun ? '预演完成（没有上传），下面是会执行的命令' : '已提交到 B站，请到创作中心确认状态'
+      bili.result = dryRun ? '预演完成（没有上传），下面是会执行的命令' : '已提交到 B站，BV 号会自动绑定到精排记忆；请到创作中心确认状态'
       bili.log = dryRun ? lines.slice(-3).join('\n') : ''
       if (!dryRun) {
         const d = await api.biliInfo(name.value, rank.value)
         bili.last = d.last || null
+        loadPublish()                    // 脚本已自动绑定 BV 号，刷新下面的绑定状态
         pack.value = { ...pack.value, bili_last: d.last ? `${d.last.at_text} ${d.last.mode_text}${d.last.bvid ? ' ' + d.last.bvid : ''}` : '' }
       }
     } else {
@@ -1093,13 +1264,18 @@ onBeforeUnmount(() => {
 .trim-mask { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px; text-align: center; color: #fff; background: rgba(0,0,0,0.55); font-size: 12px; }
 .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
 .time { font-variant-numeric: tabular-nums; min-width: 110px; }
-.timeline { position: relative; height: 104px; background: #fff; border: 1px solid var(--el-border-color-light); border-radius: 6px; overflow: hidden; cursor: pointer; }
+.timeline { position: relative; height: 164px; background: #fff; border: 1px solid var(--el-border-color-light); border-radius: 6px; overflow: hidden; cursor: pointer; }
 .mask { position: absolute; top: 0; bottom: 0; background: rgba(0, 0, 0, 0.06); pointer-events: none; }
 .row-label { position: absolute; left: 4px; font-size: 11px; color: var(--muted); pointer-events: none; }
 .block { position: absolute; height: 22px; min-width: 6px; border-radius: 4px; font-size: 11px; line-height: 22px; padding: 0 4px; overflow: hidden; white-space: nowrap; color: #fff; cursor: grab; box-sizing: border-box; }
 .block.text { background: #e0457b; }
 .block.zoom { background: #409eff; }
 .block.sticker { background: #67c23a; }
+.block.narration { background: #8e5bd6; }
+.block.fakeui { background: #e6a23c; }
+.beat { position: absolute; top: 16px; bottom: 0; width: 1px; background: rgba(64, 158, 255, 0.28); pointer-events: none; }
+.fx { cursor: move; }
+.fx.sel { outline: 2px dashed rgba(64, 158, 255, 0.9); outline-offset: 4px; }
 .block.sel { box-shadow: 0 0 0 2px #303133; }
 .playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #f56c6c; pointer-events: none; }
 .ruler { position: absolute; left: 0; right: 0; top: 0; height: 16px; border-bottom: 1px solid var(--el-border-color-lighter); }

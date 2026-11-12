@@ -63,10 +63,16 @@ def test_publish_pack(tmp_path):
     (sess / "transcript.json").write_text(json.dumps({"sentences": [{"t0": 55, "t1": 58, "text": "怪不得叫金油"}]},
                                                      ensure_ascii=False), encoding="utf-8")
     env = dict(os.environ, KIYA_MEMORY_DECISIONS=str(tmp_path / "none.json"))
+    # 简介模板是用户会改的配置：测试里去掉它，用代码里的默认模板，免得用户改了模板测试就红
+    import yaml
+    cfg = yaml.safe_load((ROOT.parent / "config" / "kiya.yaml").read_text(encoding="utf-8"))
+    cfg["publish"].pop("desc_template", None)
+    cfg_path = tmp_path / "kiya.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg, allow_unicode=True), encoding="utf-8")
 
     def run(*a):
         return subprocess.run([sys.executable, str(ROOT / "scripts" / "publish_pack.py"), str(sess / "candidates.json"),
-                               "--rank", "1", *map(str, a)], capture_output=True, text=True, env=env)
+                               "--rank", "1", "--config", str(cfg_path), *map(str, a)], capture_output=True, text=True, env=env)
 
     r = run()
     assert r.returncode == 0, r.stdout + r.stderr

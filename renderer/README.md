@@ -1,6 +1,6 @@
 # renderer
 
-成片渲染：Remotion（React）。按后台编辑好的剪辑脚本，把一个候选片段渲染成带**放大运镜、字幕、花字、贴图**的成片（横屏 16:9）。
+成片渲染：Remotion（React）。按后台编辑好的剪辑脚本，把一个候选片段渲染成带**放大运镜、字幕、花字、贴图、吐槽旁白、伪 UI、背景音乐**的成片（横屏 16:9）。
 
 ```
 后台“成片编辑”  →  output/<场次>/edits/<序号>.json（剪辑脚本）
@@ -12,9 +12,10 @@
 ```
 src/
 ├── index.jsx / Root.jsx       # 注册合成（尺寸、时长按传入的 props 计算）
-├── Clip.jsx                   # 成片：源视频 → 运镜层 → 字幕 → 花字 / 贴图
-├── anim.js                    # 动画数学（弹出、砸下、抖动、弹跳、推近拉回），后台编辑器的预览也用这一份
-└── components/                # Subtitles（字幕样式与 config/schema 一致）、TextFx（花字）、Sticker（贴图）
+├── Clip.jsx                   # 成片：[前情 <Callback>（跨场次呼应的旧画面）] → 源视频 → 运镜层 → 字幕 → 花字 / 贴图 / 旁白 / 伪UI；背景音乐 <Bgm>
+├── anim.js                    # 动画数学（弹出、砸下、抖动、弹跳、推近拉回；BGM 的压低 / 淡入淡出），后台编辑器的预览也用这一份
+├── fakeui.js                  # 吐槽旁白和 4 种伪 UI 的样式树（纯函数），成片（FxNode.jsx）和后台预览（FxView.vue）共用
+└── components/                # Subtitles（字幕样式与 config/schema 一致）、TextFx（花字）、Sticker（贴图）、Narration、FakeUI、FxNode
 render.mjs                     # 命令行入口：起本地文件服务、打包（有缓存）、渲染
 ```
 
@@ -69,3 +70,10 @@ Remotion 对个人和 3 人以内的公司免费；超过需要购买公司许�
 ```bash
 npm install && npm run studio      # 浏览器里实时调动画；Root.jsx 里有示例数据
 ```
+
+## 前情（跨场次呼应）
+
+剪辑脚本里有 `callback` 时，`render.py` 先从旧场次录像剪出一小段（`callback.mp4`）和旧字幕，props 里多 `callback: {video, duration, label, subtitles}`，
+`duration` 变成“前情 + 正片”的总时长，`mainDuration` 是正片时长。`Clip.jsx` 里前情放在 `<Sequence from={0}>`，正片整体放进 `<Sequence from={前情帧数}>`，
+所以正片里所有效果、字幕、BGM 的时间不受前情影响。旧录像不在本地时 `render.py` 不传 `callback`，改成在正片开头加一张“前情提要”伪 UI 文字卡，并在日志里说明。
+

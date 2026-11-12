@@ -160,3 +160,26 @@ export function splitKeywords(text, keywords) {
   if (buf) out.push({ text: buf, hit: false });
   return out;
 }
+
+/**
+ * 背景音乐说话时压低：t 在某句字幕（说话）里 = low；离说话边缘不到 ramp 秒线性渐变，其余 = 1。
+ * events 是字幕事件 [{t0, t1}]（相对成片开头）。
+ */
+export function duckGain(events, t, low = 0.25, ramp = 0.15) {
+  let d = Infinity;
+  for (const e of events || []) {
+    const dist = t >= e.t0 && t < e.t1 ? 0 : t < e.t0 ? e.t0 - t : t - e.t1;
+    if (dist < d) d = dist;
+    if (d === 0) break;
+  }
+  return d >= ramp ? 1 : low + (1 - low) * (d / ramp);
+}
+
+/** 背景音乐音量：基础音量 × 说话压低 × 开头 0.3 秒淡入 × 结尾 1.5 秒淡出。 */
+export function bgmVolume(music, events, t, duration) {
+  let v = music.volume;
+  if (music.duck && events && events.length) v *= duckGain(events, t);
+  v *= clamp(t / 0.3, 0, 1);
+  v *= clamp((duration - t) / 1.5, 0, 1);
+  return v;
+}

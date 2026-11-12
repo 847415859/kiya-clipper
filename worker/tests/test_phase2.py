@@ -146,6 +146,10 @@ class FakeLLM:
                 {"type": "sticker", "start": 30, "duration": 1.5, "asset": "doge.png"},
                 {"type": "sticker", "start": 40, "duration": 1.5, "asset": "doge.png"},          # 同一个贴图再用一次 → 丢
                 {"type": "sticker", "start": 42, "duration": 1.5, "asset": "1743.png"},          # 没有含义说明（不在可用列表）→ 丢
+                {"type": "narration", "start": 36, "duration": 3, "text": "这就是传说中的做局"},
+                {"type": "narration", "start": 40, "duration": 3, "text": "间隔不到 8 秒 → 丢"},
+                {"type": "fakeui", "kind": "popup", "start": 44, "duration": 2.5, "title": "系统提示", "text": "检测到主播破防"},
+                {"type": "fakeui", "kind": "不存在的种类", "start": 46, "duration": 2, "text": "非法"},          # 校验不过 → 丢
                 {"type": "text", "start": 31, "duration": 2, "text": ""}]}, ensure_ascii=False)
         if "【前情" in text:                                     # 精排
             n = self.mode.get("rerank_calls", 0)
@@ -256,9 +260,9 @@ def test_rerank_autoedit_evaluate(llm, tmp_path):
     r = run(ROOT / "scripts" / "autoedit.py", sess / "candidates.json", "--rank", 2)
     assert r.returncode == 0, r.stdout + r.stderr
     e = json.loads((sess / "edits" / "02.json").read_text(encoding="utf-8"))
-    assert [(i["type"], i["start"]) for i in e["items"]] == [("text", 2.2), ("zoom", 19.8), ("text", 20.0), ("sticker", 30.0)]
+    assert [(i["type"], i["start"]) for i in e["items"]] == [("text", 2.2), ("zoom", 19.8), ("text", 20.0), ("sticker", 30.0), ("narration", 36.0), ("fakeui", 44.0)]
     assert e["items"][0]["text"] == "她说要寄舰礼" and e["items"][0]["preset"] == "fade"          # 精排给的前情字幕：模型没放，脚本在开头补上
-    assert e["trim"] == {"start": 2.0, "end": 50.0} and e["generated_by"].startswith("edit-v5")
+    assert e["trim"] == {"start": 2.0, "end": 50.0} and e["generated_by"].startswith("edit-v6")
     handoff = [b for b in llm.calls if "综艺版" in b["messages"][0]["content"]][-1]["messages"][1]["content"]
     assert "doge.png：柴犬狗头，一脸无语；适合：无语、吐槽" in handoff and "1743.png" not in handoff
     assert "前情字幕：她说要寄舰礼" in handoff and "笑点那一句原话：结果寄了一盒内衣" in handoff and "起因：说寄舰礼" in handoff
@@ -268,7 +272,7 @@ def test_rerank_autoedit_evaluate(llm, tmp_path):
     assert r.returncode == 1 and "不覆盖" in r.stderr                   # 已有脚本不覆盖
     assert run(ROOT / "scripts" / "autoedit.py", sess / "candidates.json", "--rank", 2, "--force").returncode == 0
     ai = json.loads((sess / "edits" / "02.ai.json").read_text(encoding="utf-8"))          # AI 原稿另存
-    assert [(i["type"], i["start"]) for i in ai["edit"]["items"]] == [(i["type"], i["start"]) for i in e["items"]] and ai["prompt"].startswith("edit-v5") and not ai["taste_used"]
+    assert [(i["type"], i["start"]) for i in ai["edit"]["items"]] == [(i["type"], i["start"]) for i in e["items"]] and ai["prompt"].startswith("edit-v6") and not ai["taste_used"]
     assert "【剪辑师的习惯】\n（还没有积累）" in json.dumps(llm.calls[-1], ensure_ascii=False).replace("\\n", "\n")
 
     reviews = tmp_path / "reviews"

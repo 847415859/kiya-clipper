@@ -35,13 +35,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from clipper.kcfg import load_cfg  # noqa: E402
-from clipper.streamer import resolve_config  # noqa: E402
+from clipper.kcfg import decisions_path  # noqa: E402
+from clipper.streamer import resolve_config, streamer_from_session_dir  # noqa: E402
 
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")   # biliup 输出里的颜色控制码
 MIN_AHEAD = 4 * 3600 + 600          # B站要求定时发布晚于提交 4 小时以上，多留 10 分钟余量
 MAX_AHEAD = 15 * 24 * 3600 - 3600   # 上限约 15 天，少 1 小时留余量
 MODES = ("hold", "now", "timed", "private")
 DEFAULTS = {"hold_days": 14, "min_interval_sec": 600, "tid": 21, "line": "", "submit": "", "limit": 3, "retry": 0,
-            "timeout_sec": 3600}
+            "timeout_sec": 3600, "height": 720}
 
 
 class Refuse(Exception):
@@ -75,16 +77,22 @@ def status(cfg: dict) -> dict:
     ck = cookie_path(bc)
     return {"biliup": biliup_bin() is not None, "logged_in": ck.is_file() and ck.stat().st_size > 2,
             "cookie": str(ck), "hold_days": bc["hold_days"], "private": bool(bc.get("private_args")),
-            "tid": bc["tid"], "min_interval_sec": bc["min_interval_sec"]}
+            "tid": bc["tid"], "height": int(bc["height"]), "min_interval_sec": bc["min_interval_sec"]}
 
 
-def find_video(sess: Path, rank: int) -> Path:
-    """最高分辨率的成片；没有就拒绝（审核片段是低清预览，不是成片）。"""
-    finals = sorted((sess / "final").glob(f"{rank:02d}_*p.mp4"), key=lambda p: int(p.stem.rsplit("_", 1)[1][:-1]),
-                    reverse=True) if (sess / "final").exists() else []
+def find_video(sess: Path, rank: int, height: int = 720) -> Path:
+    """发布用的成片：不超过 height 的最高一份；都比 height 高就用最接近的那份。没有渲染好的成片就拒绝
+    （审核页的低清片段不能直接发）。"""
+    finals = []
+    for f in (sess / "final").glob(f"{rank:02d}_*p.mp4") if (sess / "final").exists() else []:
+        try:
+            finals.append((int(f.stem.rsplit("_", 1)[1][:-1]), f))
+        except ValueError:
+            continue
     if not finals:
         raise Refuse("还没有渲染好的成片：先在编辑页点“渲染成片”（审核页的低清片段不能直接发）")
-    return finals[0]
+    fit = [x for x in finals if x[0] <= int(height)]
+    return max(fit)[1] if fit else min(finals)[1]
 
 
 def resolve_dtime(mode: str, at: str | None, hold_days: float, now: float | None = None) -> int | None:
@@ -154,6 +162,58 @@ def check_rate(sess: Path, bc: dict, now: float) -> None:
         raise Refuse(f"离上一次上传太近了，请 {int(wait)} 秒后再试（防止触发 B站风控）")
 
 
+def run_biliup(cmd: list[str], timeout: float) -> tuple[str, int]:
+    """边跑边把 biliup 的输出转到任务日志（最多每 10 秒一行，免得进度条刷屏），后台点“取消”时一起结束 biliup。"""
+    import signal
+    import threading
+
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+
+    def stop(*_):
+        p.kill()
+        raise SystemExit(130)
+
+    signal.signal(signal.SIGTERM, stop)
+    timer = threading.Timer(timeout, p.kill)
+    timer.start()
+    lines: list[str] = []
+    last = 0.0
+    try:
+        for line in p.stdout:
+            line = ANSI.sub("", line).rstrip()
+            if not line:
+                continue
+            lines.append(line)
+            if time.time() - last >= 10:
+                print(line[:200], flush=True)
+                last = time.time()
+        code = p.wait()
+    finally:
+        timer.cancel()
+        if p.poll() is None:
+            p.kill()
+    out = "\n".join(lines)
+    if code < 0 and not out:
+        return "上传被中断或超时", 124
+    return out, code
+
+
+def bind_bvid(sess: Path, rank: int, bvid: str) -> None:
+    """把 BV 号写进精排记忆的决定文件（和后台卡片里手填 BV 号一样），learn.py 下次更新记忆时拉它的播放数据。
+    同一片段已有绑定会被替换，已填的完播率 / 涨粉保留。"""
+    path = Path(os.environ.get("KIYA_MEMORY_DECISIONS") or decisions_path(streamer_from_session_dir(sess)))
+    dec = read(path, {}) or {}
+    pub = dec.setdefault("published", {})
+    keep: dict = {}
+    for k in [k for k, v in pub.items() if isinstance(v, dict) and v.get("session") == sess.name and v.get("rank") == rank]:
+        keep = {x: y for x, y in pub.pop(k).items() if x in ("completion", "followers")}
+    pub[bvid] = {"session": sess.name, "rank": rank, **keep}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(dec, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(path)
+
+
 def run(args: argparse.Namespace) -> dict:
     cpath = Path(args.candidates)
     sess = cpath.parent
@@ -185,7 +245,7 @@ def run(args: argparse.Namespace) -> dict:
         extra = [str(x) for x in bc.get("private_args") or []]
         if not extra:
             raise Refuse("“仅自己可见”没有配置：biliup 没有这个参数，请在 publish.bili.private_args 里填验证过的参数")
-    video = find_video(sess, args.rank)
+    video = find_video(sess, args.rank, int(bc["height"]))
     cover = sess / "publish" / f"{args.rank:02d}_cover.jpg"
     dtime = resolve_dtime(args.mode, args.at, bc["hold_days"], now)
     bin_ = biliup_bin()
@@ -213,17 +273,19 @@ def run(args: argparse.Namespace) -> dict:
     print(f"开始上传 {video.name}（{mode_text}）…", flush=True)
     (sess.parent / "_bili_last.json").write_text(json.dumps({"at": now, "session": sess.name, "rank": args.rank}),
                                                  encoding="utf-8")   # 先占位：上传中途失败也算一次，避免狂点重试
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=float(bc["timeout_sec"]))
-        out = ((r.stdout or "") + "\n" + (r.stderr or "")).strip()
-        code = r.returncode
-    except subprocess.TimeoutExpired:
-        out, code = "上传超时", 124
+    out, code = run_biliup(cmd, float(bc["timeout_sec"]))
     tail = "\n".join(out.splitlines()[-12:])
     m = re.search(r"\bBV[0-9A-Za-z]{10}\b", out)
     base.update(status="ok" if code == 0 else "failed", exit_code=code, output_tail=tail, bvid=m.group(0) if m else "")
     if prev.get("status") == "ok":
         base["previous"] = {k: prev.get(k) for k in ("mode_text", "at_text", "bvid")}
+    if code == 0 and base["bvid"]:
+        try:
+            bind_bvid(sess, args.rank, base["bvid"])
+            base["bound"] = True
+        except (OSError, ValueError) as e:
+            base["bound"] = False
+            base["bind_error"] = str(e)
     if code == 0:
         base["visibility_note"] = "请在创作中心确认这条的状态" if args.mode in ("hold", "private") else ""
     return base

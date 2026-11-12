@@ -18,7 +18,7 @@ FAKE = """#!/bin/bash
 echo "$@" >> "$FAKE_LOG"
 if [ "$1" = "-u" ]; then shift; shift; fi
 if [ "$2" = "--help" ]; then echo "$FAKE_FLAGS"; exit 0; fi
-echo "uploading..."; echo "投稿成功 BV1ab411c7de"; exit ${FAKE_EXIT:-0}
+echo "uploading..."; printf "\\033[32m INFO\\033[0m 投稿成功 BV1ab411c7de\\n"; exit ${FAKE_EXIT:-0}
 """
 ALL_FLAGS = "--copyright --source --tid --title --desc --tag --limit --submit --line --cover --dtime"
 
@@ -35,6 +35,7 @@ def setup(tmp_path, taboo=(), final=True, extra_cfg=""):
         (sess / "final").mkdir()
         (sess / "final" / "01_00-01-00_480p.mp4").write_bytes(b"lo")
         (sess / "final" / "01_00-01-00_720p.mp4").write_bytes(b"hi")
+        (sess / "final" / "01_00-01-00_1080p.mp4").write_bytes(b"max")
     cfg = tmp_path / "k.yaml"
     cfg.write_text("streamer: {name: kiya}\npublish:\n  bili:\n    min_interval_sec: 600\n    submit: web\n" + extra_cfg, encoding="utf-8")
     fake = tmp_path / "biliup"
@@ -80,13 +81,16 @@ def test_hold_uploads_with_timer_and_records_result(tmp_path):
     r = run(sess, cfg, env)
     assert r.returncode == 0, r.stdout + r.stderr
     res = last(r)
-    assert res["status"] == "ok" and res["mode"] == "hold" and res["bvid"] == "BV1ab411c7de" and res["video"].endswith("720p.mp4")
+    assert "\x1b" not in res["output_tail"] and "投稿成功" in res["output_tail"]
+    assert res["status"] == "ok" and res["mode"] == "hold" and res["bvid"] == "BV1ab411c7de" and res["video"].endswith("_720p.mp4")
     assert res["dtime"] > time.time() + 13 * 86400
     line = (tmp_path / "log.txt").read_text(encoding="utf-8").splitlines()
     cmd = next(x for x in line if " upload " in x and "--help" not in x)
     assert "--copyright 2" in cmd and "--source https://live.bilibili.com/1724773744" in cmd and "--dtime" in cmd
     assert "--retry" not in cmd and "--limit 3" in cmd
     assert "--tag 虚拟主播,金油" in cmd and "720p.mp4" in cmd and "01_cover.jpg" in cmd and "--submit web" in cmd
+    dec = json.loads((tmp_path / "none.json").read_text(encoding="utf-8"))          # BV 号自动绑定到精排记忆
+    assert res["bound"] is True and dec["published"] == {"BV1ab411c7de": {"session": "20261109-2014", "rank": 1}}
     assert json.loads((sess / "publish" / "01.bili.json").read_text(encoding="utf-8"))["status"] == "ok"
 
 
@@ -156,3 +160,31 @@ def test_dry_run_and_status(tmp_path):
                        capture_output=True, text=True, env=env)
     st = json.loads(s.stdout.strip().splitlines()[-1])
     assert st["biliup"] and st["logged_in"] and st["private"] is False
+
+
+def test_bind_replaces_old_binding_and_keeps_stats(tmp_path):
+    sess = tmp_path / "output" / "20261109-2014"
+    sess.mkdir(parents=True)
+    dec = tmp_path / "d.json"
+    dec.write_text(json.dumps({"taboo": ["x"], "published": {
+        "BV1old0000001": {"session": "20261109-2014", "rank": 1, "completion": 0.4, "followers": 3},
+        "BV1other00002": {"session": "20261109-2014", "rank": 2}}}), encoding="utf-8")
+    os.environ["KIYA_MEMORY_DECISIONS"] = str(dec)
+    try:
+        pb.bind_bvid(sess, 1, "BV1new0000003")
+    finally:
+        del os.environ["KIYA_MEMORY_DECISIONS"]
+    d = json.loads(dec.read_text(encoding="utf-8"))
+    assert d["taboo"] == ["x"] and "BV1old0000001" not in d["published"]
+    assert d["published"]["BV1new0000003"] == {"session": "20261109-2014", "rank": 1, "completion": 0.4, "followers": 3}
+    assert d["published"]["BV1other00002"]["rank"] == 2
+
+
+def test_find_video_by_height(tmp_path):
+    sess, cfg, env = setup(tmp_path)
+    assert pb.find_video(sess, 1, 720).name.endswith("_720p.mp4")        # 默认 720：不为了清晰度多传一倍的体积
+    assert pb.find_video(sess, 1, 1080).name.endswith("_1080p.mp4")
+    assert pb.find_video(sess, 1, 500).name.endswith("_480p.mp4")
+    (sess / "final" / "01_00-01-00_480p.mp4").unlink()
+    (sess / "final" / "01_00-01-00_720p.mp4").unlink()
+    assert pb.find_video(sess, 1, 720).name.endswith("_1080p.mp4")       # 没有不超过的，用最接近的更高一份

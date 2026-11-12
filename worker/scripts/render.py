@@ -31,13 +31,15 @@ REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from clipper import music as music_lib  # noqa: E402
 from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
-from clipper.edit import EditError, default_edit, edit_window, validate_edit  # noqa: E402
+from clipper.edit import EditError, default_edit, edit_window, validate_edit, validate_item  # noqa: E402
 from clipper.streamer import resolve_config  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
 from clipper.subtitles import (STRIP_PUNCT, StyleError, apply_corrections, build_events, get_style,  # noqa: E402
                                load_config, lore_keywords, validate_style)
+from clipper.media import probe_duration  # noqa: E402
 from cut import cut_one, pieces, probe_size  # noqa: E402
 
 FPS = 30
@@ -158,6 +160,7 @@ def main() -> int:
 
     # 2. 字幕
     subs: dict = {"enabled": False}
+    corrections: dict = {}
     tr = load_transcript(sess_dir / "transcript.json")
     if edit["subtitles"]["enabled"] and tr:
         sub_cfg = load_config()
@@ -169,7 +172,8 @@ def main() -> int:
         streamer = load_cfg(resolve_config(args.config, sess_dir)) if resolve_config(args.config, sess_dir).exists() else {}
         keywords = sorted({*(lore_keywords(streamer) if style["highlight_lore"] else []), *style["highlight_words"]},
                           key=len, reverse=True)
-        events = subtitle_events(tr["sentences"], t_start, t_end, style, sub_cfg.get("corrections") or {})
+        corrections = sub_cfg.get("corrections") or {}
+        events = subtitle_events(tr["sentences"], t_start, t_end, style, corrections)
         subs = {"enabled": True, "style": style, "events": events, "keywords": keywords}
         print(f"字幕 {len(events)} 条（字体 {style['font']}）")
     elif edit["subtitles"]["enabled"]:
@@ -194,6 +198,45 @@ def main() -> int:
                 return 1
             link(f, job / "stickers" / it["asset"])
         items.append(it)
+    callback = None
+    cb = edit.get("callback")
+    if cb and cb.get("enabled", True):                              # 跨场次呼应：开头插旧场次的一小段画面；旧录像不在了就改成文字卡，并在日志里说清楚
+        old_dir = sess_dir.parent / cb["session"]
+        try:
+            old = json.loads((old_dir / "candidates.json").read_text(encoding="utf-8"))
+            parts = pieces(old["segments"], cb["start"], cb["end"]) if cb["mode"] == "clip" else []
+        except (OSError, ValueError, KeyError):
+            parts = []
+        if parts:
+            cbv = work / f"cb_{cb['session']}_{cb['start']:.1f}_{cb['end']:.1f}_{args.height}.mp4"
+            if not cbv.exists():
+                work.mkdir(parents=True, exist_ok=True)
+                cut_one(parts, cbv, False, args.height, None)
+            cb_dur = probe_duration(cbv) or (cb["end"] - cb["start"])
+            link(cbv, job / "callback.mp4")
+            cb_subs: dict = {"enabled": False}
+            old_tr = load_transcript(old_dir / "transcript.json") if subs.get("enabled") else None
+            if old_tr:
+                cb_subs = {"enabled": True, "style": subs["style"], "keywords": subs["keywords"],
+                           "events": subtitle_events(old_tr["sentences"], cb["start"], cb["end"], subs["style"], corrections)}
+            callback = {"video": "callback.mp4", "duration": round(cb_dur, 3), "label": cb["label"], "subtitles": cb_subs}
+            print(f"呼应：开头插 {cb['date'] or cb['session']} 的画面 {cb_dur:.1f} 秒（{cb['label']}）")
+        else:
+            why = "这条呼应本来就是文字卡" if cb["mode"] == "card" else f"旧录像（{cb['date'] or cb['session']}）已经不在本地"
+            print(f"呼应：{why}，开头改放文字卡「{cb['label']}」")
+            items.insert(0, validate_item({"type": "fakeui", "kind": "notice", "title": "前情提要", "text": cb["label"], "start": 0.3,
+                                           "duration": 3.5, "preset": "slide"}, dur))
+    bgm = None
+    m = edit.get("music")
+    if m:                                                          # 背景音乐：曲库里找不到就失败，不悄悄渲染成没有 BGM 的片
+        track = music_lib.get_track(m["track"])
+        if not track or not music_lib.track_file(track).is_file():
+            print(f"曲库里没有 {m['track']}：在剪辑器里取消背景音乐，或把曲子放进 assets/music 并登记（scripts/music.py add）", file=sys.stderr)
+            return 1
+        link(music_lib.track_file(track), job / "music" / track["file"])
+        # 成片从素材范围的 trim.start 处开始，所以曲子从 start + trim.start 处放
+        bgm = {"file": "music/" + track["file"], "start": round(m["start"] + shift, 3), "volume": m["volume"], "duck": m["duck"]}
+        print(f"背景音乐：{track['title']}（音量 {m['volume']}，{'说话时压低' if m['duck'] else '不压低'}）")
     used = {subs["style"]["font"]} if subs.get("enabled") else set()
     used |= {it.get("font") for it in items if it["type"] == "text"}
     fonts = []
@@ -201,8 +244,9 @@ def main() -> int:
         if fam in used:
             link(f, job / "fonts" / f.name)
             fonts.append({"family": fam, "file": "fonts/" + f.name})
-    props = {"width": width, "height": height, "fps": FPS, "duration": round(dur, 3), "video": "source.mp4",
-             "subtitles": subs, "items": items, "fonts": fonts}
+    cb_len = callback["duration"] if callback else 0.0
+    props = {"width": width, "height": height, "fps": FPS, "duration": round(dur + cb_len, 3), "mainDuration": round(dur, 3), "video": "source.mp4",
+             "subtitles": subs, "items": items, "fonts": fonts, "music": bgm, "callback": callback}
     (job / "props.json").write_text(json.dumps(props, ensure_ascii=False, indent=1), encoding="utf-8")
 
     final_dir = sess_dir / "final"
