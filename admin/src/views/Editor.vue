@@ -49,7 +49,8 @@
     </div>
 
     <div v-if="!loading && !videoSrc" class="empty-all">
-      <template v-if="sameAsCandidate">
+      <template v-if="cutting">正在剪预览画面（480p），稍等…</template>
+      <template v-else-if="sameAsCandidate">
         这个片段还没剪，编辑需要先有审核片段做预览。
         <el-button type="primary" :loading="cutting" @click="cutClip">剪切这个片段（480p）</el-button>
       </template>
@@ -394,6 +395,7 @@ const fonts = ['Noto Sans CJK SC', 'ZCOOL KuaiLe']
 const loading = ref(true)
 const saving = ref(false)
 const cutting = ref(false)
+const autoCut = new Set()
 const rendering = ref(false)
 const renderJob = ref(null)
 const drafting = ref(false)
@@ -698,6 +700,12 @@ async function load() {
     dirty.value = false
     loaded = true
     measure()
+  }
+  // 没有预览画面（审核片段没剪 / 素材范围改过）就自动剪一段 480p，不用再手点；每个片段只自动试一次，失败了回到手动按钮
+  const key = `${name.value}#${rank.value}`
+  if (!videoSrc.value && !cutting.value && !autoCut.has(key)) {
+    autoCut.add(key)
+    makePreview()
   }
 }
 
