@@ -133,6 +133,25 @@ scp root@<服务器IP>:/tmp/sample.flv .
 
 ---
 
+## 一键发布到 B站（可选）
+
+后台“发布”卡片的“一键发布到 B站”靠 [biliup](https://github.com/biliup/biliup-rs) 命令行上传。这是非官方接口，有被 B站风控 / 限制账号的风险，建议用切片号，并先用“先放着”试。
+
+```bash
+# 1. 到 biliup-rs 的 GitHub Releases 下载 Linux x64 版，解压到 /opt/biliup（GitHub 慢就在自己电脑下载再 scp）
+chmod +x /opt/biliup/biliup && ln -sf /opt/biliup/biliup /usr/local/bin/biliup
+biliup upload --help                    # 能看到 --copyright --source --tid --title --desc --tag --dtime --cover 就对了
+
+# 2. 在服务器上自己登录一次（扫码最省事），登录文件放在 kiya 用户能读到的地方
+mkdir -p ~/.config/biliup && cd ~/.config/biliup && biliup login      # 按提示选扫码
+chmod 600 ~/.config/biliup/cookies.json
+```
+
+- 登录文件就是你的账号凭证，不要提交到 git、不要发给别人；后台和脚本都不会接触你的密码。`config/kiya.yaml` 的 `publish.bili.cookie` 指向它（后端以哪个用户运行，就要用那个用户登录，或者改成绝对路径）。
+- 验证：后台发布弹窗顶部没有红 / 黄提示即可；命令行 `python scripts/publish_bili.py --status` 能看到 `biliup` 和 `logged_in` 都是 true。
+- 第一次：先点“先预演”看命令，再用“先放着”真投一条，到 B站创作中心确认标题 / 分区 / 来源 / 定时时间，没问题再用别的方式。
+- 分区 id 在 `publish.bili.tid`，默认 21（生活·日常），按你的习惯改。
+
 ## 附录：不用 Docker，直接运行录播姬
 
 到录播姬的 GitHub Releases 下载 Linux x64 的命令行版（CLI），解压到 `/opt/brec`，然后：

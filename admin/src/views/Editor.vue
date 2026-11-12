@@ -258,6 +258,10 @@
               <el-button type="primary" @click="savePack">保存文字</el-button>
             </el-form-item>
           </el-form>
+          <div class="bili">
+            <el-button type="success" :disabled="!pack.title" @click="openBili">一键发布到 B站</el-button>
+            <span v-if="pack.bili_last" class="muted">{{ pack.bili_last }}</span>
+          </div>
           <div class="publish">
             <div class="muted">发布后填 BV 号：精排会参考它的播放数据（“精排记忆”页）</div>
             <el-input v-model="pub.bvid" placeholder="BV1xxxxxxxxx" size="small" style="width: 150px" maxlength="12" />
@@ -269,6 +273,47 @@
         </el-card>
       </aside>
     </div>
+
+    <el-dialog v-model="bili.show" title="一键发布到 B站" width="560px" :close-on-click-modal="false">
+      <el-alert v-if="bili.env && !bili.env.biliup" type="error" :closable="false" show-icon style="margin-bottom: 10px"
+                title="服务器上还没有 biliup，先按 deploy/README.md 的“一键发布”装好" />
+      <el-alert v-else-if="bili.env && !bili.env.logged_in" type="warning" :closable="false" show-icon style="margin-bottom: 10px"
+                title="还没登录 B站：在服务器上执行一次 biliup login（扫码），不要把密码填到这里" />
+      <el-descriptions :column="1" size="small" border>
+        <el-descriptions-item label="标题">{{ pack.title }}</el-descriptions-item>
+        <el-descriptions-item label="标签">{{ (pack.tags || []).join('、') }}</el-descriptions-item>
+        <el-descriptions-item label="类型">转载，来源 {{ pack.source }}</el-descriptions-item>
+        <el-descriptions-item label="视频">渲染好的成片里最高清的一份（没有就先去渲染）</el-descriptions-item>
+      </el-descriptions>
+      <el-alert v-if="(pack.taboo_hits || []).length" type="error" :closable="false" show-icon style="margin-top: 10px"
+                :title="`命中禁区词：${pack.taboo_hits.join('、')}`" />
+      <div style="margin-top: 14px"><b>怎么发</b></div>
+      <el-radio-group v-model="bili.mode" class="bili-modes">
+        <el-radio value="hold">先放着（默认）<span class="muted">定时设到 {{ bili.env?.hold_days || 14 }} 天后，创作中心里能改时间 / 撤回，相当于草稿</span></el-radio>
+        <el-radio value="now">立即公开发布</el-radio>
+        <el-radio value="timed">定时发布
+          <el-date-picker v-if="bili.mode === 'timed'" v-model="bili.at" type="datetime" value-format="YYYY-MM-DDTHH:mm"
+                          format="MM-DD HH:mm" placeholder="至少 4 小时之后、15 天以内" size="small" style="width: 190px"
+                          :disabled-date="(d) => d.getTime() < Date.now() - 86400000 || d.getTime() > Date.now() + 15 * 86400000" />
+        </el-radio>
+        <el-radio v-if="bili.env?.private" value="private">仅自己可见</el-radio>
+      </el-radio-group>
+      <div class="muted" style="margin-top: 4px">“仅自己可见”需要在配置里填验证过的 biliup 参数，没配置时这里不显示（不会悄悄公开发出去）。</div>
+      <div v-if="(pack.taboo_hits || []).length" style="margin-top: 8px">
+        <el-checkbox v-model="bili.allowTaboo">我已看过命中的禁区词，仍然发布</el-checkbox>
+      </div>
+      <div v-if="bili.last && bili.last.status === 'ok'" style="margin-top: 8px">
+        <el-checkbox v-model="bili.again">这条之前已经投过（{{ bili.last.at_text }}，{{ bili.last.mode_text }}），重新投稿</el-checkbox>
+      </div>
+      <el-alert v-if="bili.result" :type="bili.resultOk ? 'success' : 'error'" :closable="false" show-icon style="margin-top: 12px"
+                :title="bili.result" />
+      <pre v-if="bili.log" class="bili-log">{{ bili.log }}</pre>
+      <template #footer>
+        <el-button @click="bili.show = false">关闭</el-button>
+        <el-button :loading="bili.running" @click="submitBili(true)">先预演（不上传）</el-button>
+        <el-button type="success" :loading="bili.running" :disabled="!bili.env?.biliup || !bili.env?.logged_in" @click="submitBili(false)">发布</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="gallery" title="贴图库" width="860px">
       <el-tabs v-model="galleryTab">
@@ -353,6 +398,8 @@ const rendering = ref(false)
 const renderJob = ref(null)
 const drafting = ref(false)
 const pub = reactive({ bvid: '', completion: '', followers: '', saved: '' })
+const bili = reactive({ show: false, env: null, last: null, mode: 'hold', at: '', allowTaboo: false, again: false,
+  running: false, result: '', resultOk: false, log: '' })
 const pack = ref({})
 const packLoading = ref(false)
 const covering = ref(false)
@@ -720,6 +767,10 @@ async function loadPack() {
     pack.value = await api.publishPack(name.value, rank.value)
     coverText.value = pack.value.cover_text ?? (pack.value.title_candidates || [])[0] ?? ''
     coverT = null
+    api.biliInfo(name.value, rank.value).then((d) => {
+      const l = d.last
+      pack.value = { ...pack.value, bili_last: l ? `最近一次：${l.at_text} ${l.mode_text}${l.status === 'ok' ? '' : '（失败）'}${l.bvid ? ' ' + l.bvid : ''}` : '' }
+    }).catch(() => {})
   } catch (e) {
     // 发布包读不到不影响编辑
   } finally {
@@ -790,6 +841,55 @@ async function savePublish() {
 async function unpublish() {
   await api.memoryAction({ action: 'unpublish', bvid: pub.saved })
   Object.assign(pub, { bvid: '', completion: '', followers: '', saved: '' })
+}
+
+// ---------------------------------------------------------------- 一键发布到 B站
+async function openBili() {
+  Object.assign(bili, { show: true, mode: 'hold', at: '', allowTaboo: false, again: false, result: '', resultOk: false, log: '' })
+  try {
+    const d = await api.biliInfo(name.value, rank.value)
+    bili.env = d.env
+    bili.last = d.last || null
+  } catch (e) {
+    bili.env = null
+  }
+}
+
+async function submitBili(dryRun) {
+  if (bili.mode === 'timed' && !bili.at) {
+    ElMessage.warning('请选择定时发布的时间')
+    return
+  }
+  if (!dryRun && bili.mode === 'now') {
+    await ElMessageBox.confirm(`《${pack.value.title}》会立即公开发布到你的 B站账号，确定吗？（想先看看效果请选“先放着”）`,
+      '立即公开发布', { type: 'warning', confirmButtonText: '立即发布' })
+  }
+  bili.running = true
+  bili.result = ''
+  bili.log = ''
+  try {
+    const j = await api.submitJob('PUBLISH_BILI', name.value, { rank: rank.value, mode: bili.mode, at: bili.at, dryRun,
+      allowTaboo: bili.allowTaboo, again: bili.again })
+    const s = await waitJob(j.id, 2000)
+    const lg = await api.jobLog(j.id, 0).catch(() => ({ text: '' }))
+    const lines = (lg.text || '').trim().split('\n')
+    if (s.status === 'SUCCESS') {
+      bili.resultOk = true
+      bili.result = dryRun ? '预演完成（没有上传），下面是会执行的命令' : '已提交到 B站，请到创作中心确认状态'
+      bili.log = dryRun ? lines.slice(-3).join('\n') : ''
+      if (!dryRun) {
+        const d = await api.biliInfo(name.value, rank.value)
+        bili.last = d.last || null
+        pack.value = { ...pack.value, bili_last: d.last ? `${d.last.at_text} ${d.last.mode_text}${d.last.bvid ? ' ' + d.last.bvid : ''}` : '' }
+      }
+    } else {
+      bili.resultOk = false
+      bili.result = s.summary || '没有成功'
+      bili.log = lines.slice(-8).join('\n')
+    }
+  } finally {
+    bili.running = false
+  }
 }
 
 async function waitJob(id, every) {
@@ -1015,6 +1115,10 @@ onBeforeUnmount(() => {
 .ai-bar .warn { width: 100%; padding: 4px 10px; }
 .publish { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--el-border-color); }
 .publish .muted { width: 100%; font-size: 12px; }
+.bili { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.bili-modes { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 6px; }
+.bili-modes .muted { margin-left: 6px; font-size: 12px; }
+.bili-log { max-height: 160px; overflow: auto; background: var(--el-fill-color-light); padding: 8px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
 .stale { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 5; background: rgba(0, 0, 0, 0.72); color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 13px; display: flex; gap: 8px; align-items: center; }
 .cover img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 6px; cursor: zoom-in; display: block; }
 .cover-empty { aspect-ratio: 16 / 10; display: flex; align-items: center; justify-content: center; background: var(--el-fill-color-light); border-radius: 6px; }

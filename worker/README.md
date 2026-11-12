@@ -317,7 +317,7 @@ python scripts/render.py output/<场次>/candidates.json --rank 3 --height 480  
 
 ## 发布包（封面、标题、简介、标签）
 
-成片编辑页右下“发布”卡片：封面（默认取精排找到的笑点那一帧，可以换成当前播放位置、改上面的大字）、标题（从精排的标题候选里选或自己写）、简介（`config` 的 `publish.desc_template`，自带“非官方切片”声明和主播链接）、标签（固定标签 + 类型 + 片段里出现的梗，最多 10 个），都有“复制”按钮。投稿仍是手动上传，类型选“转载”，来源填直播间。
+成片编辑页右下“发布”卡片：封面（默认取精排找到的笑点那一帧，可以换成当前播放位置、改上面的大字）、标题（从精排的标题候选里选或自己写）、简介（`config` 的 `publish.desc_template`，自带“非官方切片”声明和主播链接）、标签（固定标签 + 类型 + 片段里出现的梗，最多 10 个），都有“复制”按钮。可以手动投稿（类型选“转载”，来源填直播间），也可以用卡片里的“一键发布到 B站”（见下一节）。
 
 ```bash
 python scripts/publish_pack.py output/<场次>/candidates.json --rank 3                         # 生成
@@ -328,6 +328,29 @@ python scripts/publish_pack.py output/<场次>/candidates.json --rank 3 --cover-
 - 截图优先用原录像；录像被同步走后，依次改用成片、编辑预览、审核片段里的画面（清晰度会低一些，先渲染 1080p 成片再截最好）。
 - 后台改过的标题 / 简介 / 标签不会被重新生成覆盖；点“按精排重新生成文字”才会覆盖。
 - 发布后在同一张卡片里填 BV 号，精排记忆会拉它的播放数据。
+
+## 一键发布到 B站（biliup）
+
+发布卡片的“一键发布到 B站”按钮 → 弹窗里选怎么发 → 后台任务“发布到B站”调用 `scripts/publish_bili.py`，用 biliup 命令行上传最高清的成片 + 封面 + 发布包里的标题 / 简介 / 标签（固定“转载”，来源 = 直播间链接，分区 `publish.bili.tid`）。
+
+| 方式 | 做什么 |
+| --- | --- |
+| 先放着（默认） | 定时发布设到 `hold_days`（14）天后，创作中心里能改时间 / 撤回，相当于草稿 |
+| 立即公开发布 | 直接公开，后台会再确认一次 |
+| 定时发布 | 自选时间，必须在 4 小时之后、15 天以内 |
+| 仅自己可见 | biliup 没有这个参数，默认不提供；只有在 `publish.bili.private_args` 里填了你验证过的参数才会出现 |
+
+```bash
+python scripts/publish_bili.py output/<场次>/candidates.json --rank 3 --dry-run     # 只打印命令，不上传
+python scripts/publish_bili.py output/<场次>/candidates.json --rank 3               # 先放着
+python scripts/publish_bili.py output/<场次>/candidates.json --rank 3 --mode timed --at 2026-11-20T20:00
+python scripts/publish_bili.py --status                                           # biliup 装了没、登录了没
+```
+
+- 安全闸：违禁词命中拒绝（弹窗勾“仍然发布”才放行）；同一条已成功投过拒绝（勾“重新投稿”）；同一主播两次上传至少隔 `min_interval_sec`（600）秒；没有渲染好的成片拒绝；`biliup upload --help` 里找不到我们用到的参数就停下，不带着猜的参数上传。
+- 结果：`output/<场次>/publish/<序号>.bili.json`（状态、方式、定时时间、BV 号（能从输出里识别到才有）、输出末尾）。
+- 登录：只由你在服务器上执行 `biliup login`，这里不碰密码，见 `deploy/README.md`。
+- 说明：biliup 是非官方接口，B站改接口 / 加验证 / 风控都可能让上传失败甚至限制账号；云端连不上 B站，所以真实上传没测过，测试用假的 biliup 覆盖命令拼装、安全闸和结果记录（`tests/test_publish_bili.py`）。第一次请先点“先预演”，再用“先放着”真投一条，到创作中心确认状态和分区。
 
 ## 主播周报（给主播看的内容报告）
 

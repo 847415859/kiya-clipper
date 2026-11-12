@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.kiya.admin.common.ApiException;
 import com.kiya.admin.service.PublishService;
 
-/** 发布包：封面、标题、简介、标签（投稿时复制粘贴，上传仍由人来做）。 */
+/** 发布包：封面、标题、简介、标签（可复制粘贴手动投稿，也可以一键发布，一键发布走 PUBLISH_BILI 任务）。 */
 @RestController
 @RequestMapping("/api/sessions/{name}/publish/{rank}")
 public class PublishController {
@@ -55,6 +55,12 @@ public class PublishController {
     @PostMapping("/regenerate")
     public Map<String, Object> regenerate(@PathVariable String name, @PathVariable int rank) {
         return publish.regenerate(name, rank);
+    }
+
+    /** 一键发布要用的信息：投稿环境 + 最近一次结果。发布本身走任务（PUBLISH_BILI）。 */
+    @GetMapping("/bili")
+    public Map<String, Object> bili(@PathVariable String name, @PathVariable int rank) {
+        return publish.biliInfo(name, rank);
     }
 
     @GetMapping("/cover.jpg")

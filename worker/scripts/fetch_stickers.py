@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import ssl
 import sys
 import time
 import urllib.parse
@@ -26,6 +28,9 @@ ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent
 STICKER_DIR = REPO / "assets" / "stickers"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+# fabiaoqing 的 TLS 密码套件较旧，Python 默认上下文会 SSL 握手失败，放宽安全级别
+_SSL = ssl.create_default_context()
+_SSL.set_ciphers("DEFAULT@SECLEVEL=0")
 
 # 每个情绪标签一组搜索词（按 VTuber 圈 / 切片常用贴图场景调）
 EMOTIONS = {
@@ -42,18 +47,18 @@ EMOTIONS = {
 }
 
 
-def search(keyword: str, page: int = 1) -> list[str]:
-    """调斗图吧搜索接口，返回图片直链列表。接口可能变化，失效时换站点重写本函数。"""
-    q = urllib.parse.urlencode({"size": 60, "w": keyword, "page": page})
-    req = urllib.request.Request(f"https://www.dbbqb.com/api/search/json?{q}",
-                                 headers={"User-Agent": UA, "Referer": "https://www.dbbqb.com/"})
+def search(keyword: str) -> list[str]:
+    """调发表情（fabiaoqing）搜索页，解析懒加载属性 data-original 拿到图片直链。站点变化时改这里。"""
+    import re
+    url = "https://www.fabiaoqing.com/search/search/keyword/" + urllib.parse.quote(keyword) + ".html"
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": "https://www.fabiaoqing.com/"})
     with urllib.request.urlopen(req, timeout=15) as r:
-        data = json.loads(r.read().decode())
-    return [f"https://image.dbbqb.com/{it['path']}" for it in data if it.get("path")]
+        html = r.read().decode("utf-8", "replace")
+    return list(dict.fromkeys(re.findall(r'data-original="(https?://[^"]+\.(?:gif|jpg|jpeg|png|webp))"', html, re.I)))
 
 
 def download(url: str, dst: Path) -> bool:
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": "https://www.dbbqb.com/"})
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": "https://www.fabiaoqing.com/"})
     try:
         with urllib.request.urlopen(req, timeout=20) as r, open(dst, "wb") as f:
             f.write(r.read())

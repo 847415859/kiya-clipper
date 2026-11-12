@@ -143,6 +143,32 @@ public class PublishService {
         return pack;
     }
 
+    /** B站投稿环境（biliup 装了没 / 登录了没）+ 这一条最近一次投稿的结果。 */
+    public Map<String, Object> biliInfo(String session, int rank) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        ProcessRunner.Result r = runner.run("publish_bili.py",
+                List.of("--status", paths.sessionDir(session).resolve("candidates.json").toString()), Duration.ofSeconds(30));
+        try {
+            out.put("env", om.readValue(SessionService.lastLine(r.output()), new TypeReference<LinkedHashMap<String, Object>>() {}));
+        } catch (IOException | RuntimeException e) {
+            out.put("env", Map.of("biliup", false, "logged_in", false, "error", "读取投稿环境失败"));
+        }
+        Path f = paths.sessionDir(session).resolve("publish").resolve(String.format("%02d.bili.json", checkedRank(rank)));
+        if (Files.exists(f)) {
+            try {
+                out.put("last", om.readValue(f.toFile(), new TypeReference<LinkedHashMap<String, Object>>() {}));
+            } catch (IOException e) {
+                // 结果文件读不到不影响发布
+            }
+        }
+        return out;
+    }
+
+    private static int checkedRank(int rank) {
+        checkRank(rank);
+        return rank;
+    }
+
     public Path coverFile(String session, int rank) {
         checkRank(rank);
         return WorkerPaths.inside(paths.output(),

@@ -18,6 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
@@ -25,7 +26,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kiya.admin.common.ApiException;
 
@@ -36,11 +36,19 @@ public class StickerService {
     static final Pattern NAME = Pattern.compile("^[\\w\\-.\\u4e00-\\u9fff]{1,80}\\.(png|jpg|jpeg|gif|webp)$",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
     static final long MAX_BYTES = 5L * 1024 * 1024;
-    static final String SEARCH_API = "https://www.dbbqb.com/api/search/json";
+    static final String SEARCH_URL = "https://www.fabiaoqing.com/search/search/keyword/%s.html";
+    static final String REFERER = "https://www.fabiaoqing.com/";
+    static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+    /** fabiaoqing 搜索页把真实图片放在懒加载属性 data-original 里。 */
+    private static final Pattern IMG = Pattern.compile(
+            "data-original=\"(https?://[^\"]+\\.(?:gif|jpg|jpeg|png|webp))\"", Pattern.CASE_INSENSITIVE);
 
     private final WorkerPaths paths;
     private final ObjectMapper om;
-    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+    private final HttpClient http = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(10))
+            .followRedirects(HttpClient.Redirect.NORMAL)   // fabiaoqing 搜索页会 302 到 /search/bqb/...
+            .build();
 
     public StickerService(WorkerPaths paths, ObjectMapper om) {
         this.paths = paths;
@@ -111,31 +119,31 @@ public class StickerService {
         }
     }
 
-    /** 网络搜索梗图（斗图吧 API），返回图片直链列表。仅内部测试用，商用前换成授权素材。 */
+    /** 网络搜索梗图（发表情 fabiaoqing 搜索页），解析懒加载属性拿到图片直链。仅内部测试用，商用前换成授权素材。 */
     public List<String> search(String q, int limit) {
         String kw = q == null ? "" : q.trim();
         if (kw.isEmpty()) {
             throw ApiException.badRequest("搜索词不能为空");
         }
         try {
-            String url = SEARCH_API + "?size=60&w=" + URLEncoder.encode(kw, StandardCharsets.UTF_8);
+            String enc = URLEncoder.encode(kw, StandardCharsets.UTF_8).replace("+", "%20");
+            String url = String.format(SEARCH_URL, enc);
             HttpRequest req = HttpRequest.newBuilder(URI.create(url))
-                    .header("User-Agent", "Mozilla/5.0")
+                    .header("User-Agent", UA)
+                    .header("Referer", REFERER)
                     .timeout(Duration.ofSeconds(15))
                     .GET().build();
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() != 200) {
                 throw ApiException.badRequest("搜索失败：HTTP " + resp.statusCode());
             }
-            JsonNode root = om.readTree(resp.body());
             List<String> out = new ArrayList<>();
             int cap = Math.max(1, Math.min(limit, 60));
-            for (JsonNode it : root) {
-                if (it.has("path")) {
-                    out.add("https://image.dbbqb.com/" + it.get("path").asText());
-                    if (out.size() >= cap) {
-                        break;
-                    }
+            Matcher m = IMG.matcher(resp.body());
+            while (m.find() && out.size() < cap) {
+                String u = m.group(1);
+                if (!out.contains(u)) {
+                    out.add(u);
                 }
             }
             return out;
@@ -154,7 +162,8 @@ public class StickerService {
         byte[] data;
         try {
             HttpRequest req = HttpRequest.newBuilder(URI.create(url))
-                    .header("User-Agent", "Mozilla/5.0")
+                    .header("User-Agent", UA)
+                    .header("Referer", REFERER)
                     .timeout(Duration.ofSeconds(30))
                     .GET().build();
             HttpResponse<byte[]> resp = http.send(req, HttpResponse.BodyHandlers.ofByteArray());

@@ -60,6 +60,7 @@ public class JobService {
             Map.entry("EVAL_RERANK", "精排对比"),
             Map.entry("AUTO_EDIT", "AI 剪辑初稿"),
             Map.entry("EDIT_PREVIEW", "剪编辑预览"),
+            Map.entry("PUBLISH_BILI", "发布到B站"),
             Map.entry("RENDER", "渲染成片"));
 
     private final JobMapper mapper;
@@ -215,7 +216,7 @@ public class JobService {
     // ------------------------------------------------------------------ 执行
     private static boolean needsSession(String type) {
         return switch (type) {
-            case "TRANSCRIBE", "SCREEN", "RERANK", "RESCORE", "CUT", "PIPELINE", "RENDER", "AUTO_EDIT", "EDIT_PREVIEW" -> true;
+            case "TRANSCRIBE", "SCREEN", "RERANK", "RESCORE", "CUT", "PIPELINE", "RENDER", "AUTO_EDIT", "EDIT_PREVIEW", "PUBLISH_BILI" -> true;
             default -> false;
         };
     }
@@ -243,6 +244,7 @@ public class JobService {
                     Boolean.TRUE.equals(p.get("noFetch")) ? List.of("refresh", "--no-fetch") : List.of("refresh")));
             case "AUTO_EDIT" -> steps.add(autoEdit(session, p));
             case "EDIT_PREVIEW" -> steps.add(editPreview(session, p));
+            case "PUBLISH_BILI" -> steps.add(publishBili(session, p));
             case "EVAL_RERANK" -> steps.add(runner.command("evaluate.py", List.of("--rerank")));
             case "HOTWORDS_SYNC" -> steps.add(runner.command("hotwords.py", List.of("sync")));
             case "EVALUATE" -> steps.add(runner.command("evaluate.py", List.of()));
@@ -402,6 +404,37 @@ public class JobService {
         }
         String cand = paths.sessionDir(session).resolve("candidates.json").toString();
         return runner.command("render.py", List.of(cand, "--rank", String.valueOf(rank), "--height", String.valueOf(height)));
+    }
+
+    /** 一键发布到 B站：mode = hold（先放着，默认）/ now / timed（要 at）/ private；dryRun 只预演不上传。 */
+    private List<String> publishBili(String session, Map<String, Object> p) {
+        int rank = intParam(p, "rank", 0);
+        if (rank < 1 || rank > 999) {
+            throw ApiException.badRequest("请指定要发布的序号");
+        }
+        String mode = String.valueOf(p.getOrDefault("mode", "hold"));
+        if (!List.of("hold", "now", "timed", "private").contains(mode)) {
+            throw ApiException.badRequest("发布方式只能是 hold / now / timed / private");
+        }
+        List<String> args = new ArrayList<>(List.of(paths.sessionDir(session).resolve("candidates.json").toString(),
+                "--rank", String.valueOf(rank), "--mode", mode));
+        if ("timed".equals(mode)) {
+            String at = String.valueOf(p.getOrDefault("at", "")).strip();
+            if (!at.matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}")) {
+                throw ApiException.badRequest("请选择定时发布的时间");
+            }
+            args.addAll(List.of("--at", at));
+        }
+        if (Boolean.TRUE.equals(p.get("dryRun"))) {
+            args.add("--dry-run");
+        }
+        if (Boolean.TRUE.equals(p.get("allowTaboo"))) {
+            args.add("--allow-taboo");
+        }
+        if (Boolean.TRUE.equals(p.get("again"))) {
+            args.add("--again");
+        }
+        return runner.command("publish_bili.py", args);
     }
 
     private static int intParam(Map<String, Object> p, String k, int def) {

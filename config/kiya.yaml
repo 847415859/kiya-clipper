@@ -106,6 +106,15 @@ publish:
   cover_font: "Noto Sans CJK SC:bold"   # fc-match 的写法；装了综艺体可以换成 "ZCOOL KuaiLe"
   cover_color: "#FFE14D"
   cover_stroke: "#E0457B"
+  # 一键发布到 B站（scripts/publish_bili.py，用 biliup 命令行；要先在服务器上装 biliup 并 `biliup login`，见 deploy/README.md）
+  bili:
+    cookie: ~/.config/biliup/cookies.json   # biliup login 生成的登录文件（权限 600，别提交到 git）
+    hold_days: 14            # “先放着”：定时发布设到几天后（B站最长约 15 天，创作中心里能改 / 撤回）
+    min_interval_sec: 600    # 同一主播两次上传的最短间隔，防止连点触发风控
+    tid: 21                  # 投稿分区 id（21 = 生活·日常；按你的账号习惯改）
+    submit: ""               # biliup 的提交接口：空 = 用它的默认；也可填 web / client / app
+    line: ""                 # 上传线路，空 = 自动
+    # private_args: []       # “仅自己可见”：biliup 没有这个参数，验证过能用的参数填这里才会出现在弹窗里
   # 简介模板：{what_happened} 精排的一句话、{streamer} {space_url} {live_url}、{date} 场次日期、{time} 片段在直播里的时间
   desc_template: |
     {what_happened}
