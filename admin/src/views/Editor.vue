@@ -313,6 +313,13 @@
             <img v-if="pack.cover" :src="api.coverUrl(name, rank, pack.cover_version)" alt="封面" @click="openCover" />
             <div v-else class="muted cover-empty">还没有封面</div>
           </div>
+          <div v-if="pack.cover_variants && pack.cover_variants.length" class="cover-variants">
+            <button v-for="v in pack.cover_variants" :key="v.variant" class="cover-variant"
+                    :class="{ selected: v.variant === pack.cover_variant }" @click="chooseCoverVariant(v.variant)">
+              <img :src="api.coverUrl(name, rank, pack.cover_version, v.variant)" :alt="v.label" />
+              <span>{{ v.label }}</span>
+            </button>
+          </div>
           <el-form label-width="64px" size="small" class="pack">
             <el-form-item label="封面字">
               <el-input v-model="coverText" maxlength="30" placeholder="空着就是纯截图" />
@@ -323,6 +330,7 @@
             </el-form-item>
             <el-form-item>
               <el-button type="primary" plain :loading="covering" @click="makeCover()">{{ pack.cover ? '重画封面' : '生成封面' }}</el-button>
+              <el-button type="warning" plain :loading="covering" @click="makeCover(null, 'seedream')">Seedream 生图</el-button>
               <a v-if="pack.cover" :href="api.coverUrl(name, rank, pack.cover_version)" :download="`${name}_${rank}_cover.jpg`"><el-button>下载</el-button></a>
             </el-form-item>
             <el-form-item label="标题">
@@ -961,14 +969,18 @@ function coverAtCurrent() {
   makeCover()
 }
 
-async function makeCover() {
+async function makeCover(variant = null, mode = null) {
   covering.value = true
   try {
-    pack.value = { ...pack.value, ...(await api.publishCover(name.value, rank.value, { t: coverT, text: coverText.value })) }
+    pack.value = { ...pack.value, ...(await api.publishCover(name.value, rank.value, { t: coverT, text: coverText.value, variant, mode })) }
     ElMessage.success('封面已生成')
   } finally {
     covering.value = false
   }
+}
+
+function chooseCoverVariant(variant) {
+  makeCover(variant)
 }
 
 async function savePack() {
@@ -1306,5 +1318,10 @@ onBeforeUnmount(() => {
 .stale { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 5; background: rgba(0, 0, 0, 0.72); color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 13px; display: flex; gap: 8px; align-items: center; }
 .cover img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 6px; cursor: zoom-in; display: block; }
 .cover-empty { aspect-ratio: 16 / 10; display: flex; align-items: center; justify-content: center; background: var(--el-fill-color-light); border-radius: 6px; }
+.cover-variants { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 10px 0 4px; }
+.cover-variant { border: 2px solid var(--el-border-color-light); background: #fff; padding: 0; border-radius: 6px; overflow: hidden; cursor: pointer; text-align: left; }
+.cover-variant.selected { border-color: var(--el-color-primary); }
+.cover-variant img { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; }
+.cover-variant span { display: block; padding: 4px 6px; font-size: 12px; color: var(--el-text-color-secondary); }
 .pack { margin-top: 10px; }
 </style>

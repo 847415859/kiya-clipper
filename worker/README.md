@@ -384,6 +384,9 @@ python scripts/publish_pack.py output/<场次>/candidates.json --rank 3 --cover-
 ```
 
 - 封面 1920×1200（16:10），字在中间 4:3 安全区里，首页按 4:3 裁切时不会切到字。字体用 `publish.cover_font`（fc-match 写法）。
+- 现在默认生成三张主题候选：人物海报（`hero`）、漫画冲击（`comic`）、抽象事件卡（`abstract`）。主题会按精排的类型和原话自动判断（反差、破防、口胡、翻车、社死等），并保存到发布包的 `cover_concept` / `cover_variants`。
+- 命令行可指定构图和主题：`--cover-variant comic --cover-theme contrast`。编辑器发布卡片会显示三张候选，点选后重新生成并设为主封面。
+- 另有 `Seedream 生图` 模式：编辑器点击按钮，或命令行使用 `--cover-mode seedream`（同时保留程序化候选用 `--cover-mode all`）。Seedream 属于火山引擎方舟，不是阿里百炼；会收到参考帧和抽象主题提示词，要求保留主播特征且不生成文字，准确中文由程序后期叠加。密钥填 `.env` 的 `SEEDREAM_API_KEY` 或 `ARK_API_KEY`，失败不会覆盖已有程序化封面；模型、接口和尺寸可在 `config/kiya.yaml` 的 `publish.seedream_*` 调整。Linux 命令请把 `SESSION` 换成真实场次名，不要直接输入带尖括号的占位符：`SESSION=20261113-2014 && python scripts/publish_pack.py "output/$SESSION/candidates.json" --rank 3 --cover-mode seedream`。
 - 截图优先用原录像；录像被同步走后，依次改用成片、编辑预览、审核片段里的画面（清晰度会低一些，先渲染 1080p 成片再截最好）。
 - 后台改过的标题 / 简介 / 标签不会被重新生成覆盖；点“按精排重新生成文字”才会覆盖。
 - 发布后在同一张卡片里填 BV 号，精排记忆会拉它的播放数据。

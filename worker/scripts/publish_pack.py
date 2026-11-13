@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -33,7 +34,9 @@ from clipper.asr import load_transcript  # noqa: E402
 from clipper.clipwin import clip_origin, read_windows  # noqa: E402
 from clipper.edit import edit_window  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
-from clipper.publish import DEFAULT_TAGS, build_description, build_tags, clean_title, render_cover  # noqa: E402
+from clipper.publish import (COVER_THEMES, DEFAULT_TAGS, build_description, build_tags, clean_title,
+                             cover_concept, render_theme_cover)  # noqa: E402
+from clipper.seedream import SeedreamError, generate as generate_seedream  # noqa: E402
 from cut import pieces  # noqa: E402
 
 
@@ -84,6 +87,10 @@ def main() -> int:
     ap.add_argument("--rank", type=int, required=True)
     ap.add_argument("--cover-t", type=float, help="封面用整场第几秒的画面")
     ap.add_argument("--cover-text", help="封面上的大字（空字符串 = 不加字）")
+    ap.add_argument("--cover-variant", choices=["hero", "comic", "abstract"], help="主题化构图：人物海报 / 漫画冲击 / 抽象事件卡")
+    ap.add_argument("--cover-theme", choices=sorted(COVER_THEMES), help="覆盖自动判断的主题")
+    ap.add_argument("--cover-mode", choices=["programmatic", "seedream", "all"], default="programmatic",
+                    help="封面方式：程序化、Seedream 生图或两者；默认程序化")
     ap.add_argument("--no-cover", action="store_true")
     ap.add_argument("--refresh", action="store_true", help="标题 / 简介 / 标签重新生成（覆盖后台改过的）")
     ap.add_argument("--config", default=None, help="主播配置；不填时按 candidates.json 所在目录推导主播")
@@ -138,7 +145,8 @@ def main() -> int:
                 source=streamer.get("live_url", ""), copyright="转载",
                 range={"start": round(a, 1), "end": round(b, 1)})
 
-    if not args.no_cover and (args.cover_t is not None or args.cover_text is not None or not pack.get("cover")):
+    if not args.no_cover and (args.cover_t is not None or args.cover_text is not None or args.cover_variant is not None
+                              or args.cover_theme is not None or args.cover_mode != "programmatic" or not pack.get("cover")):
         punch = cand["clip_start"] + llm["punch_time"] if llm.get("punch_time", -1) >= 0 else cand["t"]
         if llm.get("cover_time", -1) >= 0:                    # 精排 v4 选的封面帧（有表情 / 关键动作的那一秒）优先于笑点时刻
             punch = cand["clip_start"] + llm["cover_time"]
@@ -150,16 +158,52 @@ def main() -> int:
         if not src:
             print("找不到可以截图的视频（录像已移走、也还没有成片 / 预览 / 审核片段）", file=sys.stderr)
             return 1
+        concept = cover_concept(llm, text, speech)
+        if args.cover_theme:
+            concept["theme"] = args.cover_theme
+            concept.update({"label": COVER_THEMES[args.cover_theme]["label"], "accent": COVER_THEMES[args.cover_theme]["accent"],
+                            "second": COVER_THEMES[args.cover_theme]["second"], "symbol": COVER_THEMES[args.cover_theme]["symbol"]})
+        concept["headline"] = text.strip()[:18] if text is not None else concept["headline"]
+        selected = args.cover_variant or pack.get("cover_variant") or "hero"
+        variant_files = []
         cover = out_dir / f"{args.rank:02d}_cover.jpg"
         try:
-            render_cover(frame, cover, text, pc.get("cover_font") or "Noto Sans CJK SC:bold",
-                         pc.get("cover_color") or "#FFE14D", pc.get("cover_stroke") or "#E0457B")
+            if args.cover_mode in ("programmatic", "all"):
+                for variant in ("hero", "comic", "abstract"):
+                    vf = out_dir / f"{args.rank:02d}_cover_{variant}.jpg"
+                    render_theme_cover(frame, vf, concept, pc.get("cover_font") or "Noto Sans CJK SC:bold", variant)
+                    variant_files.append({"variant": variant, "file": vf.name, "label": {"hero": "人物海报", "comic": "漫画冲击", "abstract": "抽象事件"}[variant]})
+            if args.cover_mode in ("seedream", "all"):
+                seed_file = out_dir / f"{args.rank:02d}_cover_seedream.jpg"
+                prompt = (f"为直播切片制作一张有趣、抽象、适合视频平台缩略图的中文封面。主题：{concept['label']}。"
+                          f"视觉隐喻：{concept.get('subline') or concept['headline']}。"
+                          f"保留参考图中主播的身份特征、发型、服装和表情，不要重绘成陌生人物。"
+                          f"画面要有夸张的漫画构图、强烈色彩和一个清晰的荒诞道具。"
+                          f"不要生成任何文字、字母、数字、水印或 Logo，文字由程序后期叠加。")
+                meta = generate_seedream(prompt, frame, seed_file, model=pc.get("seedream_model"),
+                                         endpoint=pc.get("seedream_endpoint"), size=pc.get("seedream_size", "1920*1200"))
+                variant_files.append({"variant": "seedream", "file": seed_file.name, "label": "Seedream 生图", "meta": meta})
+            selected = "seedream" if args.cover_mode == "seedream" else selected
+            chosen = next((x for x in variant_files if x["variant"] == selected), variant_files[0])
+            shutil.copyfile(out_dir / chosen["file"], cover)
+        except SeedreamError as e:
+            pack["cover_seedream_error"] = str(e)
+            print(f"Seedream 封面失败：{e}", file=sys.stderr)
+            if args.cover_mode == "seedream":
+                return 1
+            if not variant_files:
+                return 1
+            chosen = variant_files[0]
+            shutil.copyfile(out_dir / chosen["file"], cover)
         except RuntimeError as e:
             print(f"封面生成失败：{e}", file=sys.stderr)
             return 1
-        pack.update(cover=cover.name, cover_t=round(t, 2), cover_text=text, cover_source=src,
-                    cover_version=int(time.time()))
-        print(f"封面：{hhmmss(t)} 的画面（来自{src}），文字“{text}”→ {cover.name}")
+        if variant_files:
+            chosen = next((x for x in variant_files if x["variant"] == selected), variant_files[0])
+            pack.update(cover=cover.name, cover_t=round(t, 2), cover_text=text, cover_source=src,
+                        cover_variant=chosen["variant"], cover_variants=variant_files, cover_concept=concept,
+                        cover_version=int(time.time()))
+        print(f"封面：{hhmmss(t)} 的画面（来自{src}），主题 {concept['theme']}，构图 {chosen['variant']} → {cover.name}")
     pack["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     pf.write_text(json.dumps(pack, ensure_ascii=False, indent=1), encoding="utf-8")
     print(json.dumps(pack, ensure_ascii=False))

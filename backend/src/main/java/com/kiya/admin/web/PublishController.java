@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.kiya.admin.common.ApiException;
@@ -45,11 +46,11 @@ public class PublishController {
         return publish.save(name, rank, req.title(), req.description(), req.tags());
     }
 
-    public record CoverReq(Double t, String text) {}
+    public record CoverReq(Double t, String text, String variant, String theme, String mode) {}
 
     @PostMapping("/cover")
     public Map<String, Object> cover(@PathVariable String name, @PathVariable int rank, @RequestBody CoverReq req) {
-        return publish.cover(name, rank, req.t(), req.text());
+        return publish.cover(name, rank, req.t(), req.text(), req.variant(), req.theme(), req.mode());
     }
 
     @PostMapping("/regenerate")
@@ -64,8 +65,9 @@ public class PublishController {
     }
 
     @GetMapping("/cover.jpg")
-    public ResponseEntity<Resource> coverImage(@PathVariable String name, @PathVariable int rank) {
-        Path p = publish.coverFile(name, rank);
+    public ResponseEntity<Resource> coverImage(@PathVariable String name, @PathVariable int rank,
+                                               @RequestParam(required = false) String variant) {
+        Path p = publish.coverFile(name, rank, variant);
         if (!Files.exists(p)) {
             throw ApiException.notFound("还没有封面");
         }

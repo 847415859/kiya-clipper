@@ -106,6 +106,10 @@ publish:
   cover_font: "Noto Sans CJK SC:bold"   # fc-match 的写法；装了综艺体可以换成 "ZCOOL KuaiLe"
   cover_color: "#FFE14D"
   cover_stroke: "#E0457B"
+  # Seedream 生图封面（可选；密钥放 .env 的 SEEDREAM_API_KEY，空着不影响程序化封面）
+  seedream_model: "seedream-5.5"
+  seedream_endpoint: ""
+  seedream_size: "1920*1200"
   # 一键发布到 B站（scripts/publish_bili.py，用 biliup 命令行；要先在服务器上装 biliup 并 `biliup login`，见 deploy/README.md）
   bili:
     cookie: ~/.config/biliup/cookies.json   # biliup login 生成的登录文件（权限 600，别提交到 git）

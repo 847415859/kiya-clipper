@@ -83,7 +83,7 @@ export const api = {
   musicBeats: (id) => http.get(`/api/music/${encodeURIComponent(id)}/beats`, { quiet: true }),
   biliInfo: (name, rank) => http.get(`/api/sessions/${encodeURIComponent(name)}/publish/${rank}/bili`),
   regeneratePublish: (name, rank) => http.post(`/api/sessions/${encodeURIComponent(name)}/publish/${rank}/regenerate`),
-  coverUrl: (name, rank, v) => `/api/sessions/${encodeURIComponent(name)}/publish/${rank}/cover.jpg?v=${v || 0}`,
+  coverUrl: (name, rank, v, variant) => `/api/sessions/${encodeURIComponent(name)}/publish/${rank}/cover.jpg?v=${v || 0}${variant ? `&variant=${encodeURIComponent(variant)}` : ''}`,
   memory: () => http.get('/api/memory'),
   memes: () => http.get('/api/memes'),
   memoryAction: (body) => http.post('/api/memory/actions', body),

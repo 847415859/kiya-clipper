@@ -75,8 +75,8 @@ public class PublishService {
         }
     }
 
-    /** 生成 / 重画封面。t = 整场秒数（null 用上次的或笑点），text = 封面大字（null 用上次的）。 */
-    public Map<String, Object> cover(String session, int rank, Double t, String text) {
+    /** 生成 / 重画主题化封面。t = 整场秒数，text = 大字，variant = 构图，theme = 抽象主题。 */
+    public Map<String, Object> cover(String session, int rank, Double t, String text, String variant, String theme, String mode) {
         List<String> extra = new ArrayList<>();
         if (t != null) {
             if (t < 0 || t > 24 * 3600) {
@@ -90,6 +90,24 @@ public class PublishService {
                 throw ApiException.badRequest("封面文字最多 30 个字");
             }
             extra.add("--cover-text=" + s);                 // 用 = 连写，文字以 - 开头时也不会被当成参数
+        }
+        if (variant != null && !variant.isBlank()) {
+            if (!List.of("hero", "comic", "abstract").contains(variant)) {
+                throw ApiException.badRequest("封面构图不合法");
+            }
+            extra.addAll(List.of("--cover-variant", variant));
+        }
+        if (theme != null && !theme.isBlank()) {
+            if (!List.of("contrast", "meltdown", "wordplay", "game_fail", "social_death", "chaos").contains(theme)) {
+                throw ApiException.badRequest("封面主题不合法");
+            }
+            extra.addAll(List.of("--cover-theme", theme));
+        }
+        if (mode != null && !mode.isBlank()) {
+            if (!List.of("programmatic", "seedream", "all").contains(mode)) {
+                throw ApiException.badRequest("封面方式不合法");
+            }
+            extra.addAll(List.of("--cover-mode", mode));
         }
         return runPack(session, rank, extra, 120);
     }
@@ -170,8 +188,17 @@ public class PublishService {
     }
 
     public Path coverFile(String session, int rank) {
+        return coverFile(session, rank, null);
+    }
+
+    public Path coverFile(String session, int rank, String variant) {
         checkRank(rank);
+        String file = String.format("%02d_cover%s.jpg", rank,
+                variant == null || variant.isBlank() ? "" : "_" + variant);
+        if (variant != null && !variant.isBlank() && !List.of("hero", "comic", "abstract").contains(variant)) {
+            throw ApiException.badRequest("封面构图不合法");
+        }
         return WorkerPaths.inside(paths.output(),
-                paths.sessionDir(session).resolve("publish").resolve(String.format("%02d_cover.jpg", rank)));
+                paths.sessionDir(session).resolve("publish").resolve(file));
     }
 }
