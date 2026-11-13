@@ -242,6 +242,21 @@ python scripts/asr_eval.py output/<场次>/transcript.json --start 01:23:00 --en
 
 默认链路是：Agent 判断和编排 → 程序校验与执行 → 程序质检 → 人工审核 → 保存评分、原因和 AI 初稿/人工终稿差异。选片和剪辑的进一步 Agent 化等多场次评分、审核原因、质检结果和 `edit_diff` 稳定后再评估，当前不作为默认链路。
 
+固定编排入口是 `scripts/agent_run.py`：
+
+```bash
+# 默认使用精排标记为 pick 的前 3 条，先以 480p 验证整条链路
+python scripts/agent_run.py output/<场次>/candidates.json --max-ranks 3 --height 480
+
+# 指定候选并只执行到 AI 初稿，便于先人工检查编排
+python scripts/agent_run.py output/<场次>/candidates.json --ranks 2 5 --stop-after autoedit
+
+# 只查看白名单命令，不调用模型、渲染器或写入状态
+python scripts/agent_run.py output/<场次>/candidates.json --dry-run
+```
+
+状态写入 `output/<场次>/agent_run.json`，命令输出写入 `agent_run.log`。重复执行会从未完成阶段继续；要重新生成 AI 初稿时使用 `--force`，它不会删除人工终稿。没有精排 `pick` 时不会自动把未判断的候选送去渲染。
+
 ```bash
 # 1. 精排：每个候选抽 8 张截图 + 片段内原话 + 片段前 60 秒前情 + 弹幕 / 礼物，交给多模态大模型
 python scripts/rerank.py output/<场次>/candidates.json --dry-run     # 先不花钱，看 rerank_preview/ 里的提示词和截图
@@ -489,10 +504,12 @@ worker/
 ├── scripts/try_asr.py           # 试用百炼语音转写（Paraformer / Fun-ASR），不需要 GPU
 ├── scripts/asr_eval.py          # 转写抽测：和手打的参考文本比字错率
 ├── clipper/llm.py       # 大模型调用层：OpenAI 兼容接口、磁盘缓存、重试、pydantic 校验、提示词加载
+├── clipper/agent.py     # 固定 Agent 编排状态机：白名单工具、状态和审计日志
 ├── clipper/context.py   # 精排上下文：主播资料、原话 / 弹幕 / 礼物整理、抽帧
 ├── clipper/boundary.py  # 起止点对齐句子、铺垫 / 余韵、时长限制
 ├── scripts/rerank.py    # 阶段 2 精排 → rerank.json
 ├── scripts/autoedit.py  # AI 剪辑初稿 → edits/<序号>.json
+├── scripts/agent_run.py # 固定 Agent 编排：判断 → 校验 → 渲染 → 质检
 ├── clipper/bili.py      # B站公开接口：投稿列表（WBI 签名）、视频数据
 ├── clipper/memory.py    # 精排记忆：梗挖掘、审核例子、切片号类型表现、权重校准、填进提示词的文字
 ├── scripts/learn.py     # 更新精排记忆 → output/_memory/memory.json
