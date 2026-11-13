@@ -98,9 +98,9 @@ def generate(prompt: str, reference: Path, out: Path, model: str | None = None,
     mdl = model or os.environ.get("SEEDREAM_MODEL") or DEFAULT_MODEL
     b64 = base64.b64encode(reference.read_bytes()).decode()
     image = f"data:image/jpeg;base64,{b64}"
+    # Seedream 5.5 不接受 sequential_image_generation；只发送跨版本通用字段。
     body = {"model": mdl, "prompt": prompt, "image": image, "size": size,
-            "response_format": "url", "watermark": False,
-            "sequential_image_generation": "disabled"}
+            "response_format": "url", "watermark": False}
     first = _json_request(ep, key, body)
     task_id = (first.get("output") or {}).get("task_id") or first.get("task_id")
     result = first
