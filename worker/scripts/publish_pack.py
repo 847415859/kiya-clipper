@@ -159,6 +159,9 @@ def main() -> int:
             print("找不到可以截图的视频（录像已移走、也还没有成片 / 预览 / 审核片段）", file=sys.stderr)
             return 1
         concept = cover_concept(llm, text, speech)
+        if not str(text or "").strip():
+            text = str(llm.get("punch_line") or llm.get("what_happened") or concept.get("label") or "这也能发生？").strip()[:18]
+            concept["headline"] = text
         if args.cover_theme:
             concept["theme"] = args.cover_theme
             concept.update({"label": COVER_THEMES[args.cover_theme]["label"], "accent": COVER_THEMES[args.cover_theme]["accent"],
