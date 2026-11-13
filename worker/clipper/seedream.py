@@ -18,7 +18,7 @@ from typing import Any
 from .env import load_env
 
 DEFAULT_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3/images/generations"
-DEFAULT_MODEL = "seedream-5.5"
+DEFAULT_MODEL = "doubao-seedream-5-5-261028"
 
 
 class SeedreamError(RuntimeError):
