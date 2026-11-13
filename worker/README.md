@@ -547,3 +547,14 @@ AI 编排只能看到贴图的**文件名**，下载来的表情包常叫 `1743�
 - 代码硬限制（`autoedit.max_stickers`，默认 2）：同一个贴图整条只能用一次，整条最多 2 个，超出的丢掉。
 
 没有做：短 / 长多版本剪辑、跳切（编排脚本目前只支持裁剪 + 效果，没有消费方）。
+
+## 成片质检回路
+
+渲染完成后会自动调用 `clipper/quality.py`，报告写入 `output/<场次>/quality/<序号>.json`。也可以单独运行：
+
+```bash
+python scripts/quality_check.py output/<场次>/candidates.json --rank 3
+python scripts/quality_check.py output/<场次>/candidates.json --all
+```
+
+报告检查文件和视频音频流、时长、黑帧、音画时长差、字幕时间、营业话残留、效果密度和贴图文件。`--all` 同时汇总 `edits/<序号>.ai.json` 与人工终稿的差异；单条报告在两份脚本都存在且人工终稿带 `human_saved_at` 时也会保存 `edit_diff`。质检只生成报告，不自动阻断渲染或发布。

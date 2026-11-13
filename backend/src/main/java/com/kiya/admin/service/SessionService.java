@@ -48,8 +48,9 @@ public class SessionService {
     static final String REASON_COL = "原因";
     static final String MODE_COL = "模式";
     static final String SECONDS_COL = "耗时(秒)";
+    static final String RATING_COL = "人工评分(1-10)";
     static final List<String> CSV_HEADER = List.of("序号", "高峰时间", "片段起", "片段止", "分数", "主要信号", "高频弹幕",
-            MARK_COL, NOTE_COL, REASON_COL, MODE_COL, SECONDS_COL);
+            MARK_COL, NOTE_COL, REASON_COL, MODE_COL, SECONDS_COL, RATING_COL);
     /** 审核时一键选的原因（代码固定，worker 的 clipper/memory.py 里有对应的中文说明）。 */
     static final Set<String> REASONS = Set.of("start_early", "start_late", "end_early", "end_late",
             "not_funny", "need_context", "read_sc", "repeat_meme", "taboo", "gem");
@@ -222,6 +223,13 @@ public class SessionService {
                 m.put("cutRefined", false);
                 m.put("cutRemoved", List.of());
                 m.put("outputDuration", ((Number) m.get("cutEnd")).doubleValue() - ((Number) m.get("cutStart")).doubleValue());
+            }
+            JsonNode q = readJson(paths.sessionDir(session).resolve("quality").resolve(String.format("%02d.json", (Integer) m.get("rank"))));
+            if (q != null && q.isObject()) {
+                m.put("qualityOk", q.path("ok").asBoolean(false));
+                m.put("qualityErrors", q.path("errors").size());
+                m.put("qualityWarnings", q.path("warnings").size());
+                m.put("qualityAt", q.path("generated_at").asText(""));
             }
         }
         Map<String, Object> out = new LinkedHashMap<>();
@@ -399,7 +407,7 @@ public class SessionService {
 
 
     public synchronized void mark(String session, int rank, String mark, String note, List<String> reasons,
-                                  String mode, Long ms) {
+                                  String mode, Long ms, Integer rating) {
         paths.checkSession(session);
         Candidate c = candidates.selectOne(new QueryWrapper<Candidate>()
                 .eq("streamer_id", streamer()).eq("session_name", session).eq("rnk", rank));
@@ -424,7 +432,7 @@ public class SessionService {
         candidates.updateById(c);
         if (cleared) {
             clearMeta(session, Set.of(rank));               // 清除标注时，原因 / 模式 / 耗时一起清
-        } else if (reasons != null || mode != null || (ms != null && ms > 0)) {
+        } else if (reasons != null || mode != null || (ms != null && ms > 0) || rating != null) {
             Map<String, Map<String, Object>> all = readMeta(session);
             Map<String, Object> e = all.computeIfAbsent(String.valueOf(rank), k -> new LinkedHashMap<>());
             if (reasons != null) {
@@ -448,6 +456,16 @@ public class SessionService {
             if (ms != null && ms > 0) {
                 long add = Math.min(ms, MAX_REVIEW_MS);              // 一次最多算 10 分钟，挂机不算数
                 e.put("ms", ((Number) e.getOrDefault("ms", 0L)).longValue() + add);
+            }
+            if (rating != null) {
+                if (rating < 0 || rating > 10) {
+                    throw ApiException.badRequest("人工评分只能是 1–10，或用 0 清除");
+                }
+                if (rating == 0) {
+                    e.remove("rating");
+                } else {
+                    e.put("rating", rating);
+                }
             }
             e.put("at", LocalDateTime.now().withNano(0).toString());
             writeMeta(session, all);
@@ -511,7 +529,8 @@ public class SessionService {
                     joinJsonArray(c.getTopDanmaku()), c.getMark() == null ? "" : c.getMark(),
                     c.getNote() == null ? "" : c.getNote(), reasons,
                     e.get("mode") == null ? "" : String.valueOf(e.get("mode")),
-                    ms > 0 ? String.valueOf(Math.round(ms / 1000.0)) : ""));
+                    ms > 0 ? String.valueOf(Math.round(ms / 1000.0)) : "",
+                    e.get("rating") == null ? "" : String.valueOf(e.get("rating"))));
         }
         try {
             Csv.write(paths.reviews().resolve(session + ".csv"), CSV_HEADER, rows);
@@ -560,7 +579,8 @@ public class SessionService {
         }
         String mode = row.getOrDefault(MODE_COL, "").trim();
         String sec = row.getOrDefault(SECONDS_COL, "").trim();
-        if (reasons.isEmpty() && !MODES.contains(mode) && !sec.matches("\\d+")) {
+        String rating = row.getOrDefault(RATING_COL, "").trim();
+        if (reasons.isEmpty() && !MODES.contains(mode) && !sec.matches("\\d+") && !rating.matches("[1-9]|10")) {
             return;
         }
         Map<String, Object> e = new LinkedHashMap<>();
@@ -572,6 +592,9 @@ public class SessionService {
         }
         if (sec.matches("\\d+")) {
             e.put("ms", Long.parseLong(sec) * 1000);
+        }
+        if (rating.matches("[1-9]|10")) {
+            e.put("rating", Integer.parseInt(rating));
         }
         into.put(rank, e);
     }
@@ -661,6 +684,7 @@ public class SessionService {
         m.put("reasons", meta != null && meta.get("reasons") != null ? meta.get("reasons") : List.of());
         m.put("mode", meta == null ? null : meta.get("mode"));
         m.put("reviewMs", meta != null && meta.get("ms") instanceof Number n ? n.longValue() : 0L);
+        m.put("rating", meta != null && meta.get("rating") instanceof Number n ? n.intValue() : null);
         return m;
     }
 

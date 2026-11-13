@@ -41,6 +41,7 @@ from clipper.peaks import hhmmss  # noqa: E402
 from clipper.subtitles import (STRIP_PUNCT, StyleError, apply_corrections, build_events, get_style,  # noqa: E402
                                load_config, lore_keywords, validate_style)
 from clipper.media import probe_duration  # noqa: E402
+from clipper.quality import quality_report, write_report  # noqa: E402
 from cut import cut_one, pieces, probe_size  # noqa: E402
 
 FPS = 30
@@ -294,6 +295,11 @@ def main() -> int:
         return 1
     tmp.replace(out)
     out.with_suffix(".edit.json").write_text(json.dumps(edit, ensure_ascii=False, indent=1), encoding="utf-8")
+    quality = quality_report(sess_dir, args.rank, final=out, candidate=cand, edit=edit)
+    quality_path = sess_dir / "quality" / f"{args.rank:02d}.json"
+    write_report(quality, quality_path)
+    state = "通过" if quality.ok and not quality.warnings else "有警告" if quality.ok else "失败"
+    print(f"质检{state}：错误 {len(quality.errors)}，警告 {len(quality.warnings)}，报告 {quality_path}")
     print(f"成片：{out}（渲染用时 {time.time() - t0:.0f} 秒）")
     return 0
 

@@ -46,6 +46,9 @@
           <el-tag size="small" :type="c.mark === 'Y' ? 'success' : c.mark === 'N' ? 'danger' : 'info'" class="badge">
             {{ c.mark === 'Y' ? '有趣' : c.mark === 'N' ? '不有趣' : c.clip ? '未标' : '未剪' }}
           </el-tag>
+          <el-tag v-if="c.qualityOk === true" size="small" type="success" effect="plain">质检通过</el-tag>
+          <el-tag v-else-if="c.qualityOk === false" size="small" type="danger" effect="plain"
+                  :title="`错误 ${c.qualityErrors || 0}，警告 ${c.qualityWarnings || 0}`">质检有问题</el-tag>
         </div>
       </aside>
 
@@ -74,6 +77,13 @@
           <el-button type="primary" plain :disabled="!!data.live" @click="$router.push(`/sessions/${name}/edit/${c.rank}`)">编辑成片 →</el-button>
           <span class="saved">{{ saved }}</span>
         </div>
+        <div class="rating-row">
+          <span class="muted">人工评分（1–10）</span>
+          <el-input-number v-model="rating" :min="1" :max="10" :step="1" :precision="0" controls-position="right"
+                           size="small" placeholder="未评分" @change="saveRating" />
+          <el-button v-if="rating != null" link size="small" @click="clearRating">清除评分</el-button>
+          <span class="muted">用于判断成片是否达到 6 分线，并参与后续校准</span>
+        </div>
         <div class="reasons">
           <span class="muted">原因（点一下就行，1–0 快捷键）</span>
           <el-check-tag v-for="(r, i) in REASONS" :key="r.code" :checked="(c.reasons || []).includes(r.code)"
@@ -88,6 +98,7 @@
           <span>序号</span><b>#{{ c.rank }} / {{ list.length }}</b>
           <span>高峰时间</span><b>{{ hms(c.t) }}（片段 {{ hms(c.cutStart ?? c.clipStart) }}–{{ hms(c.cutEnd ?? c.clipEnd) }}，{{ Math.round(c.outputDuration ?? ((c.cutEnd ?? c.clipEnd) - (c.cutStart ?? c.clipStart))) }} 秒{{ c.cutRefined ? '，按精排' : '' }}{{ c.cutRemoved && c.cutRemoved.length ? `，移除 ${c.cutRemoved.length} 段营业话` : '' }}）</b>
           <span>分数</span><b>{{ (c.score || 0).toFixed(2) }}</b>
+          <span>质检</span><b>{{ c.qualityOk == null ? '未检查' : c.qualityOk ? `通过${c.qualityWarnings ? `，警告 ${c.qualityWarnings}` : ''}` : `失败，错误 ${c.qualityErrors || 0}` }}</b>
           <span>主要信号</span><b>{{ signals(c) }}</b>
           <span>弹幕</span><b>{{ Math.round(c.danmakuPerMin || 0) }} 条/分，情绪词 {{ c.emotionHits }}，礼物 {{ Math.round(c.giftValue || 0) }}</b>
           <span>高频弹幕</span><b>{{ (c.topDanmaku || []).join(' | ') || '—' }}</b>
@@ -207,6 +218,7 @@ function onVisible() {
 }
 const cur = ref(0)
 const note = ref('')
+const rating = ref(null)
 const saved = ref('')
 const loading = ref(true)
 const cutting = ref(false)
@@ -236,7 +248,7 @@ async function load(keep) {
   }
 }
 
-watch(c, (v) => { note.value = (v && v.note) || ''; resetSpent() })
+watch(c, (v) => { note.value = (v && v.note) || ''; rating.value = v && v.rating != null ? Number(v.rating) : null; resetSpent() })
 
 // 盲审：没标注前不显示 AI 判断，免得先入为主，标注才能用来评测精排；快审始终显示
 const aiVisible = (x) => reviewMode.value === 'fast' || !!x.mark
@@ -353,6 +365,23 @@ async function saveNote() {
   if (!x || (x.note || '') === note.value) return
   await api.mark(name.value, x.rank, { note: note.value })
   x.note = note.value
+  flash()
+}
+
+async function saveRating(value) {
+  const x = c.value
+  if (!x || value == null) return
+  await api.mark(name.value, x.rank, { rating: Number(value) })
+  x.rating = Number(value)
+  flash()
+}
+
+async function clearRating() {
+  const x = c.value
+  if (!x || rating.value == null) return
+  await api.mark(name.value, x.rank, { rating: 0 })
+  rating.value = null
+  x.rating = null
   flash()
 }
 
@@ -478,6 +507,7 @@ video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; dis
 .aibox .el-tag { margin-right: 6px; }
 .adopt { margin: 8px 0 0; padding: 6px 10px; border-radius: 6px; background: var(--el-color-primary-light-9); font-size: 13px; display: flex; gap: 10px; align-items: center; }
 .reasons { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.rating-row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
 .rtag kbd { font-size: 10px; opacity: .55; margin-right: 4px; font-family: inherit; }
 .taboo-bar { margin: 8px 0 0; padding: 6px 10px; border-radius: 6px; background: var(--el-color-danger-light-9); color: var(--el-color-danger); font-size: 13px; }
 .taboo-mark { font-size: 11px; color: #fff; background: var(--el-color-danger); border-radius: 3px; padding: 0 3px; margin-left: auto; }
