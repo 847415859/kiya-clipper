@@ -181,7 +181,7 @@ def main() -> int:
                           f"画面要有夸张的漫画构图、强烈色彩和一个清晰的荒诞道具。"
                           f"不要生成任何文字、字母、数字、水印或 Logo，文字由程序后期叠加。")
                 meta = generate_seedream(prompt, frame, seed_file, model=pc.get("seedream_model"),
-                                         endpoint=pc.get("seedream_endpoint"), size=pc.get("seedream_size", "1920*1200"))
+                                         endpoint=pc.get("seedream_endpoint"), size=pc.get("seedream_size", "1920x1200"))
                 variant_files.append({"variant": "seedream", "file": seed_file.name, "label": "Seedream 生图", "meta": meta})
             selected = "seedream" if args.cover_mode == "seedream" else selected
             chosen = next((x for x in variant_files if x["variant"] == selected), variant_files[0])

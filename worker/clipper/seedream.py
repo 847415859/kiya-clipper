@@ -86,7 +86,7 @@ def _result_url(obj: dict[str, Any]) -> str | None:
 
 def generate(prompt: str, reference: Path, out: Path, model: str | None = None,
              endpoint: str | None = None, api_key: str | None = None,
-             size: str = "1920*1200", timeout: int = 180) -> dict[str, Any]:
+             size: str = "1920x1200", timeout: int = 180) -> dict[str, Any]:
     load_env()
     key = (api_key or os.environ.get("SEEDREAM_API_KEY") or os.environ.get("ARK_API_KEY")
            or os.environ.get("VOLCENGINE_ARK_API_KEY") or "")
