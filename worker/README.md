@@ -214,6 +214,12 @@ python scripts/subtitle.py make output/<场次>/candidates.json              # �
 - **错字修正**：识别固定出错的词（比如“发件礼”→“发舰礼”）加到 `config/subtitles.yaml` 的 `corrections`，下次剪切生效。
 - **已经剪好的片段**要加字幕或换样式，重新运行 `cut.py` 就会覆盖。
 
+### 营业话过滤
+
+场次有 `transcript.json` 时，`cut.py` 和 `render.py` 会自动识别明显的纯欢迎、谢礼和念弹幕句，并从视频中删除；片段中间的营业话也会被拼接掉。含有具体事件或观点的感谢句会保留。删除区间和实际输出时长写在 `clips/windows.json`，审核页会显示“已移除”。
+
+删除中间句需要重新编码，因此该候选即使带 `--fast` 也会改用精确拼接；没有命中营业话的候选保持原有 `--fast` 行为。当前规则是保守启发式，真实场次发现误判时，应把样例和调整记录到 `docs/开发记录.md` 后再扩展规则。
+
 ### 转写抽测（字错率）
 
 挑 5 分钟左右、说话密集的一段，自己听写成纯文本（标点随意），和识别结果比：
@@ -352,11 +358,11 @@ AI 剪辑初稿时，程序去历史场次里找“她以前说过的话”，�
 
 ```bash
 python scripts/transcript_index.py index --all                                # 历史场次转写入库（之后每次转写完自动入库）
-python scripts/callbacks.py output/kiya/20261112-2000/candidates.json --rank 3 --no-llm   # 只看检索到哪些历史段落（不花钱）
-python scripts/callbacks.py output/kiya/20261112-2000/candidates.json --rank 3            # 再让大模型判断 + 程序校验（只看，不写文件）
+python scripts/callbacks.py output/20261112-2000/candidates.json --rank 3 --no-llm   # 只看检索到哪些历史段落（不花钱）
+python scripts/callbacks.py output/20261112-2000/candidates.json --rank 3            # 再让大模型判断 + 程序校验（只看，不写文件）
 ```
 
-流程：笑点附近的原话和精排的一句话结论当查询 → 在**更早的场次**里检索（立 flag 的句子再单独搜一遍）→ 按“非通用二字组”重叠过滤 → 命中句取前后文合并成段 →
+流程：笑点附近的原话和精排的一句话结论当查询 → 在**更早的场次**里检索（立 flag 的句子再单独搜一遍）→ 按二字组重叠打分过滤（谢礼 / 念弹幕的套话小句不算；这场常挂嘴边的词只算一点分；门槛 `callbacks.min_score`，没有过门槛的命中就不调大模型，调试时用 `scripts/callbacks.py --no-llm` 能看到每个命中的分数和共有的词） → 命中句取前后文合并成段 →
 大模型（`prompts/callback_v1.md`）判断并**逐字引用**历史原话和本片原话 → 程序校验（引用必须真的在文字里、置信度 ≥ `callbacks.min_confidence`、旧画面 2–8 秒、
 同一句原话没被别的切片用过、一场最多 `callbacks.max_per_session` 条）→ 检查旧录像还在不在（在：插旧画面；不在：开头放“前情提要”文字卡，日志和编辑器里都会说明）。
 屏幕上的标签由程序用校验过的原话拼，不让大模型自由发挥。每个有命中的候选多一次大模型调用；只给精排前 `callbacks.top_n` 个找。

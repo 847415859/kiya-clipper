@@ -147,6 +147,11 @@ callbacks:
   max_per_session: 2         # 一场最多几条切片带呼应，免得条条都是“前情提要”
   max_seconds: 8             # 插进来的旧画面最长几秒
   min_overlap: 2             # 检索命中句和本片原话至少共有几个“非通用”二字组
+  min_score: 2.0             # 加权分数门槛：少见的共有二字组各 1 分，常见的各 0.4 分（合计最多 1 分），立 flag 的句子另加 1.5；一个够强的命中都没有就不调大模型
+  max_passages: 4            # 送给大模型的历史段落最多几段
+  rare_df: 12                # 共有的二字组在这一场（片段之外）出现不超过这么多句，算“少见”，各 1 分
+  common_weight: 0.4         # 常见的二字组各算这么多分
+  common_cap: 1.0            # 常见二字组加起来最多算这么多分
   index: auto                # auto = 有 MySQL 用 MySQL，否则读文件；files = 只读文件
 
 # 梗库（scripts/memes.py、clipper/memes.py）：B站热门每天抓一次标题 / 热搜，提炼高频短语；新梗要后台确认含义和尺度后才会被剪辑初稿用

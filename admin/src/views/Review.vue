@@ -86,7 +86,7 @@
 
         <div class="meta">
           <span>序号</span><b>#{{ c.rank }} / {{ list.length }}</b>
-          <span>高峰时间</span><b>{{ hms(c.t) }}（片段 {{ hms(c.cutStart ?? c.clipStart) }}–{{ hms(c.cutEnd ?? c.clipEnd) }}，{{ Math.round((c.cutEnd ?? c.clipEnd) - (c.cutStart ?? c.clipStart)) }} 秒{{ c.cutRefined ? '，按精排' : '' }}）</b>
+          <span>高峰时间</span><b>{{ hms(c.t) }}（片段 {{ hms(c.cutStart ?? c.clipStart) }}–{{ hms(c.cutEnd ?? c.clipEnd) }}，{{ Math.round(c.outputDuration ?? ((c.cutEnd ?? c.clipEnd) - (c.cutStart ?? c.clipStart))) }} 秒{{ c.cutRefined ? '，按精排' : '' }}{{ c.cutRemoved && c.cutRemoved.length ? `，移除 ${c.cutRemoved.length} 段营业话` : '' }}）</b>
           <span>分数</span><b>{{ (c.score || 0).toFixed(2) }}</b>
           <span>主要信号</span><b>{{ signals(c) }}</b>
           <span>弹幕</span><b>{{ Math.round(c.danmakuPerMin || 0) }} 条/分，情绪词 {{ c.emotionHits }}，礼物 {{ Math.round(c.giftValue || 0) }}</b>
@@ -140,8 +140,8 @@
         <div v-if="c.speech" class="speech">
           <div class="muted">主播原话（点一句跳到那里；语音识别可能有错字）</div>
           <div v-if="!c.speech.length" class="muted">这段没有识别到说话</div>
-          <div v-for="(s, i) in c.speech" :key="i" class="sl" @click="seek(s.t0 - (c.cutStart ?? c.clipStart))">
-            <span class="st">{{ mmss(Math.max(0, s.t0 - (c.cutStart ?? c.clipStart))) }}</span><template v-for="(p, k) in pieces(s.text)" :key="k"><mark v-if="p.hit" class="tb">{{ p.t }}</mark><template v-else>{{ p.t }}</template></template>
+          <div v-for="(s, i) in c.speech" :key="i" class="sl" :class="{ removed: clipOffset(c, s.t0) == null }" @click="seekClip(c, s.t0)">
+            <span class="st">{{ clipOffset(c, s.t0) == null ? '已移除' : mmss(clipOffset(c, s.t0)) }}</span><template v-for="(p, k) in pieces(s.text)" :key="k"><mark v-if="p.hit" class="tb">{{ p.t }}</mark><template v-else>{{ p.t }}</template></template>
           </div>
         </div>
 
@@ -367,6 +367,26 @@ function seek(t) {
     v.currentTime = Math.max(0, t)
     v.play()
   }
+}
+
+function clipOffset(clip, absolute) {
+  const base = Number(clip?.cutStart ?? clip?.clipStart ?? 0)
+  const t = Number(absolute)
+  if (!Number.isFinite(t)) return null
+  for (const q of clip?.cutRemoved || []) {
+    const a = Number(q.start), b = Number(q.end)
+    if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) continue
+    if (t > a && t < b) return null
+  }
+  return Math.max(0, t - base - (clip?.cutRemoved || []).reduce((n, q) => {
+    const a = Number(q.start), b = Number(q.end)
+    return Number.isFinite(a) && Number.isFinite(b) && t >= b ? n + b - a : n
+  }, 0))
+}
+
+function seekClip(clip, absolute) {
+  const t = clipOffset(clip, absolute)
+  if (t != null) seek(t)
 }
 
 async function cutOne() {

@@ -33,6 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from clipper.boiler import business_cuts, keep_ranges  # noqa: E402
 from clipper.clipwin import cut_window, write_windows  # noqa: E402
 from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.streamer import resolve_config  # noqa: E402
@@ -71,8 +72,13 @@ def probe_size(video: Path) -> tuple[int, int]:
 
 
 def cut_one(parts: list[tuple[Path, float, float]], dst: Path, fast: bool, height: int,
-            ass: Path | None = None) -> None:
+            ass: Path | None = None, removed: list[dict] | None = None) -> None:
     ff = shutil.which("ffmpeg") or sys.exit("找不到 ffmpeg")
+    if removed:
+        # 营业话删除后必须重新编码并拼接多个区间，--fast 的关键帧剪法无法表达这个操作。
+        fast = False
+        if not parts:
+            raise ValueError("删除营业话后没有剩余画面")
     if fast:
         if len(parts) > 1:
             print(f"    提示：片段跨分段，--fast 模式只剪第一段")
@@ -117,7 +123,8 @@ def main() -> int:
         print("没有要剪的候选（这场没有达到分数线的片段）" if not data["candidates"] else "没有匹配的序号")
         return 0
     subs = None
-    tr = None if args.no_subs else load_transcript(path.parent / "transcript.json")
+    transcript = load_transcript(path.parent / "transcript.json")
+    tr = None if args.no_subs else transcript
     if tr:
         try:
             sub_cfg = load_config()
@@ -149,16 +156,48 @@ def main() -> int:
             refined_by_rank = {}
     windows: dict[str, dict] = {}
     ok = 0
+
+    def compact_events(events: list[dict], origin: float, removed: list[dict]) -> list[dict]:
+        """删除营业话后，把字幕事件和逐字时间映射到拼接后的视频时间轴。"""
+        def shift(t: float) -> float:
+            return sum(max(0.0, min(t, float(q["end"])) - float(q["start"]))
+                    for q in removed if t > float(q["start"]))
+
+        out = []
+        for event in events:
+            ea, eb = origin + float(event["t0"]), origin + float(event["t1"])
+            if any(ea < float(q["end"]) and eb > float(q["start"]) for q in removed):
+                continue
+            e = dict(event)
+            e["t0"] = round(ea - origin - shift(ea), 3)
+            e["t1"] = round(eb - origin - shift(eb), 3)
+            e["words"] = [[round(origin + float(a) - origin - shift(origin + float(a)), 3),
+                            round(origin + float(b) - origin - shift(origin + float(b)), 3), w]
+                           for a, b, w in event.get("words", [])
+                           if not any(origin + float(a) < float(q["end"]) and origin + float(b) > float(q["start"])
+                                      for q in removed)]
+            if e["t1"] > e["t0"] and e.get("words"):
+                out.append(e)
+        return out
+
     for c in cands:
-        cs, ce, by_refined = cut_window(c, refined_by_rank.get(c["rank"]))
-        parts = pieces(data["segments"], cs, ce)
-        dst = out_dir / f"{c['rank']:02d}_{hhmmss(c['t']).replace(':', '-')}{'.flv' if args.fast else '.mp4'}"
+        refined = refined_by_rank.get(c["rank"])
+        cs, ce, by_refined = cut_window(c, refined)
+        removed = (refined or {}).get("removed") or []
+        if not removed and transcript:
+            # 没有精排结果时也过滤候选窗口里的纯营业话；有精排结果则使用其经过边界修正的结果。
+            removed = business_cuts(transcript["sentences"], cs, ce)
+        kept = keep_ranges(cs, ce, removed)
+        parts = [part for a, b in kept for part in pieces(data["segments"], a, b)]
+        dst = out_dir / f"{c['rank']:02d}_{hhmmss(c['t']).replace(':', '-')}{'.mp4' if removed else ('.flv' if args.fast else '.mp4')}"
         if not parts:
             print(f"  #{c['rank']:>2} 跳过：找不到对应的录像文件（可能已同步到 OSS 并从本地删除）")
             continue
         ass = None
         if subs:
             events = build_events(tr["sentences"], cs, ce, subs["style"], subs["corrections"])
+            if removed:
+                events = compact_events(events, cs, removed)
             w, h = probe_size(parts[0][0])
             dst.with_suffix(".srt").write_text(to_srt(events), encoding="utf-8")
             ass = dst.with_suffix(".ass")
@@ -166,9 +205,10 @@ def main() -> int:
             if args.fast or not events:
                 ass = None
         try:
-            cut_one(parts, dst, args.fast, args.height, ass)
+            cut_one(parts, dst, args.fast, args.height, ass, removed)
             ok += 1
-            windows[f"{c['rank']:02d}"] = {"start": round(cs, 2), "end": round(ce, 2), "refined": by_refined}
+            windows[f"{c['rank']:02d}"] = {"start": round(cs, 2), "end": round(ce, 2), "refined": by_refined,
+                                             "removed": removed, "output_duration": round(sum(b - a for a, b in kept), 2)}
             print(f"  #{c['rank']:>2} {hhmmss(cs)}–{hhmmss(ce)}（{ce - cs:.0f} 秒{'，按精排' if by_refined else ''}）→ {dst.name}"
                   + (f"（跨 {len(parts)} 个分段）" if len(parts) > 1 else ""))
         except subprocess.CalledProcessError as e:

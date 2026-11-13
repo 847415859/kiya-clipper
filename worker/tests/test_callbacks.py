@@ -119,6 +119,31 @@ def test_queries_retrieve_passages():
     assert "[P1] 11月5日" in cb.passages_text(ps) and "我今天再也不碰辣椒酱了" in cb.passages_text(ps)
 
 
+def test_retrieve_ignores_boilerplate_and_common_words():
+    """真实数据里的噪音：谢礼套话互相撞、不理解 / 为什么这类日常词撞。它们不该凑出命中。"""
+    assert not cb.content_bigrams("谢谢糖宝的小花花，祝糖宝天天有钱花。")                 # 整句都是谢礼套话
+    assert cb.content_bigrams("谢谢泥嚎的这个行业，你说万一其实我们是个人妻") >= {"万一", "人妻"}  # 套话小句丢掉，但同一句里的内容留着
+    old = S((100, 104, "谢谢糖宝的小花花，祝糖宝天天有钱花。"), (200, 204, "老大，谢谢听风宝宝的小花花，祝宝宝天天有钱花。"),
+            (300, 306, "所以我就真的很不理解喵，为什么这样呢"), (400, 405, "我再也不吃辣椒酱了绝对不会再碰"),
+            (500, 505, "辣椒酱放在冰箱里面"))
+    idx = MemoryIndex()
+    idx.replace_session("kiya", "20261109-2014", old)
+    assert cb.retrieve(idx, "kiya", "20261111-2126", ["谢谢姑娘的小花花，这姑娘天天要钱花。"], CFG) == []   # 谢礼套话撞谢礼套话
+    cur = S(*[(i * 10, i * 10 + 5, "哎呀吃辣椒酱好辣啊，所以我真的不理解为什么这样呢") for i in range(30)])
+    df = cb.session_df(cur, 9999, 9999)
+    assert df["辣椒"] == 30 and df["理解"] == 30
+    # 日常词撞上：没有 df 算命中，给了 df（这些词这场天天挂嘴边）就不够分
+    q = ["所以我真的不理解为什么这样呢"]
+    assert cb.retrieve(idx, "kiya", "20261111-2126", q, CFG)
+    assert cb.retrieve(idx, "kiya", "20261111-2126", q, CFG, df) == []
+    # 片段本身的词不算“常见”：df 只数片段之外的句子
+    assert cb.session_df(cur, 0, 100).get("辣椒", 0) == 20
+    # 立 flag 的句子加 1.5：同样是常见词，flag 句够分，非 flag 句（冰箱那句）不够
+    q2 = ["今天一直在聊吃辣椒酱的事情"]
+    hit = cb.retrieve(idx, "kiya", "20261111-2126", q2, CFG, df)
+    assert [h.idx for h in hit] == [3] and hit[0].flag and hit[0].shared == ("吃辣", "椒酱", "辣椒") and hit[0].score == pytest.approx(1.0 + 1.5)
+
+
 def passages():
     return cb.build_passages(make_index(), "kiya", cb.retrieve(make_index(), "kiya", "20261112-2000", ["我现在已经吃了一整瓶辣椒酱了"], CFG), CFG)
 

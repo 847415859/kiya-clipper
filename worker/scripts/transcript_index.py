@@ -2,8 +2,8 @@
 """转写全文索引：把整场转写按句入库（MySQL ngram 全文索引），给“跨场次呼应”检索用。
 
 用法：
-  python scripts/transcript_index.py index output/kiya/20261109-2014        # 一场入库（重复运行会覆盖这一场）
-  python scripts/transcript_index.py index output/kiya/20261109-2014 --soft # MySQL 用不了时只提示、不报错（转写后自动入库用这个）
+  python scripts/transcript_index.py index output/20261109-2014        # 一场入库（重复运行会覆盖这一场）
+  python scripts/transcript_index.py index output/20261109-2014 --soft # MySQL 用不了时只提示、不报错（转写后自动入库用这个）
   python scripts/transcript_index.py index --all [--streamer kiya]          # 历史场次全部补入库
   python scripts/transcript_index.py search "再也不吃辣了" [--before 20261110-2000] [--flag]
   python scripts/transcript_index.py status
@@ -74,7 +74,8 @@ def main() -> int:
         for d in dirs:
             sents = sentences_of(d)
             if sents is None:
-                print(f"  {d.name}：没有转写，跳过")
+                if not args.all:                       # --all 时目录里常有 asr_trials 这类不是场次的文件夹，安静跳过
+                    print(f"  {d.name}：没有转写，跳过")
                 continue
             n = idx.replace_session(sid, d.name, sents)
             n_sess += 1

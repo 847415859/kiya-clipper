@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+from .boiler import business_cuts
+
 
 def _sentence_at(sents: list[dict], t: float) -> int | None:
     for i, s in enumerate(sents):
@@ -64,4 +66,8 @@ def refine_bounds(sentences: list[dict], peak: float, punch: float | None = None
     if s0 < 0:
         e0 -= s0
         s0 = 0.0
-    return {"start": round(s0, 2), "end": round(e0, 2), "note": "，".join(notes) or "未调整"}
+    removed = business_cuts(sents, s0, e0)
+    if removed:
+        notes.append(f"移除{len(removed)}段营业话")
+    return {"start": round(s0, 2), "end": round(e0, 2), "removed": removed,
+            "note": "，".join(notes) or "未调整"}

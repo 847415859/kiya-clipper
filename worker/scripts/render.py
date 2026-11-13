@@ -32,6 +32,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from clipper import music as music_lib  # noqa: E402
+from clipper.boiler import business_cuts, compact_time, keep_ranges  # noqa: E402
 from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.edit import EditError, default_edit, edit_window, validate_edit, validate_item  # noqa: E402
@@ -113,6 +114,26 @@ def subtitle_events(sentences, start, end, style, corrections) -> list[dict]:
     return events
 
 
+def compact_events(events: list[dict], origin: float, removed: list[dict]) -> list[dict]:
+    """营业话从源视频删除后，把字幕事件和逐字时间映射到压缩后的时间轴。"""
+    out = []
+    for event in events:
+        ea, eb = origin + float(event["t0"]), origin + float(event["t1"])
+        if any(ea < float(q["end"]) and eb > float(q["start"]) for q in removed):
+            continue
+        e = dict(event)
+        e["t0"] = round(compact_time(ea, removed) - compact_time(origin, removed), 3)
+        e["t1"] = round(compact_time(eb, removed) - compact_time(origin, removed), 3)
+        e["words"] = [[round(compact_time(origin + float(a), removed) - compact_time(origin, removed), 3),
+                        round(compact_time(origin + float(b), removed) - compact_time(origin, removed), 3), w]
+                       for a, b, w in event.get("words", [])
+                       if not any(origin + float(a) < float(q["end"]) and origin + float(b) > float(q["start"])
+                                  for q in removed)]
+        if e["t1"] > e["t0"] and e.get("words"):
+            out.append(e)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("candidates", help="screen.py 输出的 candidates.json")
@@ -141,27 +162,31 @@ def main() -> int:
     ws, _ = edit_window(edit, cand)            # 素材范围可以超出候选片段（按精排修正后的起止）
     t_start = ws + edit["trim"]["start"]
     t_end = ws + edit["trim"]["end"]
-    dur = t_end - t_start
-    print(f"#{args.rank} {hhmmss(t_start)}–{hhmmss(t_end)}（{dur:.1f} 秒），效果 {len(edit['items'])} 个，{args.height}p")
+    tr = load_transcript(sess_dir / "transcript.json")
+    removed = business_cuts(tr["sentences"], t_start, t_end) if tr else []
+    kept = keep_ranges(t_start, t_end, removed)
+    dur = sum(b - a for a, b in kept)
+    print(f"#{args.rank} {hhmmss(t_start)}–{hhmmss(t_end)}（原始 {t_end - t_start:.1f} 秒，成片 {dur:.1f} 秒），"
+          f"效果 {len(edit['items'])} 个，{args.height}p" + (f"，移除 {len(removed)} 段营业话" if removed else ""))
 
     # 1. 干净的源视频（按裁剪范围和分辨率缓存）
     work = sess_dir / "render"
-    src = work / f"src_{args.rank:02d}_{t_start:.1f}_{t_end:.1f}_{args.height}.mp4"
+    rm_tag = "_rm" + str(int(round(sum(q["end"] - q["start"] for q in removed) * 100))) if removed else ""
+    src = work / f"src_{args.rank:02d}_{t_start:.1f}_{t_end:.1f}{rm_tag}_{args.height}.mp4"
     if not src.exists():
-        parts = pieces(data["segments"], t_start, t_end)
+        parts = [part for a, b in kept for part in pieces(data["segments"], a, b)]
         if not parts:
             print("找不到对应的录像文件（可能已同步到 OSS 并从本地删除）", file=sys.stderr)
             return 1
         work.mkdir(parents=True, exist_ok=True)
         t0 = time.time()
-        cut_one(parts, src, False, args.height, None)
+        cut_one(parts, src, False, args.height, None, removed)
         print(f"源视频已剪好（{time.time() - t0:.0f} 秒）")
     width, height = probe_size(src)
 
     # 2. 字幕
     subs: dict = {"enabled": False}
     corrections: dict = {}
-    tr = load_transcript(sess_dir / "transcript.json")
     if edit["subtitles"]["enabled"] and tr:
         sub_cfg = load_config()
         try:
@@ -174,6 +199,8 @@ def main() -> int:
                           key=len, reverse=True)
         corrections = sub_cfg.get("corrections") or {}
         events = subtitle_events(tr["sentences"], t_start, t_end, style, corrections)
+        if removed:
+            events = compact_events(events, t_start, removed)
         subs = {"enabled": True, "style": style, "events": events, "keywords": keywords}
         print(f"字幕 {len(events)} 条（字体 {style['font']}）")
     elif edit["subtitles"]["enabled"]:
@@ -186,11 +213,18 @@ def main() -> int:
     job.mkdir(parents=True)
     link(src, job / "source.mp4")
     shift = edit["trim"]["start"]
+    source_origin = compact_time(t_start, removed)
     items = []
     for it in edit["items"]:
-        it = dict(it, start=round(it["start"] - shift, 3))
-        if it["start"] + it["duration"] <= 0 or it["start"] >= dur:
+        old_start = t_start + float(it["start"] - shift)
+        old_end = old_start + float(it["duration"])
+        new_start = max(0.0, compact_time(old_start, removed) - source_origin)
+        new_end = min(dur, compact_time(old_end, removed) - source_origin)
+        it = dict(it, start=round(new_start, 3), duration=round(new_end - new_start, 3))
+        if it["duration"] <= 0 or it["start"] >= dur:
             continue                                              # 在裁剪范围之外
+        if it["start"] + it["duration"] <= 0:
+            continue
         if it["type"] == "sticker":
             f = stickers_dir() / it["asset"]
             if not f.exists():

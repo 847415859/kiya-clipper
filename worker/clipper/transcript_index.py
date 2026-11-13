@@ -58,6 +58,7 @@ class Hit:
     score: float = 0.0
     flag: bool = False
     bg: set = field(default_factory=set, repr=False, compare=False)
+    shared: tuple = field(default=(), repr=False, compare=False)       # 和查询共有的内容二字组（检索重打分后填，调试用）
 
 
 def rows_from_sentences(sentences: list[dict]) -> list[tuple[int, float, float, str, int]]:

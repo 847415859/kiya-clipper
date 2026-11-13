@@ -2,8 +2,8 @@
 """看一个候选能找到什么跨场次呼应（只看、不写任何文件）。AI 剪辑初稿（autoedit.py）里会自动做同样的事，这个脚本用来调试检索质量。
 
 用法：
-  python scripts/callbacks.py output/kiya/20261112-2000/candidates.json --rank 3 --no-llm   # 只看检索到的历史段落（不花钱）
-  python scripts/callbacks.py output/kiya/20261112-2000/candidates.json --rank 3            # 再让大模型判断 + 程序校验
+  python scripts/callbacks.py output/20261112-2000/candidates.json --rank 3 --no-llm   # 只看检索到的历史段落（不花钱）
+  python scripts/callbacks.py output/20261112-2000/candidates.json --rank 3            # 再让大模型判断 + 程序校验
 
 输出：用了哪些查询句、检索方式（MySQL / 直接读 transcript.json）、命中的历史段落、大模型的判断和校验结果。
 """
@@ -63,9 +63,12 @@ def main() -> int:
     print("查询句：")
     for q in queries:
         print("  - " + q)
-    hits = cb.retrieve(index, sid, sess.name, queries, cbc)
+    hits = cb.retrieve(index, sid, sess.name, queries, cbc, cb.session_df(sents, a, b))
     passages = cb.build_passages(index, sid, hits, cbc)
-    print(f"\n命中 {len(hits)} 句，合并成 {len(passages)} 个历史段落：\n{cb.passages_text(passages)}")
+    print(f"\n过了分数门槛（{cbc['min_score']}）的命中 {len(hits)} 句，前 {min(len(hits), 8)} 句：")
+    for h in hits[:8]:
+        print(f"  {h.score:4.1f} {'⚑' if h.flag else ' '} {cb.date_label(h.session)} #{h.idx} {h.text[:40]}  共有：{'/'.join(h.shared)}")
+    print(f"合并成 {len(passages)} 个历史段落" + ("（没有够强的命中，不会调大模型）" if not passages else "") + f"：\n{cb.passages_text(passages)}")
     if args.no_llm or not passages:
         return 0
     client = LLMClient(cache_dir=sess.parent / "_llm_cache")

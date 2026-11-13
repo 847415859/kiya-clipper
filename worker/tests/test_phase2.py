@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from clipper.boundary import refine_bounds  # noqa: E402
+from clipper.boiler import business_cuts, compact_time, is_business_speech, keep_ranges  # noqa: E402
 from clipper.edit import density_problems, enforce_density, validate_edit  # noqa: E402
 from clipper.llm import LLMClient, extract_json, fill  # noqa: E402
 from clipper.peaks import laugh_counts  # noqa: E402
@@ -49,6 +50,29 @@ def test_refine_bounds():
     assert tiny["end"] - tiny["start"] == pytest.approx(30) and "补足" in tiny["note"]
     setup = refine_bounds(s, peak=107, punch=107, start=106, end=115)
     assert setup["start"] <= 107 - 8                      # 至少留 8 秒铺垫
+
+
+def test_business_speech_is_removed_from_middle_but_content_is_kept():
+    assert is_business_speech("晚上好大家")
+    assert is_business_speech("欢迎大家")
+    assert is_business_speech("谢谢小可爱的舰长和小花花")
+    assert is_business_speech("我看一下弹幕")
+    assert not is_business_speech("谢谢你提醒我这个问题")
+    s = sents((90, 94, "晚上好大家"), (95, 101, "今天这个游戏太离谱了"),
+              (102, 106, "谢谢小可爱的舰长"), (107, 114, "结果它真的又来了"))
+    cuts = business_cuts(s, 90, 115)
+    assert [(x["start"], x["end"]) for x in cuts] == [(90, 94), (102, 106)]
+    assert keep_ranges(90, 115, cuts) == [(94, 102), (106, 115)]
+    assert compact_time(94, cuts) == pytest.approx(90)
+    assert compact_time(103, cuts) == pytest.approx(95)
+
+
+def test_refine_bounds_records_business_cuts():
+    s = sents((90, 94, "铺垫"), (95, 99, "晚上好大家"), (100, 104, "真正的笑点"),
+              (105, 109, "谢谢小可爱的舰长"), (110, 115, "反应"))
+    r = refine_bounds(s, peak=103, punch=103, start=90, end=115, min_len=20)
+    assert r["removed"]
+    assert any("营业话" in x["reason"] for x in r["removed"])
 
 
 # ---------------------------------------------------------------- 笑声 / 尖叫 / 音乐

@@ -210,10 +210,18 @@ public class SessionService {
                 m.put("cutStart", w.path("start").asDouble());
                 m.put("cutEnd", w.path("end").asDouble());
                 m.put("cutRefined", w.path("refined").asBoolean(false));
+                m.put("cutRemoved", w.path("removed").isArray()
+                        ? om.convertValue(w.path("removed"), new TypeReference<List<Map<String, Object>>>() {})
+                        : List.of());
+                m.put("outputDuration", w.path("output_duration").isNumber()
+                        ? w.path("output_duration").asDouble()
+                        : w.path("end").asDouble() - w.path("start").asDouble());
             } else {
                 m.put("cutStart", m.get("clipStart"));
                 m.put("cutEnd", m.get("clipEnd"));
                 m.put("cutRefined", false);
+                m.put("cutRemoved", List.of());
+                m.put("outputDuration", ((Number) m.get("cutEnd")).doubleValue() - ((Number) m.get("cutStart")).doubleValue());
             }
         }
         Map<String, Object> out = new LinkedHashMap<>();
