@@ -33,7 +33,7 @@
           <el-button type="primary" :loading="searching" @click="doSearch">搜索</el-button>
           <span class="muted">来自斗图吧，仅内部测试用；下载后文件名带 net_ 前缀，记得补含义说明。</span>
         </div>
-        <div v-if="searchQ && !searchResults.length && !searching" class="muted">没搜到，换个词试试。</div>
+        <div v-if="searchQ && !searchResults.length && !searching && !searchFailed" class="muted">没搜到，换个词试试。</div>
         <div class="gallery">
           <div v-for="(u, i) in searchResults" :key="i" class="cell">
             <img :src="u" :alt="`${searchQ}${i}`" loading="lazy" />
@@ -76,6 +76,7 @@ const memes = ref([])
 const searchQ = ref('')
 const searchResults = ref([])
 const searching = ref(false)
+const searchFailed = ref(false)
 const metaDlg = reactive({ show: false, name: '', meaning: '', mood: '', avoid: '' })
 
 // 贴图文件名 → 绑定了它的梗列表（反向关联，方便删除前判断影响）
@@ -125,10 +126,13 @@ async function doSearch() {
   const q = searchQ.value.trim()
   if (!q) return
   searching.value = true
+  searchFailed.value = false
   searchResults.value = []
   try {
     searchResults.value = await api.searchSticker(q)
     if (!searchResults.value.length) ElMessage.info('没搜到，换个词试试')
+  } catch (e) {
+    searchFailed.value = true     // 错误提示已由请求拦截器弹出
   } finally {
     searching.value = false
   }

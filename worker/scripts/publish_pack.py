@@ -91,6 +91,8 @@ def main() -> int:
     ap.add_argument("--cover-theme", choices=sorted(COVER_THEMES), help="覆盖自动判断的主题")
     ap.add_argument("--cover-mode", choices=["programmatic", "seedream", "all"], default="programmatic",
                     help="封面方式：程序化、Seedream 生图或两者；默认程序化")
+    ap.add_argument("--cover-select", choices=["hero", "comic", "abstract", "seedream"],
+                    help="把已经生成好的某张候选设为主封面（不重新生成、不调生图接口）")
     ap.add_argument("--no-cover", action="store_true")
     ap.add_argument("--refresh", action="store_true", help="标题 / 简介 / 标签重新生成（覆盖后台改过的）")
     ap.add_argument("--config", default=None, help="主播配置；不填时按 candidates.json 所在目录推导主播")
@@ -145,7 +147,16 @@ def main() -> int:
                 source=streamer.get("live_url", ""), copyright="转载",
                 range={"start": round(a, 1), "end": round(b, 1)})
 
-    if not args.no_cover and (args.cover_t is not None or args.cover_text is not None or args.cover_variant is not None
+    if args.cover_select:
+        hit = next((x for x in pack.get("cover_variants") or [] if x.get("variant") == args.cover_select), None)
+        src_file = out_dir / str((hit or {}).get("file") or "")
+        if not hit or not src_file.is_file():
+            print(f"还没有生成过“{args.cover_select}”这张候选封面，先生成再选", file=sys.stderr)
+            return 1
+        shutil.copyfile(src_file, out_dir / f"{args.rank:02d}_cover.jpg")
+        pack.update(cover=f"{args.rank:02d}_cover.jpg", cover_variant=args.cover_select, cover_version=int(time.time()))
+        print(f"封面：改用已生成的候选 {hit.get('label') or args.cover_select}")
+    elif not args.no_cover and (args.cover_t is not None or args.cover_text is not None or args.cover_variant is not None
                               or args.cover_theme is not None or args.cover_mode != "programmatic" or not pack.get("cover")):
         punch = cand["clip_start"] + llm["punch_time"] if llm.get("punch_time", -1) >= 0 else cand["t"]
         if llm.get("cover_time", -1) >= 0:                    # 精排 v4 选的封面帧（有表情 / 关键动作的那一秒）优先于笑点时刻
@@ -168,6 +179,8 @@ def main() -> int:
                             "second": COVER_THEMES[args.cover_theme]["second"], "symbol": COVER_THEMES[args.cover_theme]["symbol"]})
         concept["headline"] = text.strip()[:18] if text is not None else concept["headline"]
         selected = args.cover_variant or pack.get("cover_variant") or "hero"
+        if args.cover_mode == "programmatic" and selected == "seedream":
+            selected = "hero"           # 当前是生图封面时点“重画封面”，重画的是程序化封面
         variant_files = []
         cover = out_dir / f"{args.rank:02d}_cover.jpg"
         try:
@@ -201,6 +214,11 @@ def main() -> int:
         except RuntimeError as e:
             print(f"封面生成失败：{e}", file=sys.stderr)
             return 1
+        # 这次没重新生成的候选（比如只重画了程序化封面时的生图那张）只要文件还在就保留，审核时还能选
+        fresh = {x["variant"] for x in variant_files}
+        for old in pack.get("cover_variants") or []:
+            if old.get("variant") not in fresh and (out_dir / str(old.get("file") or "")).is_file():
+                variant_files.append(old)
         if variant_files:
             chosen = next((x for x in variant_files if x["variant"] == selected), variant_files[0])
             pack.update(cover=cover.name, cover_t=round(t, 2), cover_text=text, cover_source=src,

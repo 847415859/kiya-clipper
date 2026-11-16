@@ -46,7 +46,7 @@ public class StickerService {
     private final WorkerPaths paths;
     private final ObjectMapper om;
     private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
+            .connectTimeout(Duration.ofSeconds(6))
             .followRedirects(HttpClient.Redirect.NORMAL)   // fabiaoqing 搜索页会 302 到 /search/bqb/...
             .build();
 
@@ -131,7 +131,7 @@ public class StickerService {
             HttpRequest req = HttpRequest.newBuilder(URI.create(url))
                     .header("User-Agent", UA)
                     .header("Referer", REFERER)
-                    .timeout(Duration.ofSeconds(15))
+                    .timeout(Duration.ofSeconds(10))
                     .GET().build();
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() != 200) {
@@ -149,9 +149,30 @@ public class StickerService {
             return out;
         } catch (ApiException e) {
             throw e;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw ApiException.badRequest("搜索被中断");
         } catch (Exception e) {
-            throw ApiException.badRequest("搜索失败：" + e.getMessage());
+            throw ApiException.badRequest(netError("搜索", e));
         }
+    }
+
+    /** 网络错误转成看得懂的提示。这个来源在服务器上实测会握手失败或超时（对方限速），不是我们这边能修的。 */
+    static String netError(String action, Exception e) {
+        Throwable c = e;
+        while (c.getCause() != null && c.getCause() != c) {
+            c = c.getCause();
+        }
+        String hint = "表情来源网站在服务器上连不上或很慢（对方限速，换个时间可能好）。"
+                + "可以在自己电脑上下载后，用“我的贴图”上传。";
+        if (e instanceof java.net.http.HttpTimeoutException || c instanceof java.net.SocketTimeoutException) {
+            return action + "超时：" + hint;
+        }
+        if (e instanceof javax.net.ssl.SSLException || c instanceof javax.net.ssl.SSLException
+                || e instanceof java.net.ConnectException || c instanceof java.net.ConnectException) {
+            return action + "失败（连接或 TLS 握手被拒绝）：" + hint;
+        }
+        return action + "失败：" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
     }
 
     /** 从网络 URL 下载一张图入库。文件名强制加 net_ 前缀，标记「版权未验证」，商用前清点这些。 */
@@ -171,8 +192,13 @@ public class StickerService {
                 throw ApiException.badRequest("下载失败：HTTP " + resp.statusCode());
             }
             data = resp.body();
+        } catch (ApiException e) {
+            throw e;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw ApiException.badRequest("下载被中断");
         } catch (Exception e) {
-            throw ApiException.badRequest("下载失败：" + e.getMessage());
+            throw ApiException.badRequest(netError("下载", e));
         }
         if (data.length < 3 || data.length > MAX_BYTES) {
             throw ApiException.badRequest("图片大小不对（3 字节 ~ 5 MB）");

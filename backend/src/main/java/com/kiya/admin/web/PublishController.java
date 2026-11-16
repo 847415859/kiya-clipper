@@ -46,10 +46,14 @@ public class PublishController {
         return publish.save(name, rank, req.title(), req.description(), req.tags());
     }
 
-    public record CoverReq(Double t, String text, String variant, String theme, String mode) {}
+    /** select = 把已生成的某张候选设为主封面（不重新生成）；不填时按其他字段生成 / 重画。 */
+    public record CoverReq(Double t, String text, String variant, String theme, String mode, String select) {}
 
     @PostMapping("/cover")
     public Map<String, Object> cover(@PathVariable String name, @PathVariable int rank, @RequestBody CoverReq req) {
+        if (req.select() != null && !req.select().isBlank()) {
+            return publish.selectCover(name, rank, req.select());
+        }
         return publish.cover(name, rank, req.t(), req.text(), req.variant(), req.theme(), req.mode());
     }
 

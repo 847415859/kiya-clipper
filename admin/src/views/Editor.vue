@@ -438,7 +438,7 @@
             <el-button type="primary" :loading="searching" @click="doSearch">搜索</el-button>
             <span class="muted">来自斗图吧，仅内部测试用；下载后文件名带 net_ 前缀，商用前换成授权素材。</span>
           </div>
-          <div v-if="searchQ && !searchResults.length && !searching" class="muted">没搜到，换个词试试。</div>
+          <div v-if="searchQ && !searchResults.length && !searching && !searchFailed" class="muted">没搜到，换个词试试。</div>
           <div class="gallery">
             <div v-for="(u, i) in searchResults" :key="i" class="cell">
               <img :src="u" :alt="`${searchQ}${i}`" loading="lazy" />
@@ -806,6 +806,7 @@ const galleryTab = ref('mine')
 const searchQ = ref('')
 const searchResults = ref([])
 const searching = ref(false)
+const searchFailed = ref(false)
 
 async function loadStickers() {
   stickers.value = await api.stickers()
@@ -824,10 +825,13 @@ async function doSearch() {
   const q = searchQ.value.trim()
   if (!q) return
   searching.value = true
+  searchFailed.value = false
   searchResults.value = []
   try {
     searchResults.value = await api.searchSticker(q)
     if (!searchResults.value.length) ElMessage.info('没搜到，换个词试试')
+  } catch (e) {
+    searchFailed.value = true     // 错误提示已由请求拦截器弹出
   } finally {
     searching.value = false
   }
@@ -979,8 +983,16 @@ async function makeCover(variant = null, mode = null) {
   }
 }
 
-function chooseCoverVariant(variant) {
-  makeCover(variant)
+async function chooseCoverVariant(variant) {
+  if (variant === pack.value.cover_variant || covering.value) return
+  covering.value = true
+  try {
+    // 只把已经生成好的那张设为主封面，不重画、不重新调生图接口
+    pack.value = { ...pack.value, ...(await api.publishCover(name.value, rank.value, { select: variant })) }
+    ElMessage.success('已设为封面')
+  } finally {
+    covering.value = false
+  }
 }
 
 async function savePack() {
@@ -1259,12 +1271,15 @@ onBeforeUnmount(() => {
 .topbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 16px; background: #fff; border-bottom: 1px solid var(--el-border-color-light); }
 .topbar .spacer, .controls .spacer { flex: 1; }
 .empty-all { padding: 60px; text-align: center; color: var(--muted); display: flex; flex-direction: column; gap: 16px; align-items: center; }
-.body { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 360px; }
+.body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) clamp(400px, 32vw, 560px); }
 .left { padding: 16px; overflow: auto; }
 .right { border-left: 1px solid var(--el-border-color-light); overflow: auto; padding: 12px; background: #fff; display: flex; flex-direction: column; gap: 12px; }
+/* 卡片按内容撑开、整列一起滚动；不加这句时卡片会被纵向 flex 压扁，每张各出一个小滚动条 */
+.right > .card { flex: none; }
 .card :deep(.el-card__header) { padding: 10px 14px; }
 .card :deep(.el-card__body) { padding: 12px 14px; }
-.stage { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; overflow: hidden; border-radius: 6px; user-select: none; }
+/* 预览画面限制高度（按 16:9 换算宽度），把纵向空间留给时间轴；宽屏时居中 */
+.stage { position: relative; width: 100%; max-width: max(480px, calc((100vh - 420px) * 16 / 9)); margin: 0 auto; aspect-ratio: 16 / 9; background: #000; overflow: hidden; border-radius: 6px; user-select: none; }
 .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .overlay { position: absolute; inset: 0; }
 .ov { position: absolute; cursor: move; white-space: pre; line-height: 1.15; font-weight: 900; text-align: center; }

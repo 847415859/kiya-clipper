@@ -112,6 +112,17 @@ public class PublishService {
         return runPack(session, rank, extra, 120);
     }
 
+    /** 已生成的候选封面（程序化三种构图 + Seedream 生图）。 */
+    static final List<String> COVER_VARIANTS = List.of("hero", "comic", "abstract", "seedream");
+
+    /** 把已经生成好的某张候选设为主封面：只复制文件、更新发布包，不重新生成，也不调生图接口。 */
+    public Map<String, Object> selectCover(String session, int rank, String variant) {
+        if (!COVER_VARIANTS.contains(variant)) {
+            throw ApiException.badRequest("封面候选不合法");
+        }
+        return runPack(session, rank, List.of("--cover-select", variant), 30);
+    }
+
     /** 标题 / 简介 / 标签重新按精排结果生成（覆盖改过的）。 */
     public Map<String, Object> regenerate(String session, int rank) {
         return runPack(session, rank, List.of("--refresh", "--no-cover"), 60);
@@ -195,7 +206,7 @@ public class PublishService {
         checkRank(rank);
         String file = String.format("%02d_cover%s.jpg", rank,
                 variant == null || variant.isBlank() ? "" : "_" + variant);
-        if (variant != null && !variant.isBlank() && !List.of("hero", "comic", "abstract").contains(variant)) {
+        if (variant != null && !variant.isBlank() && !COVER_VARIANTS.contains(variant)) {   // 生图那张也要能预览
             throw ApiException.badRequest("封面构图不合法");
         }
         return WorkerPaths.inside(paths.output(),

@@ -255,7 +255,17 @@ python scripts/agent_run.py output/<场次>/candidates.json --ranks 2 5 --stop-a
 python scripts/agent_run.py output/<场次>/candidates.json --dry-run
 ```
 
-状态写入 `output/<场次>/agent_run.json`，命令输出写入 `agent_run.log`。重复执行会从未完成阶段继续；要重新生成 AI 初稿时使用 `--force`，它不会删除人工终稿。没有精排 `pick` 时不会自动把未判断的候选送去渲染。
+状态写入 `output/<场次>/agent_run.json`，命令输出边跑边打印，同时写入 `agent_run.log`。
+
+- **续跑按“阶段 + 候选”记录**：中途失败或精排选中的候选变了，重新运行只补没做完的那几步，已经渲染好的候选不会再渲染一遍。
+- **精排默认沿用**：场次里已有 `rerank.json` 就不再调大模型（省钱，也不覆盖已有结论）；要重新精排加 `--rerank`。
+- **剪辑脚本**：人工在后台保存过的（带 `human_saved_at`）永远不覆盖，直接用人工终稿往下走；已有但不是人工保存的默认沿用。
+- **`--force`**：忽略已有进度，全部重跑（含精排和渲染），并重新生成 AI 初稿；人工终稿仍然保护。
+- **质检**：没通过时默认只记录（状态为 `done_with_quality_issues`，明细在 `agent_run.json` 的 `quality`），不让编排失败；加 `--strict-quality` 才失败。剪辑脚本校验的提醒（比如贴图不在库里）写进 `warnings`。
+- **`--timeout`**：单步超时会连同它启动的子进程（node / Chrome）一起结束。
+- **`--dry-run`**：和真正运行用同一套选候选规则；还没精排时只列出精排命令，并说明精排后再选。
+- 默认 480p 是为了先验证链路；正式出片要和发布配置一致（目前是 `--height 720`）。
+- 没有精排 `pick` 时不会自动把未判断的候选送去渲染。
 
 ```bash
 # 1. 精排：每个候选抽 8 张截图 + 片段内原话 + 片段前 60 秒前情 + 弹幕 / 礼物，交给多模态大模型

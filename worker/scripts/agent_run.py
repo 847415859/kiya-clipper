@@ -6,8 +6,10 @@
   python scripts/agent_run.py output/<场次>/candidates.json --ranks 2 5 --stop-after autoedit
   python scripts/agent_run.py output/<场次>/candidates.json --dry-run
 
-状态和日志写在场次目录的 agent_run.json / agent_run.log。重复运行会从未完成阶段继续；
-需要重新生成 AI 初稿时使用 --force，避免意外覆盖人工脚本。
+状态和日志写在场次目录的 agent_run.json / agent_run.log。重复运行时按“阶段 + 候选”续跑，
+只补没做完的那几步。已有 rerank.json 时默认沿用，不重新花钱精排（--rerank 才重做）。
+--force 忽略已有进度、全部重跑（含精排和渲染）；人工在后台保存过的剪辑脚本永远不会被覆盖。
+质检没通过默认只记录、不让编排失败；加 --strict-quality 才失败。
 """
 from __future__ import annotations
 
@@ -28,8 +30,11 @@ def main() -> int:
     ap.add_argument("--max-ranks", type=int, default=3, help="没有 --ranks 时最多处理几条精排 pick，默认 3")
     ap.add_argument("--height", type=int, choices=[360, 480, 720, 1080], default=480)
     ap.add_argument("--config", type=Path, help="主播配置；不填时按场次目录推导")
-    ap.add_argument("--force", action="store_true", help="重新执行阶段，并允许覆盖 AI 初稿；不会删除人工终稿")
-    ap.add_argument("--timeout", type=int, help="单个工具的超时时间（秒）")
+    ap.add_argument("--force", action="store_true",
+                    help="忽略已有进度全部重跑（含精排、渲染），并重新生成 AI 初稿；人工保存过的剪辑脚本不会被覆盖")
+    ap.add_argument("--rerank", action="store_true", help="已有 rerank.json 也重新精排（默认沿用，省钱）")
+    ap.add_argument("--strict-quality", action="store_true", help="质检没通过时让编排失败（默认只记录）")
+    ap.add_argument("--timeout", type=int, help="单个工具的超时时间（秒）；超时会连同它启动的子进程一起结束")
     ap.add_argument("--stop-after", choices=STAGES, help="完成指定阶段后停止，方便分步检查")
     ap.add_argument("--dry-run", action="store_true", help="只打印白名单命令，不调用模型、渲染器或写状态")
     args = ap.parse_args()
@@ -37,10 +42,15 @@ def main() -> int:
     try:
         runner = AgentOrchestrator(args.candidates, ranks=args.ranks, max_ranks=args.max_ranks,
                                    height=args.height, config=args.config, force=args.force,
-                                   timeout=args.timeout)
+                                   timeout=args.timeout, rerank=args.rerank, strict_quality=args.strict_quality)
         if args.dry_run:
-            for i, command in enumerate(runner.plan(), 1):
+            commands = runner.plan()
+            for i, command in enumerate(commands, 1):
                 print(f"{i:02d}. {' '.join(command)}")
+            if not commands:
+                print("（没有要执行的命令：精排结果和剪辑脚本都可以沿用）")
+            if runner.plan_note:
+                print(runner.plan_note)
             return 0
         return runner.run(stop_after=args.stop_after)
     except AgentRunError as e:
