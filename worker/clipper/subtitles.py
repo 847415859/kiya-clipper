@@ -318,7 +318,9 @@ def font_available(family: str) -> bool:
 
 def _filter_path(p: Path) -> str:
     s = p.as_posix()
-    return s.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    # subprocess 直接传参数，没有 shell；仍需分别经过滤镜图和选项值两层解析。
+    option = "".join("\\" + ch if ch in "\\':" or ch.isspace() else ch for ch in s)
+    return "".join("\\" + ch if ch in "\\'[],;" or ch.isspace() else ch for ch in option)
 
 
 def ass_filter(ass_path: Path) -> str:

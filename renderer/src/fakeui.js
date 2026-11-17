@@ -54,7 +54,7 @@ export function fakeUiView(item, W, H, a) {
           { style: { width: 64 * k, height: 64 * k, borderRadius: '50%', background: `hsl(${hue(title)}, 65%, 55%)`, color: '#fff', fontSize: 32 * k, fontWeight: 800,
                      display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }, text: [...(title || '路')][0] },
           { style: { display: 'flex', flexDirection: 'column', gap: 4 * k, minWidth: 0 }, children: [
-            { style: { fontSize: 24 * k, color: '#6b7280', fontWeight: 700 }, text: title },
+            { style: { fontSize: 24 * k, color: '#6b7280', fontWeight: 700 }, text: `${title} · 剪辑演绎` },
             { style: { fontSize: 34 * k, color: '#111827', fontWeight: 700, lineHeight: 1.3, whiteSpace: 'pre-wrap' }, text }
           ] }
         ]

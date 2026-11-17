@@ -34,7 +34,7 @@ from clipper.stickers import offer_text as sticker_offer_text, offered as offere
 from clipper import callbacks as cb_lib  # noqa: E402
 from clipper import music as music_lib  # noqa: E402
 from clipper.transcript_index import open_index  # noqa: E402
-from clipper.edit import (EditError, enforce_density, ensure_caption, limit_overlays, limit_stickers, snap_to_beats,  # noqa: E402
+from clipper.edit import (EditError, enforce_density, ensure_caption, finalize_caption, limit_overlays, limit_stickers, snap_to_beats,  # noqa: E402
                           suggest_window, validate_edit, validate_item)
 from clipper.editdiff import edit_taste, taste_text  # noqa: E402
 from clipper.llm import LLMClient, fill, load_prompt  # noqa: E402
@@ -244,6 +244,9 @@ def main() -> int:
         if len(edit["items"]) > v["max_items"]:
             dropped += edit["items"][v["max_items"]:]
             edit["items"] = edit["items"][:v["max_items"]]
+        # 密度裁剪、梗过滤和卡点之后再检查，必要前情不能被装饰效果挤掉。
+        edit, caption_dropped = finalize_caption(edit, caption, v["max_items"])
+        dropped += caption_dropped
         try:
             edit = validate_edit(edit, clip_len)
         except EditError as e:

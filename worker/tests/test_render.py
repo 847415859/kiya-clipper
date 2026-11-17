@@ -17,6 +17,16 @@ from clipper.edit import EditError, validate_edit  # noqa: E402
 pytestmark = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="需要 ffmpeg")
 
 
+def test_render_override_preserves_native_paths_with_spaces(tmp_path, monkeypatch):
+    import os
+    import shlex
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from render import render_cmd
+    args = [sys.executable, str(tmp_path / "fake render.py")]
+    monkeypatch.setenv("KIYA_RENDER_CMD", subprocess.list2cmdline(args) if os.name == "nt" else shlex.join(args))
+    assert render_cmd() == args
+
+
 def test_validate_edit():
     e = validate_edit({"trim": {"start": 5, "end": 50}, "items": [
         {"type": "zoom", "start": 20, "duration": 2},

@@ -136,6 +136,10 @@
       </section>
 
       <aside class="right">
+        <ViewerReview :edit="edit" :llm="info.llm" :pack="pack" :quality="info.quality"
+                      :cover-url="pack.cover ? api.coverUrl(name, rank, pack.cover_version) : ''"
+                      :final-file="latestFinal"
+                      @caption="addContextCaption" @seek="seek" @preview="openViewerPreview" />
         <el-card shadow="never" class="card">
           <template #header><b>字幕</b></template>
           <el-form label-width="64px" size="small">
@@ -449,8 +453,20 @@
       </el-tabs>
     </el-dialog>
 
-    <el-dialog :model-value="!!finalFile" :title="finalFile" width="900px" destroy-on-close @close="finalFile = ''">
-      <video v-if="finalFile" :src="api.finalUrl(name, finalFile)" controls autoplay style="width: 100%" />
+    <el-dialog :model-value="!!finalFile" :title="finalFile" width="min(94vw, 900px)" destroy-on-close @close="finalFile = ''">
+      <div class="viewer-controls">
+        <el-switch v-model="finalPhone" active-text="手机宽度（390px）" aria-label="手机宽度（390px）" />
+        <el-switch v-model="finalMuted" active-text="静音检查" aria-label="静音检查" />
+        <el-button size="small" @click="playFinal(3)">只看前 3 秒</el-button>
+        <el-button size="small" @click="playFinal()">从头完整播放</el-button>
+      </div>
+      <div class="final-view" :class="{ phone: finalPhone }">
+        <video v-if="finalFile" ref="finalVideo" :src="api.finalUrl(name, finalFile)" controls playsinline
+               :muted="finalMuted" preload="metadata" @timeupdate="checkFinalTime" />
+      </div>
+      <p class="muted">{{ pack.title || '尚未设置发布标题' }}</p>
+      <p class="muted">这里播放已渲染的文件，保存编辑不会更新它，需要重新渲染。手机宽度不改变导出画幅；声音检查需要关闭静音。</p>
+      <el-alert v-if="dirty" title="当前编辑尚未保存；这里播放的是已渲染的版本。保存并重新渲染后再验收。" type="warning" :closable="false" />
       <template #footer>
         <a v-if="finalFile" :href="api.finalUrl(name, finalFile)" :download="finalFile"><el-button>下载</el-button></a>
       </template>
@@ -479,6 +495,8 @@ import { api, hms } from '../api'
 import { cameraAt, enterExit, outlineShadow } from '../../../renderer/src/anim.js'
 import { narrationView, fakeUiView } from '../../../renderer/src/fakeui.js'
 import FxView from '../components/FxView.vue'
+import ViewerReview from '../components/ViewerReview.vue'
+import { makeCaption } from '../viewer-review'
 
 const route = useRoute()
 const router = useRouter()
@@ -519,7 +537,7 @@ const generatedBy = ref('')
 const aiNote = ref('')
 let restoredAi = false           // 刚点了“还原 AI 原稿”：下一次保存不算人工修改
 const info = reactive({ aiDraft: null, clipLen: 60, clip: null, preview: null, t: 0, finals: [], llm: null, exists: false,
-  candidate: { start: 0, end: 60 }, videoWindow: null, variants: [], chosenVariant: null })
+  candidate: { start: 0, end: 60 }, videoWindow: null, variants: [], chosenVariant: null, quality: null })
 const edit = reactive({ window: { start: 0, end: 60 }, trim: { start: 0, end: 60 }, subtitles: { enabled: true }, items: [], music: null, callback: null })
 const callbackRelation = { flag_payoff: '立 flag 与打脸', reversal: '话题前后反转' }
 const callbackLen = computed(() => {
@@ -545,6 +563,37 @@ const playing = ref(false)
 const dirty = ref(false)
 const gallery = ref(false)
 const finalFile = ref('')
+const latestFinal = computed(() => [...info.finals].sort((a, b) => (a.modified || 0) - (b.modified || 0)).at(-1)?.file || '')
+const finalVideo = ref(null)
+const finalPhone = ref(false)
+const finalMuted = ref(false)
+let finalStopAt = null
+watch(finalFile, () => {
+  finalStopAt = null
+  if (finalFile.value) video.value?.pause()
+})
+function openViewerPreview(file) { finalPhone.value = true; finalFile.value = file }
+function playFinal(stopAt = null) {
+  if (!finalVideo.value) return
+  finalStopAt = stopAt
+  finalVideo.value.currentTime = 0
+  finalVideo.value.play().catch(() => ElMessage.info('请点击视频播放按钮'))
+}
+function checkFinalTime() {
+  if (finalStopAt !== null && finalVideo.value?.currentTime >= finalStopAt) {
+    finalVideo.value.pause()
+    finalStopAt = null
+  }
+}
+function addContextCaption(caption) {
+  const item = makeCaption(edit, caption)
+  if (!item) return
+  item.id = newId()
+  edit.items.push(item)
+  selected.value = item.id
+  seek(item.start)
+  ElMessage.success('已补前情，请核对事实、阅读时间及效果重叠后保存')
+}
 const video = ref(null)
 const stage = ref(null)
 const track = ref(null)
@@ -864,7 +913,7 @@ async function load() {
   try {
     const r = await api.getEdit(name.value, rank.value)
     Object.assign(info, { clipLen: r.clipLen, clip: r.clip, preview: r.preview || null, t: r.t, finals: r.finals || [],
-      llm: r.llm || null, exists: !!r.exists, aiDraft: r.aiDraft || null, variants: r.variants || [], chosenVariant: r.chosenVariant || null, candidate: r.candidate || { start: 0, end: r.clipLen } })
+      llm: r.llm || null, exists: !!r.exists, aiDraft: r.aiDraft || null, variants: r.variants || [], chosenVariant: r.chosenVariant || null, quality: r.quality || null, candidate: r.candidate || { start: 0, end: r.clipLen } })
     info.videoWindow = null
     videoSrc.value = ''
     pickVideo()
@@ -937,6 +986,7 @@ async function render(height) {
       if (s.status === 'SUCCESS') {
         const r = await api.getEdit(name.value, rank.value)
         info.finals = r.finals || []
+        info.quality = r.quality || null
         ElMessage.success('渲染完成')
         break
       }
@@ -1232,6 +1282,7 @@ function back() {
 }
 
 function onKey(e) {
+  if (finalFile.value) return
   const tag = (e.target && e.target.tagName) || ''
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || e.ctrlKey || e.metaKey || e.altKey) return
   if (e.key === ' ') { e.preventDefault(); togglePlay() }
@@ -1265,6 +1316,10 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .editor { height: 100%; display: flex; flex-direction: column; }
+.viewer-controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.final-view { width: 100%; margin: 0 auto; background: #000; }
+.final-view.phone { width: 390px; max-width: 100%; }
+.final-view video { display: block; width: 100%; }
 .meme-row { padding: 4px 0; border-bottom: 1px dashed var(--el-border-color-lighter); }
 .meme-row.sel { background: var(--el-fill-color-light); }
 .meme-del { float: right; }

@@ -16,6 +16,18 @@ from clipper.subtitles import (StyleError, ass_color, build_events, chunk_senten
 STYLE = validate_style({})
 
 
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="需要 ffmpeg")
+def test_subtitle_filter_handles_special_path_characters(tmp_path):
+    from clipper.subtitles import ass_filter
+    folder = tmp_path / "with spaces"
+    folder.mkdir()
+    ass = folder / "it's,[preview];take.ass"
+    ass.write_text(to_ass([{"t0": 0, "t1": 1, "text": "Readable caption"}], STYLE), encoding="utf-8")
+    result = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=s=640x360:d=1",
+                             "-vf", ass_filter(ass), "-frames:v", "1", "-f", "null", "-"], capture_output=True)
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
 def words(text, t0=0.0, step=0.2):
     return [[t0 + i * step, t0 + (i + 1) * step, ch] for i, ch in enumerate(text)]
 

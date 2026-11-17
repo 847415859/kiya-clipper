@@ -276,6 +276,12 @@ public class EditService {
         out.put("preview", findPreview(session, rank, ws, we));
         out.put("finals", finals(session, rank));
         out.put("llm", llm);
+        Path quality = paths.sessionDir(session).resolve("quality").resolve(String.format("%02d.json", rank));
+        try {
+            out.put("quality", Files.exists(quality) ? om.readValue(quality.toFile(), new TypeReference<Map<String, Object>>() {}) : null);
+        } catch (IOException ex) {
+            out.put("quality", null);
+        }
         out.put("exists", Files.exists(f));
         out.put("aiDraft", aiDraft(session, rank));
         Map<String, Object> variants = readVariants(session, rank);

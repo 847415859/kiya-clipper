@@ -292,18 +292,40 @@ def limit_stickers(items: list[dict], max_per_clip: int = 2) -> tuple[list[dict]
 
 
 def ensure_caption(items: list[dict], caption: str, trim: dict) -> list[dict]:
-    """精排给了前情字幕，但大模型没放（或放歪了）：在成片开头补一条。不需要字幕、或开头 6 秒内已有这段字就原样返回。"""
+    """确保完整前情在成片开头可见；裁剪外、只匹配前几个字的花字不算。"""
     caption = (caption or "").strip()[:40]
     if not caption or caption.startswith("（"):
         return items
-    head = caption[:4]
     t0, t1 = float(trim["start"]), float(trim["end"])
-    if any(i["type"] == "text" and head in i.get("text", "") and i["start"] < t0 + 6 for i in items):
+    if any(i["type"] == "text" and caption in i.get("text", "") and t0 <= i["start"] <= t0 + 1
+           and min(t1, i["start"] + i["duration"]) - i["start"] + 0.001 >= min(2, t1 - t0 - 0.2) for i in items):
         return items
-    dur = round(min(3.0, max(1.0, t1 - t0 - 0.4)), 2)
+    dur = round(min(max(3.0, len(caption) / 7), t1 - t0 - 0.2), 2)
     cap = validate_item({"type": "text", "text": caption, "start": round(t0 + 0.2, 2), "duration": dur, "preset": "fade",
                          "x": 0.5, "y": 0.12, "size": 70, "color": "#FFFFFF"}, t1)
     return [cap] + [i for i in items]
+
+
+def finalize_caption(edit: dict, caption: str, max_items: int) -> tuple[dict, list[dict]]:
+    """AI 编排最后一步保留必要前情，为它让出效果数量与并发位置。"""
+    items = ensure_caption(edit.get("items") or [], caption, edit["trim"])
+    text = (caption or "").strip()[:40]
+    if not text or text.startswith("（"):
+        return edit, []
+    t0, t1 = edit["trim"]["start"], edit["trim"]["end"]
+    cap = next(i for i in items if i["type"] == "text" and text in i.get("text", "")
+               and t0 <= i["start"] <= t0 + 1
+               and min(t1, i["start"] + i["duration"]) - i["start"] + 0.001 >= min(2, t1 - t0 - 0.2))
+    kept, dropped, overlapping = [cap], [], False
+    for it in sorted((i for i in items if i is not cap), key=lambda i: i["start"]):
+        overlap = it["start"] < cap["start"] + cap["duration"] and it["start"] + it["duration"] > cap["start"]
+        if len(kept) >= max(1, max_items) or (overlap and overlapping):
+            dropped.append(it)
+            continue
+        kept.append(it)
+        overlapping = overlapping or overlap
+    result, dense = enforce_density(dict(edit, items=kept))
+    return result, dropped + dense
 
 
 SNAP_TOL = 0.2          # 效果开始时刻离最近的鼓点不超过 0.2 秒才吸附（再远就是故意放在别处）

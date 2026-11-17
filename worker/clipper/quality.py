@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import math
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -213,6 +214,7 @@ def _subtitle_check(report: QualityReport, session_dir: Path, rank: int, edit: d
         report.check("subtitles", status, events=len(events), invalid=len(bad), props=str(props))
         if bad:
             report.issue("subtitle_time_invalid", "error", "字幕时间超出成片范围或无效", count=len(bad))
+        _subtitle_readability(report, events, data["subtitles"].get("style") or {}, data.get("width"), data.get("height"))
         return
     trans = _load(session_dir / "transcript.json")
     sidecars = list((session_dir / "clips").glob(f"{rank:02d}_*.srt")) + list((session_dir / "clips").glob(f"{rank:02d}_*.ass"))
@@ -224,6 +226,34 @@ def _subtitle_check(report: QualityReport, session_dir: Path, rank: int, edit: d
     else:
         report.check("subtitles", "warning", reason="没有转写")
         report.issue("transcript_missing", "warning", "已启用字幕但场次没有转写")
+
+
+def _subtitle_readability(report: QualityReport, events: list[dict], style: dict, width=None, height=None) -> None:
+    """以真实渲染字幕给出阅读提醒；启发式阈值不等同于人工观感验收。"""
+    readable, fast = [], []
+    for e in events:
+        text = str(e.get("text") or "")
+        chars = len(re.sub(r"[\s，。？！、；：,.!?;:…]", "", text))
+        if not chars:
+            continue
+        readable.append(e)
+        a, b = _number(e.get("t0")), _number(e.get("t1"))
+        if a is None or b is None or not math.isfinite(a) or not math.isfinite(b) or b <= a:
+            continue
+        if chars >= 4 and (b - a < 0.7 or chars / (b - a) > 10):
+            fast.append({"t0": a, "t1": b, "text": text, "chars_per_second": round(chars / (b - a), 1)})
+    if not readable:
+        report.issue("subtitle_empty", "warning", "已启用字幕，但渲染字幕事件没有可读文字")
+    if fast:
+        report.issue("subtitle_reading_speed", "warning", "部分字幕停留过短或每秒超过 10 个字，请在手机宽度下复看", count=len(fast), examples=fast[:8])
+    font, w, h = _number(style.get("font_size")), _number(width), _number(height)
+    phone_size = font / 1080 * (390 * h / w) if font and w and h and w > 0 and h > 0 else None
+    small = phone_size is not None and phone_size < 12
+    if small:
+        report.issue("subtitle_phone_size", "warning", "字幕在 390px 宽度下估计小于 12px，请检查手机可读性", estimated_px=round(phone_size, 1))
+    report.check("subtitle_readability", "warning" if fast or small or not readable else "pass",
+                 events=len(readable), fast=len(fast), phone_font_px=round(phone_size, 1) if phone_size is not None else None,
+                 heuristic=True)
 
 
 def _business_check(report: QualityReport, session_dir: Path, rank: int, start: float, end: float) -> None:

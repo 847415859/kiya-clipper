@@ -67,7 +67,9 @@ def load_env() -> None:
 
 def render_cmd() -> list[str]:
     if os.environ.get("KIYA_RENDER_CMD"):              # 测试时替换成假的渲染器
-        return shlex.split(os.environ["KIYA_RENDER_CMD"])
+        parts = shlex.split(os.environ["KIYA_RENDER_CMD"], posix=os.name != "nt")
+        # Windows 路径中的反斜线不能按 POSIX 转义吞掉；Popen(list) 会自行处理参数引号。
+        return [p[1:-1] if os.name == "nt" and len(p) >= 2 and p[0] == p[-1] and p[0] in "\"'" else p for p in parts]
     renderer = REPO / "renderer"
     if not (renderer / "node_modules").exists():
         sys.exit(f"渲染器还没安装依赖：cd {renderer} && npm install --registry=https://registry.npmmirror.com")
