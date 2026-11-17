@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -30,7 +31,7 @@ sys.path.insert(0, str(ROOT))
 from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.streamer import (decisions_path as streamer_decisions_path, output_root,  # noqa: E402
                               resolve_config, reviews_dir, streamer_from_args)
-from clipper.bili import Bili, BiliError  # noqa: E402
+from clipper.bili import Bili, BiliError, memory_cookie_file  # noqa: E402
 from clipper.editdiff import edit_taste  # noqa: E402
 from clipper.env import load_env  # noqa: E402
 from clipper.memory import (DEFAULT_WEIGHTS, active_weights, build_examples, calibrate, load_marks,  # noqa: E402
@@ -40,8 +41,8 @@ MEM_DEFAULTS = {"min_sessions": 2, "lore_max": 30, "streamer_uploads": 20, "my_u
                 "min_label_sessions": 3, "examples_yes": 3, "examples_no": 3}
 
 
-def decisions_path() -> Path:
-    return Path(os.environ.get("KIYA_MEMORY_DECISIONS") or streamer_decisions_path())
+def decisions_path(streamer_id=None) -> Path:
+    return Path(os.environ.get("KIYA_MEMORY_DECISIONS") or streamer_decisions_path(streamer_id))
 
 
 def read_json(p: Path, default):
@@ -72,6 +73,42 @@ def collect_ngrams(out_dir: Path) -> dict[str, dict]:
     return per
 
 
+def fetch_my_uploads(b: Bili, uid: str, limit: int, cached: list[dict], published: dict, errors: list[str]) -> list[dict]:
+    """Account listing and explicitly bound videos are independent reads, with bounded fallback."""
+    if uid:
+        try:
+            rows = b.uploads(uid, limit)
+            mine = []
+            for row in rows:
+                try:
+                    mine.append({**row, **b.stat(row["bvid"])})
+                except BiliError as e:
+                    mine.append(row)
+                    errors.append(f"{row['bvid']} 数据拉取失败：{e}")
+            return mine
+        except BiliError as e:
+            errors.append(f"切片号投稿列表拉取失败，保留缓存并尝试查询已绑定 BV：{e}")
+    mine = {row["bvid"]: {**row, "stats_stale": True} for row in cached if row.get("bvid")}
+    targets = [bvid for bvid, link in reversed(list(published.items()))
+               if re.fullmatch(r"BV[0-9A-Za-z]{10}", bvid) and isinstance(link, dict) and link.get("session") and link.get("rank")]
+    targets = targets[:min(30, max(0, limit))]
+    updated = 0
+    for bvid in targets:
+        try:
+            row = b.stat(bvid)
+            if uid and str(row.get("owner_mid") or "") != uid:
+                mine.pop(bvid, None)
+                errors.append(f"{bvid} 投稿 UID 与配置的切片号 UID 不一致或无法确认，未用于切片号统计")
+                continue
+            mine[bvid] = {**mine.get(bvid, {}), **row, "stats_stale": False, "data_source": "bound_bv"}
+            updated += 1
+        except BiliError as e:
+            errors.append(f"已绑定 {bvid} 数据拉取失败，保留已有缓存：{e}")
+    if targets:
+        print(f"已绑定 BV 独立查询：更新 {updated}/{len(targets)} 条（不依赖投稿列表）")
+    return list(mine.values())
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=None, help="主播配置；不填时按 --streamer 找 config/streamers/<id>.yaml")
@@ -83,20 +120,20 @@ def main() -> int:
 
     load_env()
     streamer_id = streamer_from_args(args.streamer)
-    cfg = load_cfg(resolve_config(args.config, streamer=streamer_id))
+    dec = read_json(decisions_path(streamer_id), {}) or {}
+    cfg = load_cfg(resolve_config(args.config, streamer=streamer_id), decisions=dec)
     mc = {**MEM_DEFAULTS, **(cfg.get("memory") or {})}
     out_dir = Path(args.out) if args.out else output_root(streamer_id)
     rev_dir = Path(args.reviews) if args.reviews else reviews_dir(streamer_id)
     mem_file = out_dir / "_memory" / "memory.json"
     old = read_json(mem_file, {}) or {}
-    dec = read_json(decisions_path(), {}) or {}
     t0 = time.time()
     errors = []
 
     # 1. B站投稿
     su, mine = old.get("streamer_uploads") or [], old.get("my_uploads_raw") or []
     if not args.no_fetch:
-        b = Bili()
+        b = Bili(cookie_file=memory_cookie_file(cfg))
         uid = (cfg.get("streamer") or {}).get("uid")
         try:
             if uid:
@@ -105,19 +142,9 @@ def main() -> int:
         except BiliError as e:
             errors.append(f"主播投稿拉取失败，沿用上次的：{e}")
         my_uid = str(dec.get("my_uid") or "").strip()
-        if my_uid:
-            try:
-                lst = b.uploads(my_uid, int(mc["my_uploads"]))
-                mine = []
-                for u in lst:
-                    try:
-                        mine.append({**u, **b.stat(u["bvid"])})
-                    except BiliError as e:
-                        mine.append(u)
-                        errors.append(f"{u['bvid']} 数据拉取失败：{e}")
-                print(f"切片号投稿：{len(mine)} 条")
-            except BiliError as e:
-                errors.append(f"切片号投稿拉取失败，沿用上次的：{e}")
+        mine = fetch_my_uploads(b, my_uid, int(mc["my_uploads"]), mine, dec.get("published") or {}, errors)
+        if my_uid or dec.get("published"):
+            print(f"切片号已取到数据：{len(mine)} 条（包含保留的缓存）")
     # 绑定到场次 / 序号：类型取精排结果，标注取审核页
     marks = load_marks(rev_dir)
     published = dec.get("published") or {}
@@ -157,7 +184,10 @@ def main() -> int:
     an = cfg.get("analysis") or {}
     rv = review_stats(marks, mc, float(an.get("clip_before_seconds", 30)), float(an.get("clip_after_seconds", 30)))
 
+    binding_count = sum(1 for link in published.values() if isinstance(link, dict) and link.get("session") and link.get("rank"))
     mem = {"generated_at": time.strftime("%F %T"), "sessions": sorted(per), "lore": lore,
+           "published_binding_count": binding_count,
+           "min_published": int(mc["min_published"]),
            "examples": examples, "streamer_uploads": su, "my_uploads": my_uploads, "my_uploads_raw": mine,
            "review": rv, "edit_taste": edit_taste(out_dir, int(mc.get("min_edits", 5)), int(mc.get("min_edit_sessions", 2))),
            "type_stats": ts, "my_top_titles": top_titles if len(my_uploads) >= int(mc["min_published"]) else [],
@@ -178,7 +208,8 @@ def main() -> int:
         print(f"  提示：说法至少要在 {mc['min_sessions']} 场里出现才算，现在只有 {len(per)} 场")
     print(f"审核例子 {len(examples)} 个（有趣 {ny} / 不有趣 {len(examples) - ny}）；切片号已绑定 "
           f"{sum(1 for u in my_uploads if u.get('session'))}/{len(my_uploads)} 条"
-          + ("；类型表现已启用" if ts else f"（绑定满 {mc['min_published']} 条后按类型汇总）"))
+          + ("；类型表现已启用" if ts else f"（至少 {mc['min_published']} 条绑定投稿有类型和播放数据后按类型汇总）"))
+    print(f"本地 BV 绑定 {binding_count} 条；已取得数据并关联场次 {sum(1 for u in my_uploads if u.get('session'))} 条")
     print(f"权重：{cal['status']}（只用盲审的标注）")
     print(f"剪辑口味：{mem['edit_taste']['status']}")
     if rv["marked"]:

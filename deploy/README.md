@@ -225,3 +225,23 @@ cd /opt/kiya-clipper/worker
 ```
 
 以上 BV 仅对应本次故障示例，使用前需核对实际稿件。旧号须与当前回执一致；已经成功替换为目标 BV 时允许重复补记。替换前把旧回执原始内容备份到该场次 `publish/history/`，新回执包含 `previous` 和 `previous_receipt`。补记时间标记为 `time_source: repair`，不沿用旧稿件的投稿时间或上传日志。此操作仅更新本地记录与精排记忆，不调用 biliup；`--replace-bvid` 不能单独使用，`--bind-bvid` 不能与 `--again`、`--dry-run`、`--status` 混用。
+
+
+## 精排记忆更新成功但投稿列表返回 -352
+
+此时本地转写、标注、剪辑口味仍会更新，两个账号的投稿列表失败后保留旧缓存。`-352` 的响应本身不能证明登录过期，需单独验证登录状态。上传登录文件与查询文件过去互相独立，更新后的查询可复用 biliup JSON 登录文件；还修复了 Netscape `#HttpOnly_` 行被当作注释而漏读的问题（格式依据：[curl Cookie 文档](https://curl.se/docs/http-cookies.html)）。
+
+查询 Cookie 来源优先级：`KIYA_COOKIE_FILE` → 主播配置 `memory.cookie_file` → `KIYA_BILIUP_COOKIE` → 主播配置 `publish.bili.cookie` → 旧默认 `/root/bili_cookies.txt`。显式文件缺失或损坏时不会悄悄换另一个账号。支持 `~` 展开，长期服务建议使用绝对路径。录播姬网页的登录配置与这些查询文件不是同一设置。
+
+同步本次代码后，在服务器执行只读诊断；请使用与后台服务相同的用户，BV 替换为要核对的已投稿视频：
+
+```bash
+cd /opt/kiya-clipper/worker
+.venv/bin/python scripts/bili_check.py --bvid BV1UGsg63E8Y
+# 需要测试特定账号的列表时，加 --uid <切片号UID>
+# 显式测试某份登录文件时，加 --cookie-file /绝对路径/cookies.json
+```
+
+诊断只显示文件路径、文件是否存在、关键 Cookie 名是否已读取、登录状态和指定 BV 的公开统计，不输出 Cookie 值。登录有效但列表仍被限制时，代码不做挑战绕过、代理切换或连续重试；对已经手动绑定的 BV 单独查询，最多 30 条，校验投稿 UID。若单条视频也不可读，则保留缓存，不伪造零播放或零点赞。网络状态恢复后再次更新即可；更新脚本不保证服务器端限制解除。
+
+页面分别显示本地绑定数和已获取数据数，并显示数据来源。类型汇总要求足够多的绑定投稿具有类型及播放数据，只有绑定数量达标但统计未获取时不会启用。`learn.py --no-fetch` 完全不联网，也不会验证 Cookie。

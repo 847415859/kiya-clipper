@@ -116,8 +116,9 @@ def test_calibrate(tmp_path):
 
 
 class FakeBili:
-    def __init__(self):
+    def __init__(self, block_uploads=False):
         self.calls = []
+        self.block_uploads = block_uploads
         api = self
 
         class H(BaseHTTPRequestHandler):
@@ -132,6 +133,8 @@ class FakeBili:
                     d = {"wbi_img": {"img_url": "https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png",
                                      "sub_url": "https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png"}}
                 elif u.path == "/x/space/wbi/arc/search":
+                    if api.block_uploads:
+                        return self._send({"code": -352, "message": "风控校验失败"})
                     exp = sign({k: v for k, v in q.items() if k not in ("w_rid", "wts")}, "7cd084941338484aae1ad9425b84077c",
                                "4932caff0ff746eab6f01bf08b70ac45", int(q["wts"]))["w_rid"]
                     if q.get("w_rid") != exp:
@@ -144,7 +147,7 @@ class FakeBili:
                     d = {"list": {"vlist": vl}}
                 elif u.path == "/x/web-interface/view":
                     i = int(q["bvid"][-1])
-                    d = {"title": f"切片{i}", "pubdate": 1762000000 + i, "stat": {"view": 1000 * i, "like": 10 * i, "coin": i}}
+                    d = {"title": f"切片{i}", "pubdate": 1762000000 + i, "owner": {"mid": 123}, "stat": {"view": 1000 * i, "like": 10 * i, "coin": i}}
                 else:
                     return self._send({"code": -404})
                 # 真实接口：没登录时 nav 返回 -101，但 data 里照样有签名密钥
@@ -171,6 +174,39 @@ def test_bili_client(tmp_path):
     assert [u["bvid"] for u in ups] == ["BVkiya1", "BVkiya2"] and ups[0]["view"] == 5000
     assert fb.calls[-1][2] == "buvid3=abc"
     assert b.stat("BVme3")["view"] == 3000
+
+
+def test_blocked_listing_still_loads_bound_video_using_upload_cookie(tmp_path):
+    fb = FakeBili(block_uploads=True)
+    out, reviews = tmp_path / "output", tmp_path / "reviews"
+    make_sessions(out, reviews, 3)
+    cookie = tmp_path / "biliup.json"
+    cookie.write_text(json.dumps({"cookie_info": {"cookies": [{"name": "SESSDATA", "value": "fake-session-for-test"}]}}), encoding="utf-8")
+    cfg = tmp_path / "streamer.json"
+    cfg.write_text(json.dumps({"streamer": {"uid": 646830928}, "publish": {"bili": {"cookie": str(cookie)}}}), encoding="utf-8")
+    dec = tmp_path / "decisions.json"
+    dec.write_text(json.dumps({"my_uid": "123", "published": {"BV1ab411c7d1": {"session": "20261101-2000", "rank": 11}}}), encoding="utf-8")
+    env = dict(os.environ, KIYA_BILI_API=fb.url, KIYA_MEMORY_DECISIONS=str(dec), KIYA_ENV_FILE=str(tmp_path / "none.env"))
+    env.pop("KIYA_COOKIE_FILE", None)
+    env.pop("KIYA_BILIUP_COOKIE", None)
+    r = subprocess.run([sys.executable, str(ROOT / "scripts/learn.py"), "--config", str(cfg), "--out", str(out),
+                        "--reviews", str(reviews)], capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    mem = json.loads((out / "_memory/memory.json").read_text(encoding="utf-8"))
+    assert mem["published_binding_count"] == 1
+    assert mem["my_uploads"][0]["bvid"] == "BV1ab411c7d1" and mem["my_uploads"][0]["view"] == 1000
+    assert mem["my_uploads"][0]["session"] == "20261101-2000"
+    assert len(mem["errors"]) == 2 and all("-352" in e for e in mem["errors"])
+    assert "fake-session-for-test" not in r.stdout + r.stderr
+    assert all(call[2] == "SESSDATA=fake-session-for-test" for call in fb.calls)
+
+    check = subprocess.run([sys.executable, str(ROOT / "scripts/bili_check.py"), "--config", str(cfg),
+                            "--uid", "123", "--bvid", "BV1ab411c7d1"], capture_output=True, text=True, env=env)
+    assert check.returncode == 0, check.stdout + check.stderr
+    assert "SESSDATA：已读取" in check.stdout and "登录状态：未登录" in check.stdout
+    assert "投稿列表：失败" in check.stdout and '"view": 1000' in check.stdout
+    assert "fake-session-for-test" not in check.stdout + check.stderr
+    fb.server.shutdown()
 
 
 def test_learn_end_to_end(tmp_path):

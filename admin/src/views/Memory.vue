@@ -191,12 +191,16 @@
             <el-button @click="act({ action: 'myUid', uid: myUid.trim() })">保存</el-button>
             <span class="muted">在成片编辑页填 BV 号绑定到片段</span>
           </div>
-          <el-table :data="myUploads" size="small" max-height="260" empty-text="还没有（填 UID 后点“更新精排记忆”）">
+          <p class="muted">本地已绑定 {{ publishedBindingCount }} 条 BV；当前取到投稿数据 {{ myUploads.length }} 条。列表查询失败时仍会尝试更新已绑定 BV，二者数量可能不同。</p>
+          <el-table :data="myUploads" size="small" max-height="260" empty-text="尚未取到投稿数据，不代表本地 BV 绑定丢失；请查看顶部提示">
             <el-table-column label="标题" min-width="200" show-overflow-tooltip>
               <template #default="{ row }"><a :href="`https://www.bilibili.com/video/${row.bvid}`" target="_blank" rel="noopener">{{ row.title }}</a></template>
             </el-table-column>
             <el-table-column prop="view" label="播放" width="70" />
             <el-table-column prop="like" label="点赞" width="60" />
+            <el-table-column label="数据来源" width="90">
+              <template #default="{ row }">{{ row.stats_stale ? '保留缓存' : row.data_source === 'bound_bv' ? '已绑定 BV' : '投稿列表' }}</template>
+            </el-table-column>
             <el-table-column label="片段" width="150">
               <template #default="{ row }">
                 <span v-if="row.session">{{ row.session }}#{{ row.rank }} <span class="muted">{{ row.type }}</span></span>
@@ -208,7 +212,7 @@
             <b>按类型</b>
             <span v-for="t in typeStats" :key="t.type">{{ t.type }} {{ t.n }} 条，播放中位数 {{ t.median_view }}（{{ t.relative }}×）</span>
           </div>
-          <p v-else class="muted">绑定满 5 条后按类型汇总表现，提示词里会告诉大模型哪类片段观众更买账。</p>
+          <p v-else class="muted">至少 {{ mem?.min_published || 5 }} 条绑定投稿取得类型和播放数据后，才会按类型汇总。未取到数据的绑定不计入。</p>
         </el-card>
       </div>
 
@@ -278,6 +282,7 @@ const lore = computed(() => {
 const examples = computed(() => (mem.value && mem.value.examples) || [])
 const streamerUploads = computed(() => (mem.value && mem.value.streamer_uploads) || [])
 const myUploads = computed(() => (mem.value && mem.value.my_uploads) || [])
+const publishedBindingCount = computed(() => Object.values(dec.value.published || {}).filter(v => v && v.session && v.rank).length)
 const typeStats = computed(() => Object.entries((mem.value && mem.value.type_stats) || {}).map(([type, v]) => ({ type, ...v })))
 const promoted = computed(() => dec.value.promoted_lore || [])
 const taboo = computed(() => (dec.value.taboo || []).map((x) => (typeof x === 'string' ? { word: x } : x)))
