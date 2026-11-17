@@ -28,7 +28,9 @@ def setup_case(tmp_path, taboo=(), final=True, extra_cfg=""):
     (sess / "publish").mkdir(parents=True)
     (sess / "candidates.json").write_text(json.dumps({"segments": [], "candidates": [{"rank": 1, "t": 60}]}), encoding="utf-8")
     pack = {"title": "怪不得叫金油！", "description": "抹精油手滑", "tags": ["虚拟主播", "金油"],
-            "source": "https://live.bilibili.com/1724773744", "taboo_hits": list(taboo)}
+            "source": "https://live.bilibili.com/1724773744", "taboo_hits": list(taboo),
+            "include_schedule": False, "subtitle_checked": True, "title_fulfilled": True,
+            "materials_complete": True}
     (sess / "publish" / "01.json").write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
     (sess / "publish" / "01_cover.jpg").write_bytes(b"jpg")
     if final:
@@ -99,6 +101,8 @@ def test_hold_uploads_with_timer_and_records_result(tmp_path):
     res = last(r)
     assert "\x1b" not in res["output_tail"] and "投稿成功" in res["output_tail"]
     assert res["status"] == "ok" and res["mode"] == "hold" and res["bvid"] == "BV1ab411c7de" and res["video"].endswith("_720p.mp4")
+    assert res["preflight"]["ok"] is True and res["final_video"].endswith("_720p.mp4")
+    assert res["final_description"] == "抹精油手滑"
     assert res["dtime"] > time.time() + 13 * 86400
     line = (tmp_path / "log.txt").read_text(encoding="utf-8").splitlines()
     cmd = next(x for x in line if " upload " in x and "--help" not in x)
@@ -126,10 +130,10 @@ def test_refuses_taboo_duplicate_and_rate(tmp_path):
     assert r.returncode == 0, r.stderr
     r = run(sess, cfg, env, "--allow-taboo")                      # 已经投过
     assert r.returncode == 2 and "已经" in r.stderr
-    r = run(sess, cfg, env, "--allow-taboo", "--again")           # 重投被限频挡住
+    r = run(sess, cfg, env, "--allow-taboo", "--again", "--confirm-no-existing")  # 核查无已有投稿后才进入限频检查
     assert r.returncode == 2 and "太近" in r.stderr
     (sess.parent / "_bili_last.json").write_text(json.dumps({"at": time.time() - 3600}), encoding="utf-8")
-    r = run(sess, cfg, env, "--allow-taboo", "--again")
+    r = run(sess, cfg, env, "--allow-taboo", "--again", "--confirm-no-existing")
     assert r.returncode == 0 and last(r)["previous"]["bvid"] == "BV1ab411c7de"
 
 
@@ -137,6 +141,27 @@ def test_no_final_video_refused(tmp_path):
     sess, cfg, env = setup_case(tmp_path, final=False)
     r = run(sess, cfg, env)
     assert r.returncode == 2 and "渲染" in r.stderr
+
+
+def test_preflight_refuses_missing_cover_and_unconfirmed_review(tmp_path):
+    sess, cfg, env = setup_case(tmp_path)
+    (sess / "publish" / "01_cover.jpg").unlink()
+    pack_path = sess / "publish" / "01.json"
+    pack = json.loads(pack_path.read_text(encoding="utf-8"))
+    pack["subtitle_checked"] = False
+    pack_path.write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
+    r = run(sess, cfg, env)
+    assert r.returncode == 2 and "封面" in r.stderr
+    assert "字幕检查未通过" in r.stderr
+    assert not (tmp_path / "log.txt").exists()
+
+
+def test_dry_run_shows_final_video_description_and_preflight(tmp_path):
+    sess, cfg, env = setup_case(tmp_path)
+    r = run(sess, cfg, env, "--dry-run")
+    assert r.returncode == 0
+    assert "最终视频：" in r.stdout and "最终简介：" in r.stdout and "发布前检查：" in r.stdout
+    assert "抹精油手滑" in r.stdout
 
 
 def test_unknown_flag_stops_before_upload(tmp_path):
@@ -239,9 +264,21 @@ def test_binding_type_error_does_not_lose_successful_submission(tmp_path, monkey
     assert result["bind_error"] == "binding interface mismatch"
     stored = json.loads(receipt.read_text(encoding="utf-8"))
     assert stored["status"] == "ok" and stored["bvid"] == "BV1ab411c7de"
+    assert stored["upload_status"] == "completed" and stored["submission_status"] == "submitted"
+    assert stored["binding_status"] == "failed"
     import pytest
     with pytest.raises(pb.Refuse, match="已经"):
         pb.run(args)
+
+
+def test_uncertain_submission_requires_platform_check_before_retry(tmp_path):
+    sess, cfg, env = setup_case(tmp_path)
+    receipt = sess / "publish/01.bili.json"
+    receipt.write_text(json.dumps({"status": "failed", "upload_status": "in_progress", "submission_status": "unknown"}), encoding="utf-8")
+    r = run(sess, cfg, env, "--again")
+    assert r.returncode == 2 and "核查" in r.stderr
+    r = run(sess, cfg, env, "--again", "--confirm-no-existing")
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
 def test_repair_binding_records_receipt_and_never_uploads(tmp_path, monkeypatch):

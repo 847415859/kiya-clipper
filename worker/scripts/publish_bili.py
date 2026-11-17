@@ -223,6 +223,51 @@ def save_result(path: Path, result: dict) -> None:
     tmp.replace(path)
 
 
+def preflight(pack: dict, video: Path, cover: Path, schedule: dict, description: str) -> dict:
+    """集中检查发布输入；pending 不能被当成通过。"""
+    checks: dict[str, dict] = {}
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    def check(name: str, status: str, message: str, **details) -> None:
+        checks[name] = {"status": status, "message": message, **details}
+        if status == "error":
+            errors.append(message)
+        elif status in ("warning", "pending"):
+            warnings.append(message)
+
+    check("video", "pass" if video.is_file() and video.stat().st_size > 0 else "error",
+          "最终视频已就绪" if video.is_file() and video.stat().st_size > 0 else "最终视频不存在或为空",
+          path=str(video), bytes=video.stat().st_size if video.exists() else 0)
+    check("cover", "pass" if cover.is_file() and cover.stat().st_size > 0 else "error",
+          "封面已就绪" if cover.is_file() and cover.stat().st_size > 0 else "封面不存在或为空",
+          path=str(cover))
+    check("title", "pass" if str(pack.get("title") or "").strip() else "error",
+          "标题已填写" if str(pack.get("title") or "").strip() else "标题为空")
+    check("description", "pass" if description.strip() else "error",
+          "简介已生成" if description.strip() else "简介为空", chars=len(description))
+
+    for key, label in (("subtitle_checked", "字幕"), ("title_fulfilled", "标题兑现"),
+                       ("materials_complete", "素材完整性")):
+        value = pack.get(key)
+        if value is True:
+            check(key, "pass", f"{label}已确认")
+        elif value is False:
+            check(key, "error", f"{label}检查未通过")
+        else:
+            check(key, "pending", f"{label}尚未确认")
+
+    if schedule.get("enabled"):
+        check("weekly_plan", "pass", "周计划已刷新且未过期", fingerprint=schedule.get("fingerprint"),
+              as_of=schedule.get("as_of"))
+    elif schedule.get("reason") in ("这一周还没有确认用于发布的日程", "本周没有剩余的已确认安排"):
+        check("weekly_plan", "pending", "周计划未确认或已过期，请重新确认本周计划", reason=schedule.get("reason"))
+    else:
+        check("weekly_plan", "pass", "本次未启用周计划介绍")
+    return {"ok": not errors and not any(v["status"] == "pending" for v in checks.values()),
+            "checks": checks, "errors": errors, "warnings": warnings}
+
+
 def repair_binding(candidates: Path, rank: int, bvid: str, replace_bvid: str | None = None) -> dict:
     """Explicit recovery for an existing post. Never starts biliup or uploads a file."""
     if not re.fullmatch(r"BV[0-9A-Za-z]{10}", bvid):
@@ -255,14 +300,16 @@ def repair_binding(candidates: Path, rank: int, bvid: str, replace_bvid: str | N
                   "mode_text": "手动补记重投稿件（时间为补记时间）"}
     if "at" not in result:
         result["time_source"] = "repair"
-    result.update(status="ok", session=sess.name, rank=rank, bvid=bvid, bound=False, recovered=True)
+    result.update(status="ok", session=sess.name, rank=rank, bvid=bvid, bound=False, recovered=True,
+                  upload_status=result.get("upload_status", "completed"),
+                  submission_status="submitted", binding_status="not_bound")
     result["repaired_at"] = now
     result.setdefault("at", now)
     result.setdefault("at_text", datetime.fromtimestamp(now).strftime("%m-%d %H:%M"))
     result.setdefault("mode_text", "手动补记已投稿稿件")
     save_result(result_file, result)
     bind_bvid(sess, rank, bvid)
-    result.update(bound=True)
+    result.update(bound=True, binding_status="bound")
     result.pop("bind_error", None)
     save_result(result_file, result)
     return result
@@ -292,6 +339,12 @@ def run(args: argparse.Namespace) -> dict:
     prev = read(result_file, {}) or {}
     if prev.get("status") == "ok" and not args.again:
         raise Refuse(f"这条已经在 {prev.get('at_text', '之前')} 投过了（{prev.get('mode_text', '')}），要重投请勾“重新投稿”")
+    uncertain = prev.get("upload_status") in ("in_progress", "completed") or prev.get("submission_status") in ("submitted", "unknown")
+    confirmed_no_existing = bool(getattr(args, "confirm_no_existing", False))
+    if uncertain and not (args.again and confirmed_no_existing):
+        raise Refuse("已有上传/投稿状态，禁止直接再次上传；请先在创作中心核查是否已有投稿。确认没有重复投稿后，同时使用 --again --confirm-no-existing 重试")
+    if confirmed_no_existing and not args.again:
+        raise Refuse("--confirm-no-existing 只能与 --again 一起使用")
 
     now = time.time()
     extra: list[str] = []
@@ -305,9 +358,14 @@ def run(args: argparse.Namespace) -> dict:
     try:
         schedule = for_pack(sess.parent, pack, cfg, at=dtime or now)
         check_rendered_schedule(video, schedule)
-        pack = dict(pack, description=append_description(pack.get("description") or "", schedule))
+        final_description = append_description(pack.get("description") or "", schedule)
+        pack = dict(pack, description=final_description)
     except (ValueError, OSError, TypeError) as e:
         raise Refuse(str(e)) from e
+    preflight_result = preflight(pack, video, cover, schedule, final_description)
+    if not preflight_result["ok"] and not args.dry_run:
+        failed = preflight_result["errors"] + preflight_result["warnings"]
+        raise Refuse("发布前检查未通过：" + "；".join(failed))
     bin_ = biliup_bin()
     ck = cookie_path(bc)
     mode_text = {"hold": f"先放着（{parse_at(dtime):%m-%d %H:%M} 定时，可在创作中心改 / 撤回）" if dtime else "",
@@ -315,13 +373,20 @@ def run(args: argparse.Namespace) -> dict:
                  "timed": f"定时 {parse_at(dtime):%m-%d %H:%M}" if dtime else "",
                  "private": "仅自己可见"}[args.mode]
     base = {"session": sess.name, "rank": args.rank, "mode": args.mode, "mode_text": mode_text, "dtime": dtime,
-            "video": video.name, "title": pack["title"], "at": now, "at_text": parse_at(now).strftime("%m-%d %H:%M")}
+            "video": video.name, "title": pack["title"], "at": now, "at_text": parse_at(now).strftime("%m-%d %H:%M"),
+            "upload_status": "not_started", "submission_status": "not_submitted", "binding_status": "not_bound"}
+    base.update(final_video=str(video), final_description=final_description,
+                preflight=preflight_result)
     base["schedule"] = {k:schedule.get(k) for k in ("fingerprint", "version", "as_of", "description_block")}
 
     if args.dry_run:
         cmd = build_cmd(bin_ or "biliup", ck, video, pack, cover if cover.exists() else None, bc, dtime, extra)
         base.update(status="dry_run", command=mask(cmd), biliup=bin_ is not None, logged_in=ck.is_file())
-        print("预演（不会上传）：" + " ".join(json.dumps(x, ensure_ascii=False) if " " in x else x for x in mask(cmd)))
+        print("预演（不会上传）：")
+        print("最终视频：" + str(video))
+        print("最终简介：\n" + pack["description"])
+        print("发布前检查：" + json.dumps(preflight_result, ensure_ascii=False))
+        print("命令：" + " ".join(json.dumps(x, ensure_ascii=False) if " " in x else x for x in mask(cmd)))
         return base
 
     if not bin_:
@@ -332,12 +397,18 @@ def run(args: argparse.Namespace) -> dict:
     cmd = build_cmd(bin_, ck, video, pack, cover if cover.exists() else None, bc, dtime, extra)
     check_flags(bin_, cmd)
     print(f"开始上传 {video.name}（{mode_text}）…", flush=True)
+    base.update(upload_status="in_progress", submission_status="unknown", binding_status="not_bound",
+                upload_started_at=now, retry_confirmed=confirmed_no_existing)
+    save_result(result_file, base)
     (sess.parent / "_bili_last.json").write_text(json.dumps({"at": now, "session": sess.name, "rank": args.rank}),
                                                  encoding="utf-8")   # 先占位：上传中途失败也算一次，避免狂点重试
     out, code = run_biliup(cmd, float(bc["timeout_sec"]))
     tail = "\n".join(out.splitlines()[-12:])
     m = re.search(r"\bBV[0-9A-Za-z]{10}\b", out)
-    base.update(status="ok" if code == 0 else "failed", exit_code=code, output_tail=tail, bvid=m.group(0) if m else "")
+    bvid = m.group(0) if m else ""
+    base.update(status="ok" if code == 0 else "failed", exit_code=code, output_tail=tail, bvid=bvid,
+                upload_status="completed" if code == 0 else "failed",
+                submission_status="submitted" if code == 0 and bvid else "unknown")
     if prev.get("status") == "ok":
         base["previous"] = {k: prev.get(k) for k in ("mode_text", "at_text", "bvid")}
     save_result(result_file, base)
@@ -345,8 +416,10 @@ def run(args: argparse.Namespace) -> dict:
         try:
             bind_bvid(sess, args.rank, base["bvid"])
             base["bound"] = True
+            base["binding_status"] = "bound"
         except (OSError, ValueError, TypeError) as e:
             base["bound"] = False
+            base["binding_status"] = "failed"
             base["bind_error"] = str(e)
             print(f"投稿成功 {base['bvid']}，本地 BV 绑定失败：{e}；请手动绑定，不要重新上传", flush=True)
     if code == 0:
@@ -364,6 +437,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--allow-taboo", action="store_true")
     ap.add_argument("--again", action="store_true", help="已经投过也再投一次")
+    ap.add_argument("--confirm-no-existing", action="store_true", help="已在平台核查没有已有投稿，允许重试上传")
     ap.add_argument("--bind-bvid", help="仅补记已投稿稿件的 BV 号，不上传；请先在创作中心核对")
     ap.add_argument("--replace-bvid", help="配合 --bind-bvid，明确指定被替换的旧 BV；自动备份旧回执，不上传")
     ap.add_argument("--status", action="store_true")
