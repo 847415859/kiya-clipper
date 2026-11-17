@@ -21,6 +21,12 @@ public class ProcessRunner {
     public record Result(int exitCode, String output) {}
 
     private final WorkerPaths paths;
+    @org.springframework.beans.factory.annotation.Value("${spring.datasource.url:}")
+    private String databaseUrl = "";
+    @org.springframework.beans.factory.annotation.Value("${spring.datasource.username:}")
+    private String databaseUser = "";
+    @org.springframework.beans.factory.annotation.Value("${spring.datasource.password:}")
+    private String databasePassword = "";
 
     public ProcessRunner(WorkerPaths paths) {
         this.paths = paths;
@@ -38,6 +44,15 @@ public class ProcessRunner {
         ProcessBuilder pb = new ProcessBuilder(cmd).directory(paths.worker().toFile()).redirectErrorStream(true);
         pb.environment().put("PYTHONUNBUFFERED", "1");
         pb.environment().put("PYTHONIOENCODING", "utf-8");
+        if (databaseUrl.startsWith("jdbc:mysql://")) {
+            var uri=java.net.URI.create(databaseUrl.substring(5));
+            pb.environment().put("KIYA_SCHEDULE_STORAGE","mysql");
+            pb.environment().put("DB_HOST",uri.getHost());
+            pb.environment().put("DB_PORT",String.valueOf(uri.getPort()<0?3306:uri.getPort()));
+            pb.environment().put("DB_NAME",uri.getPath().substring(1));
+            pb.environment().put("DB_USER",databaseUser);
+            pb.environment().put("DB_PASSWORD",databasePassword);
+        }
         return pb;
     }
 

@@ -128,6 +128,22 @@ def test_more_than_eight_uses_full_description(tmp_path):
     assert '节目13' in snap['description_block']
 
 
+def test_calendar_keeps_confirmed_and_draft_separate_and_scoped(tmp_path):
+    from clipper.schedule import calendar_history
+    file=confirm(tmp_path/'a',[row(category='game')])
+    data=json.loads(file.read_text());data['active']=False
+    data['draft']=validate_plan({'entries':[row(title='草稿',category='sing')]},WEEK)
+    file.write_text(json.dumps(data),encoding='utf-8')
+    (file.parent/'2026-11-09.json').write_text('{bad',encoding='utf-8')
+    result=calendar_history(tmp_path/'a')
+    assert len(result['weeks'])==1 and len(result['warnings'])==1
+    week=result['weeks'][0]
+    assert not week['active'] and week['published']['entries'][0]['category']=='game'
+    assert week['draft']['entries'][0]['title']=='草稿'
+    assert calendar_history(tmp_path/'b')['weeks']==[]
+    with pytest.raises(ValueError):validate_plan({'entries':[row(category='../bad')]},WEEK)
+
+
 def test_portrait_is_confirmed_and_changes_invalidate_render(tmp_path):
     file=confirm(tmp_path,[row()])
     root=tmp_path/'_schedule/images';root.mkdir()

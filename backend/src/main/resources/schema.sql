@@ -74,6 +74,16 @@ CREATE TABLE IF NOT EXISTS job (
 );
 
 -- 键值配置：额外热词、纠错词等
+-- 日历、草稿/确认快照、图片索引、周计划生图历史；主播与记录类型联合隔离。
+CREATE TABLE IF NOT EXISTS schedule_record (
+    streamer_id VARCHAR(64) NOT NULL,
+    kind VARCHAR(16) NOT NULL,
+    record_key VARCHAR(100) NOT NULL,
+    payload LONGTEXT NOT NULL,
+    revision VARCHAR(64) NOT NULL,
+    PRIMARY KEY (streamer_id, kind, record_key)
+);
+
 CREATE TABLE IF NOT EXISTS app_config (
     k VARCHAR(64) PRIMARY KEY,
     v TEXT

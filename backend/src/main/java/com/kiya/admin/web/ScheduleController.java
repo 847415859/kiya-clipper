@@ -18,6 +18,21 @@ import com.kiya.admin.service.ScheduleService;
 public class ScheduleController {
     private final ScheduleService service;
     public ScheduleController(ScheduleService service) { this.service = service; }
+    @GetMapping("/calendar") public Map<String, Object> calendar() { return service.calendar(); }
+    @GetMapping("/{week}/posters") public Map<String,Object> posters(@PathVariable String week) { return service.posterHistory(week); }
+    public record PosterReq(String source, String supplement, String expectedRevision) {}
+    @PostMapping("/{week}/posters") public Map<String,Object> generatePoster(@PathVariable String week,@RequestBody PosterReq req) {
+        if(req.expectedRevision()==null) throw ApiException.badRequest("请先读取并保存日程");
+        return service.generatePoster(week,Map.of("source",req.source()==null?"published":req.source(),"supplement",req.supplement()==null?"":req.supplement(),"expected_revision",req.expectedRevision()));
+    }
+    @GetMapping("/{week}/posters/{id}.png") public ResponseEntity<Resource> poster(@PathVariable String week,@PathVariable String id,
+            @RequestParam(defaultValue="false") boolean download) {
+        var file=service.posterFile(week,id);
+        if(!Files.isRegularFile(file)) throw ApiException.notFound("周计划图片不存在");
+        return ResponseEntity.ok().contentType(MediaType.IMAGE_PNG).cacheControl(CacheControl.noCache())
+            .header("Content-Disposition",(download?"attachment":"inline")+"; filename=\"schedule-"+week+"-"+id+".png\"")
+            .body(new FileSystemResource(file));
+    }
     @GetMapping public Map<String, Object> get(@RequestParam(required=false) String weekStart) { return service.get(weekStart); }
     public record SaveReq(Map<String, Object> plan, String expectedRevision, Boolean confirm) {}
     @PutMapping("/{week}") public Map<String, Object> save(@PathVariable String week, @RequestBody SaveReq req) {

@@ -1,5 +1,6 @@
 <template>
   <div class="page schedule-page" v-loading="loading">
+    <ScheduleCalendar ref="calendar" @edit="editCalendarDay" />
     <div class="toolbar">
       <b>直播日程</b>
       <el-button @click="changeWeek(addDays(week, -7))">上一周</el-button>
@@ -52,6 +53,7 @@
         <el-table-column label="状态" width="115"><template #default="{row}"><el-select v-model="row.status"><el-option label="直播 / 活动" value="planned" /><el-option label="待定" value="tbd" /><el-option label="休息" value="rest" /><el-option label="已取消" value="cancelled" /></el-select></template></el-table-column>
         <el-table-column label="开始" width="125"><template #default="{row}"><el-time-picker v-model="row.start_time" format="HH:mm" value-format="HH:mm" placeholder="待定" :disabled="row.status === 'rest'" style="width:110px" /></template></el-table-column>
         <el-table-column label="结束" width="125"><template #default="{row}"><el-time-picker v-model="row.end_time" format="HH:mm" value-format="HH:mm" placeholder="可不填" :disabled="row.status === 'rest'" style="width:110px" /></template></el-table-column>
+        <el-table-column label="分类" width="120"><template #default="{row}"><el-select :model-value="row.category || 'other'" @update:model-value="row.category=$event" aria-label="日程分类"><el-option v-for="c in categories" :key="c.id" :label="c.label" :value="c.id" /></el-select></template></el-table-column>
         <el-table-column label="内容" min-width="220"><template #default="{row}"><el-input v-model="row.title" maxlength="60" aria-label="日程内容" placeholder="例如：20点游戏回，或休息" /></template></el-table-column>
         <el-table-column label="备注（不写入预告）" min-width="200"><template #default="{row}"><el-input v-model="row.note" maxlength="300" /></template></el-table-column>
         <el-table-column width="70"><template #default="{row}"><el-button link type="danger" @click="plan.entries = plan.entries.filter(r=>r.id !== row.id)">删除</el-button></template></el-table-column>
@@ -71,6 +73,7 @@
       <pre>{{ preview?.description_block || preview?.reason || '正在读取…' }}</pre>
       <p class="muted">此处使用已确认版本。每条作品可在发布卡片里选择预计公开时间、关闭日程介绍，并试渲染日程片尾。</p>
     </el-card>
+    <SchedulePosters :week="week" :revision="revision" :dirty="dirty" :busy="saving || uploading || extracting || loading" />
   </div>
 </template>
 
@@ -80,6 +83,11 @@ import {onBeforeRouteLeave} from 'vue-router'
 import {ElMessage, ElMessageBox} from 'element-plus'
 import {api} from '../api'
 import {addDays, emptyEntry, monday} from '../schedule-tools'
+import ScheduleCalendar from '../components/ScheduleCalendar.vue'
+import SchedulePosters from '../components/SchedulePosters.vue'
+import {categories} from '../schedule-calendar'
+const calendar=ref(null)
+async function editCalendarDay(day){await changeWeek(day);document.querySelector('.schedule-page > .toolbar')?.scrollIntoView({behavior:'smooth',block:'start'})}
 const week = ref(monday()), revision = ref('none'), active = ref(false), dirty = ref(false)
 const loading = ref(false), saving = ref(false), uploading = ref(false), extracting = ref(false), checked = ref(false)
 const plan = reactive({week_start:week.value,timezone:'Asia/Shanghai',image_id:'',portrait_id:'',entries:[]})
@@ -104,7 +112,7 @@ async function load(target = week.value) {
 async function changeWeek(day) {
   if(saving.value || uploading.value || extracting.value)return
   if(dirty.value) {try{await ElMessageBox.confirm('当前草稿有未保存修改，切换周会丢弃这些输入。','切换周',{confirmButtonText:'切换'})}catch{return}}
-  load(monday(day))
+  await load(monday(day))
 }
 async function save(confirm) {
   if(saving.value || (confirm && !checked.value))return
@@ -117,10 +125,11 @@ async function save(confirm) {
     checked.value=false
     ElMessage.success(confirm?'已确认，后续作品可使用这周日程':'草稿已保存，已确认版本不变')
     refreshPreview()
+    calendar.value?.refresh()
   }finally{saving.value=false}
 }
 async function deactivate(){
-  const r=await api.deactivateSchedule(week.value,revision.value);revision.value=r.revision;active.value=false;refreshPreview()
+  const r=await api.deactivateSchedule(week.value,revision.value);revision.value=r.revision;active.value=false;refreshPreview();calendar.value?.refresh()
 }
 async function uploadImage(file){
   if(!file.raw)return

@@ -40,11 +40,30 @@ class ScheduleTests {
         try { StreamerContext.set("other");assertFalse(Files.exists(service.imageFile(id))); }
         finally { StreamerContext.clear(); }
         assertThrows(ApiException.class,()->service.imageFile("../secret"));
-        verifyNoInteractions(runner);
+        verify(runner).run(eq("schedule.py"),argThat(args -> args.contains("image-register")),eq(Duration.ofSeconds(30)));
     }
     @Test void rejectsSpoofedImagesAndOversizedFiles() {
         assertThrows(ApiException.class,()->service.upload(new MockMultipartFile("file","x.png","image/png","<html>text</html>".getBytes())));
         assertThrows(ApiException.class,()->service.upload(new MockMultipartFile("file","x.jpg","image/jpeg",new byte[8*1024*1024+1])));
+    }
+    @Test void posterVersionsAreScopedAndUseGenerationTimeout() {
+        assertTrue(service.posterFile("2026-11-16","a".repeat(32)).startsWith(paths.output()));
+        assertThrows(ApiException.class,()->service.posterFile("2026-11-17","a".repeat(32)));
+        assertThrows(ApiException.class,()->service.posterFile("2026-11-16","../other"));
+        service.generatePoster("2026-11-16",Map.of("source","draft","expected_revision","none"));
+        verify(runner).run(eq("schedule.py"),argThat(args->args.contains("poster-generate")),eq(Duration.ofSeconds(600)));
+    }
+    @Test void workersReuseDatabaseCredentialsThroughEnvironmentOnly() {
+        ProcessRunner real=new ProcessRunner(paths);
+        org.springframework.test.util.ReflectionTestUtils.setField(real,"databaseUrl","jdbc:mysql://localhost:3307/calendar?useUnicode=true");
+        org.springframework.test.util.ReflectionTestUtils.setField(real,"databaseUser","calendar-user");
+        org.springframework.test.util.ReflectionTestUtils.setField(real,"databasePassword","test-secret");
+        var builder=real.builder(List.of("python","scripts/schedule.py"));
+        assertEquals("mysql",builder.environment().get("KIYA_SCHEDULE_STORAGE"));
+        assertEquals("3307",builder.environment().get("DB_PORT"));
+        assertEquals("calendar",builder.environment().get("DB_NAME"));
+        assertEquals("test-secret",builder.environment().get("DB_PASSWORD"));
+        assertFalse(builder.command().toString().contains("test-secret"));
     }
     @Test void savePassesScopedRootAndTemporaryRequestIsCleaned() {
         when(runner.run(eq("schedule.py"),anyList(),any())).thenAnswer(call->{

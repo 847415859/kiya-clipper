@@ -18,12 +18,15 @@ from typing import Literal
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pydantic import BaseModel, Field
 from clipper.schedule import append_description, for_pack, read_state, validate_plan, week_start
+from clipper.schedule import calendar_history
 from clipper.kcfg import load_cfg
 from clipper.llm import LLMClient, image_part, text_part
 from clipper.streamer import resolve_config
 
 
 def revision(path):
+    from clipper import schedule_db
+    if schedule_db.enabled():return schedule_db.import_week(path.parents[1],path.stem)[1]
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else "none"
 
 
@@ -92,10 +95,21 @@ def extract(root, image_id, week, cfg):
 
 def run(args):
     root = Path(args.root)
+    if args.streamer:os.environ['KIYA_STREAMER']=args.streamer
+    from clipper import schedule_db
+    if args.action == "calendar":
+        return calendar_history(root)
     week = week_start(args.week_start).isoformat()
     path = root / "_schedule" / (week + ".json")
     raw = json.loads(Path(args.input).read_text(encoding="utf-8")) if args.input else {}
     cfg = load_cfg(resolve_config(args.config, streamer=args.streamer))
+    if args.action=='image-register':
+        if schedule_db.enabled():
+            schedule_db.save(root,'image',raw['image_id'],raw)
+        return raw
+    if args.action in ('poster-history','poster-generate'):
+        from clipper.schedule_poster import history, create
+        return history(root,week) if args.action=='poster-history' else create(root,week,cfg,raw,revision)
     if args.action == "preview":
         snap = for_pack(root, {"include_schedule": raw.get("enabled", True), "schedule_publish_at": raw.get("at")}, cfg)
         snap.pop("_portrait_file", None)
@@ -124,20 +138,27 @@ def run(args):
                 if raw.get("confirm") is True:
                     state.update(published=dict(plan, version=uuid.uuid4().hex, confirmed_at=time.time()), active=True)
             state["updated_at"] = time.time()
+            if schedule_db.enabled():
+                if not schedule_db.save(root,'week',week,state,raw.get('expected_revision')):
+                    return {'conflict':True,'error':'日程已更新，请重新读取后保存'}
             tmp = path.with_name(".schedule-" + uuid.uuid4().hex + ".json")
             try:
-                tmp.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
-                tmp.replace(path)
+                if not schedule_db.enabled():
+                    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
+                    tmp.replace(path)
             finally:
                 tmp.unlink(missing_ok=True)
-    try:
-        content = path.read_bytes()
-    except FileNotFoundError:
-        content = None
-    state = json.loads(content) if content is not None else {}
-    if not isinstance(state, dict):
-        raise ValueError("日程文件格式错误")
-    token = hashlib.sha256(content).hexdigest() if content is not None else "none"
+    if schedule_db.enabled():
+        state,token=schedule_db.import_week(root,week)
+    else:
+        try:
+            content = path.read_bytes()
+        except FileNotFoundError:
+            content = None
+        state = json.loads(content) if content is not None else {}
+        if not isinstance(state, dict):
+            raise ValueError("日程文件格式错误")
+        token = hashlib.sha256(content).hexdigest() if content is not None else "none"
     return {"week_start": week, "revision": token, "active": bool(state.get("active")),
             "draft": state.get("draft") or state.get("published") or {"week_start": week, "timezone": "Asia/Shanghai", "image_id": "", "portrait_id": "", "entries": []},
             "published": state.get("published"), "updated_at": state.get("updated_at")}
@@ -145,7 +166,7 @@ def run(args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("action", choices=["get", "save", "deactivate", "preview", "extract"])
+    ap.add_argument("action", choices=["get", "save", "deactivate", "preview", "extract", "calendar", "poster-history", "poster-generate", "image-register"])
     ap.add_argument("--root", required=True)
     ap.add_argument("--week-start")
     ap.add_argument("--input")
@@ -156,7 +177,7 @@ def main():
     try:
         print(json.dumps(run(args), ensure_ascii=False))
         return 0
-    except (ValueError, OSError, TypeError, OverflowError) as e:
+    except (ValueError, OSError, TypeError, OverflowError, RuntimeError) as e:
         print(f"日程处理失败：{e}", file=sys.stderr)
         return 1
 

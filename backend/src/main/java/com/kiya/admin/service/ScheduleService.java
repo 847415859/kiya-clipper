@@ -55,6 +55,15 @@ public class ScheduleService {
     }
 
     public Map<String, Object> get(String week) { return run("get", week, null, List.of(), 30); }
+    public Map<String, Object> calendar() { return run("calendar", null, null, List.of(), 30); }
+    public Map<String, Object> posterHistory(String week) { return run("poster-history", week, null, List.of(), 30); }
+    public Map<String, Object> generatePoster(String week, Map<String,Object> body) { return run("poster-generate", week, body, List.of(), 600); }
+    public Path posterFile(String week, String id) {
+        try { if (java.time.LocalDate.parse(week).getDayOfWeek()!=java.time.DayOfWeek.MONDAY) throw new IllegalArgumentException(); }
+        catch (RuntimeException e) { throw ApiException.badRequest("请选择有效的周一日期"); }
+        if (id==null || !id.matches("[a-f0-9]{32}")) throw ApiException.badRequest("图片版本标识不合法");
+        return WorkerPaths.inside(paths.output(),paths.output().resolve("_schedule/posters").resolve(week).resolve(id).resolve("poster.png"));
+    }
     public Map<String, Object> save(String week, Map<String, Object> plan, String revision, boolean confirm) {
         if (plan == null || revision == null) throw ApiException.badRequest("缺少日程或版本，请重新读取后保存");
         return run("save", week, Map.of("plan", plan, "expected_revision", revision, "confirm", confirm), List.of(), 30);
@@ -111,7 +120,9 @@ public class ScheduleService {
                 writer.write(null, new IIOImage(normalized, null, null), param);
             } finally { writer.dispose(); }
             Files.move(tmp, dst, StandardCopyOption.ATOMIC_MOVE);
-            return Map.of("image_id", id, "width", width, "height", height);
+            var record=Map.<String,Object>of("image_id",id,"width",width,"height",height,"file","_schedule/images/"+id+".jpg");
+            run("image-register",null,record,List.of(),30);
+            return record;
         } catch (IOException e) { throw ApiException.badRequest("上传图片失败，请换一张 PNG 或 JPG 图片"); }
         finally { try { Files.deleteIfExists(tmp); } catch (IOException ignored) {} }
     }

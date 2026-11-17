@@ -11,6 +11,7 @@ from pathlib import Path
 TZ = timezone(timedelta(hours=8))
 WEEKDAYS = "一二三四五六日"
 MAX_ENTRIES = 14
+CATEGORIES = ("chat", "game", "watch", "submission", "sing", "fitness", "radio", "collab", "special", "other")
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -58,6 +59,9 @@ def validate_plan(raw: dict, week: str) -> dict:
         if not start <= day < start + timedelta(days=7):
             raise ValueError("日程日期须在所选周内")
         status = row.get("status", "planned")
+        category = row.get("category", "other")
+        if category not in CATEGORIES:
+            raise ValueError("日程分类不合法")
         if status not in ("planned", "tbd", "rest", "cancelled"):
             raise ValueError("日程状态不合法")
         title, note = row.get("title", ""), row.get("note", "")
@@ -87,12 +91,15 @@ def validate_plan(raw: dict, week: str) -> dict:
             raise ValueError("日程标识重复或不合法")
         ids.add(ident)
         rows.append({"id": ident, "date": day.isoformat(), "start_time": a, "end_time": b,
-                     "title": title, "note": note.strip(), "status": status})
+                     "title": title, "note": note.strip(), "status": status, "category": category})
     rows.sort(key=lambda r: (r["date"], r["start_time"] or "99:99", r["id"]))
     return {"week_start": start.isoformat(), "timezone": "Asia/Shanghai", "image_id": image, "portrait_id": portrait, "entries": rows}
 
 
 def read_state(root: Path, week: str) -> dict:
+    from . import schedule_db
+    if schedule_db.enabled():
+        return schedule_db.import_week(root,week)[0]
     try:
         value = json.loads((root / "_schedule" / (week + ".json")).read_text(encoding="utf-8"))
         if not isinstance(value, dict):
@@ -100,6 +107,23 @@ def read_state(root: Path, week: str) -> dict:
         return value
     except FileNotFoundError:
         return {}
+
+
+def calendar_history(root: Path) -> dict:
+    from . import schedule_db
+    weeks, warnings = [], []
+    files = sorted((root / "_schedule").glob("????-??-??.json"), reverse=True)
+    if schedule_db.enabled():
+        warnings.extend(schedule_db.migrate(root))
+        files=[root/'_schedule'/f'{key}.json' for key,_ in schedule_db.list_records(root,'week')]
+    for path in files[:520]:
+        try:
+            state = read_state(root, path.stem)
+            plans = {key: validate_plan(state[key], path.stem) if state.get(key) else None for key in ("published", "draft")}
+            weeks.append({"week_start": path.stem, "active": bool(state.get("active")), **plans})
+        except (ValueError, TypeError, KeyError, OSError) as e:
+            warnings.append(f"{path.stem} 读取失败：{e}")
+    return {"weeks": weeks, "warnings": warnings, "truncated": len(files) > 520}
 
 
 def snapshot(root: Path, at=None, enabled=True, streamer_name="主播", live_url="") -> dict:
@@ -144,7 +168,7 @@ def snapshot(root: Path, at=None, enabled=True, streamer_name="主播", live_url
     block = "【" + heading + "】\n" + "\n".join(f"{r['date_label']} {r['time_label']}｜{r['title']}" for r in rows)
     block += "\n安排如有调整，以主播最新公告为准。"
     content = {"style": "lavender-journal-v1", "heading": heading, "portrait_id": plan["portrait_id"],
-               "entries": [{k:v for k,v in r.items() if k not in ("id", "note")} for r in rows]}
+               "entries": [{k:v for k,v in r.items() if k not in ("id", "note", "category")} for r in rows]}
     fingerprint = hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     return {**empty, "enabled": True, "reason": "", "entries": rows, "description_block": block,
             "heading": heading, "live_url": live_url, "fingerprint": fingerprint,

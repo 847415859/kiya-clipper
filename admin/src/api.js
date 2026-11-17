@@ -22,6 +22,10 @@ http.interceptors.response.use(
 )
 
 export const api = {
+  schedulePosters: week => http.get(`/api/schedules/${encodeURIComponent(week)}/posters`),
+  generateSchedulePoster: (week,body) => http.post(`/api/schedules/${encodeURIComponent(week)}/posters`,body,{timeout:660000}),
+  schedulePosterUrl: (week,id,download=false) => `/api/schedules/${encodeURIComponent(week)}/posters/${encodeURIComponent(id)}.png${download?'?download=true':''}`,
+  scheduleCalendar: () => http.get('/api/schedules/calendar'),
   schedule: (weekStart) => http.get('/api/schedules', {params:{weekStart}}),
   saveSchedule: (week, body) => http.put(`/api/schedules/${encodeURIComponent(week)}`, body),
   deactivateSchedule: (week, expectedRevision) => http.post(`/api/schedules/${encodeURIComponent(week)}/deactivate`, {expectedRevision}),
