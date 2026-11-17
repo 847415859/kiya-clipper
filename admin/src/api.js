@@ -3,11 +3,24 @@ import { ElMessage } from 'element-plus'
 
 // 会话 Cookie 登录；CSRF：axios 默认读 XSRF-TOKEN Cookie、带 X-XSRF-TOKEN 请求头，与后端约定一致
 const http = axios.create({ timeout: 120000 })
+let csrfPromise = null
+// Read tokens from a same-origin response rather than relying on JavaScript cookie access.
+http.interceptors.request.use(async config => {
+  if (['get','head','options'].includes((config.method || 'get').toLowerCase()) || !config.url?.startsWith('/api/')) return config
+  if (!csrfPromise) csrfPromise = http.get('/api/auth/csrf',{quiet:true}).catch(error=>{csrfPromise=null;throw error})
+  const csrf = await csrfPromise
+  config.headers.set(csrf.headerName,csrf.token)
+  return config
+})
 
 http.interceptors.response.use(
-  (res) => res.data,
+  (res) => {
+    if (['/api/auth/login','/api/auth/logout'].includes(res.config.url)) csrfPromise=null
+    return res.data
+  },
   (err) => {
     const status = err.response && err.response.status
+    if (status===403) csrfPromise=null
     const quiet = err.config && err.config.quiet
     if (status === 401 && !quiet) {
       if (!location.hash.startsWith('#/login')) location.hash = '#/login'

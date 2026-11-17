@@ -30,6 +30,7 @@ const error = ref('')
 const loading = ref(false)
 
 async function submit() {
+  if (loading.value) return
   if (!username.value || !password.value) return
   loading.value = true
   error.value = ''
@@ -43,7 +44,7 @@ async function submit() {
     router.replace(route.query.next || '/sessions')
   } catch (e) {
     const d = e.response && e.response.data
-    error.value = (d && d.error) || (e.response && e.response.status === 403 ? '页面已过期，请刷新后重试' : '登录失败')
+    error.value = e.response?.status === 403 ? '登录校验失败，请清除此站点的 Cookie 后重新打开，并确认浏览器允许保存 Cookie；也可换用系统浏览器重试。' : (d && d.error) || '登录失败'
   } finally {
     loading.value = false
   }

@@ -39,6 +39,18 @@ class AdminApplicationTests {
     }
 
     @Test
+    @org.springframework.test.annotation.DirtiesContext(methodMode=org.springframework.test.annotation.DirtiesContext.MethodMode.BEFORE_METHOD)
+    void csrfEndpointWorksWithoutJavascriptCookieAccess() throws Exception {
+        var result=mvc.perform(get("/api/auth/csrf")).andExpect(status().isOk()).andReturn();
+        var body=new com.fasterxml.jackson.databind.ObjectMapper().readTree(result.getResponse().getContentAsString());
+        var cookie=result.getResponse().getCookie("XSRF-TOKEN");
+        org.junit.jupiter.api.Assertions.assertNotNull(cookie);
+        org.junit.jupiter.api.Assertions.assertEquals(cookie.getValue(),body.path("token").asText());
+        mvc.perform(post("/api/auth/login").cookie(cookie).header(body.path("headerName").asText(),body.path("token").asText())
+            .param("username","admin").param("password","test-password-123")).andExpect(status().isOk());
+    }
+
+    @Test
     void loginWithoutCsrfIsRejected() throws Exception {
         mvc.perform(post("/api/auth/login").param("username", "admin").param("password", "test-password-123"))
             .andExpect(status().isForbidden());

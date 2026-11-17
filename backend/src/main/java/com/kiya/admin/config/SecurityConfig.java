@@ -37,6 +37,8 @@ import jakarta.servlet.http.HttpServletResponse;
  */
 @Configuration
 public class SecurityConfig {
+    @Bean
+    public CookieCsrfTokenRepository csrfRepository() { return CookieCsrfTokenRepository.withHttpOnlyFalse(); }
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -48,13 +50,13 @@ public class SecurityConfig {
             throws Exception {
         http
             .csrf(csrf -> csrf
-                .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+                .csrfTokenRepository(csrfRepository())
                 .csrfTokenRequestHandler(new SpaCsrfTokenRequestHandler()))
             .addFilterAfter(new CsrfCookieFilter(), BasicAuthenticationFilter.class)
             .addFilterBefore(new StreamerFilter(), UsernamePasswordAuthenticationFilter.class)
             .addFilterBefore(new LoginRateLimitFilter(attempts, om), UsernamePasswordAuthenticationFilter.class)
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/auth/me", "/api/auth/login").permitAll()
+                .requestMatchers("/api/auth/me", "/api/auth/login", "/api/auth/csrf").permitAll()
                 .requestMatchers("/api/**").authenticated()
                 .anyRequest().permitAll())                       // 前端静态文件
             .formLogin(form -> form
@@ -136,7 +138,7 @@ public class SecurityConfig {
         protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
                 throws ServletException, IOException {
             CsrfToken token = (CsrfToken) request.getAttribute("_csrf");
-            if (token != null) {
+            if (token != null && !"/api/auth/csrf".equals(request.getServletPath())) {
                 token.getToken();
             }
             chain.doFilter(request, response);
