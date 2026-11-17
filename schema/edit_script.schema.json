@@ -35,6 +35,21 @@
         },
         "style_name": {
           "type": "string"
+        },
+        "sentence_overrides": {
+          "type": "array",
+          "maxItems": 1000,
+          "description": "仅当前切片的字幕修订；绑定原句整场时间和原文，不修改音频或场次转写",
+          "items": {
+            "type": "object",
+            "required": ["t0", "t1", "original", "text"],
+            "properties": {
+              "t0": {"type": "number", "minimum": 0, "maximum": 86400},
+              "t1": {"type": "number", "minimum": 0, "maximum": 86400},
+              "original": {"type": "string", "minLength": 1, "maxLength": 1000},
+              "text": {"type": "string", "minLength": 1, "maxLength": 1000}
+            }
+          }
         }
       }
     },

@@ -266,6 +266,9 @@ public class EditService {
         out.put("edit", edit);
         out.put("clipLen", clipLen);
         out.put("clipStart", ws);                                    // 素材范围开头（整场秒数）
+        out.put("sourceCandidateStart", cs);
+        out.put("sourceCandidateEnd", ce);
+        out.put("speech", readSpeech(session, Math.max(0, ws - 15), Math.min(86400, we + 15)));
         out.put("window", Map.of("start", ws, "end", we));
         // “审核片段”的实际范围：有精排时 cut.py 按精排起止剪（clips/windows.json），和候选窗口不同；前端据此判断能不能直接用审核片段当预览
         double[] cw = clipWindow(session, rank, cs, ce);
@@ -288,6 +291,39 @@ public class EditService {
         out.put("variants", variantSummary(variants));
         out.put("chosenVariant", variants == null ? null : variants.get("chosen"));
         return out;
+    }
+
+    /** 编辑器原话采用整场时间，扩展素材范围后仍可准确定位，不受成片裁剪影响。 */
+    public Map<String, Object> speech(String session, int rank, double start, double end) {
+        candidate(session, rank);
+        if (!Double.isFinite(start) || !Double.isFinite(end) || start < 0 || end > 86400 || end <= start || end - start > 530) {
+            throw ApiException.badRequest("原话查询范围须为整场 0–86400 秒，单次不超过 530 秒");
+        }
+        return readSpeech(session, start, end);
+    }
+
+    private Map<String, Object> readSpeech(String session, double start, double end) {
+        Path file = paths.sessionDir(session).resolve("transcript.json");
+        if (!Files.exists(file)) return Map.of("available", false, "sentences", List.of());
+        try {
+            JsonNode root = om.readTree(file.toFile());
+            List<Map<String, Object>> rows = new ArrayList<>();
+            boolean truncated = false;
+            for (JsonNode s : root.path("sentences")) {
+                if (!s.path("t0").isNumber() || !s.path("t1").isNumber()) continue;
+                double a = s.path("t0").asDouble(), b = s.path("t1").asDouble();
+                if (!Double.isFinite(a) || !Double.isFinite(b) || a < 0 || b <= a || b > 86400 || b <= start || a >= end) continue;
+                StringBuilder words = new StringBuilder();
+                for (JsonNode w : s.path("words")) if (w.isArray() && w.size() >= 3) words.append(w.get(2).asText(""));
+                String text = words.isEmpty() ? s.path("text").asText("") : words.toString();
+                if (text.isBlank()) continue;
+                if (rows.size() >= 1000) { truncated = true; break; }
+                rows.add(Map.of("t0", a, "t1", b, "text", text));
+            }
+            return Map.of("available", true, "sentences", rows, "truncated", truncated);
+        } catch (IOException e) {
+            return Map.of("available", false, "sentences", List.of(), "error", "转写文件暂时无法读取");
+        }
     }
 
     /** 保存：选了字幕样式就把样式整份写进脚本（以后改样式不影响已编排好的片段）；校验交给 worker。 */

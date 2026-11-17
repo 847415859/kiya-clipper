@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from .speech_edit import validate_overrides
 
 TEXT_PRESETS = ("pop", "slam", "shake", "bounce", "fade")
 STICKER_PRESETS = ("pop", "slide", "shake", "bounce", "fade", "slam")
@@ -217,6 +218,13 @@ def validate_edit(raw: dict, clip_len: float) -> dict:
     out_items.sort(key=lambda i: i["start"])
     out = {"version": 1, "trim": {"start": start, "end": end},
            "subtitles": {"enabled": bool(subs.get("enabled", True))}, "items": out_items}
+    if "sentence_overrides" in subs:
+        try:
+            corrections = validate_overrides(subs["sentence_overrides"])
+        except ValueError as e:
+            raise EditError(str(e)) from e
+        if corrections:
+            out["subtitles"]["sentence_overrides"] = corrections
     if window:
         out["window"] = window
     music = validate_music(raw.get("music"))

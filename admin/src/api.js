@@ -55,6 +55,7 @@ export const api = {
   previewStyle: (body) => http.post('/api/styles/preview', body, { responseType: 'blob', timeout: 90000, quiet: true }),
 
   getEdit: (name, rank) => http.get(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}`),
+  editSpeech: (name, rank, start, end) => http.get(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}/speech`, { params: { start, end } }),
   saveEdit: (name, rank, edit, styleId, restoredAi = false) => http.put(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}`, { edit, styleId, restoredAi }),
   chooseVariant: (name, rank, key) => http.post(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}/variant`, { key }),
   finalUrl: (name, file) => `/api/sessions/${encodeURIComponent(name)}/finals/${encodeURIComponent(file)}`,

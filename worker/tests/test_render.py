@@ -59,7 +59,8 @@ def test_edit_check_script(tmp_path):
     assert r.returncode == 1 and "剪辑脚本有误" in r.stderr
 
 
-def test_render_pipeline(tmp_path):
+@pytest.mark.parametrize("manual", [False, True])
+def test_render_pipeline(tmp_path, manual):
     # 一段 120 秒的录像，候选片段是 30–90 秒
     video = tmp_path / "seg.flv"
     subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=640x360:r=10:d=120",
@@ -80,6 +81,11 @@ def test_render_pipeline(tmp_path):
                   {"type": "zoom", "start": 11.5, "duration": 3, "scale": 1.8},
                   {"type": "sticker", "start": 13, "duration": 1.5, "asset": "doge.png"},
                   {"type": "text", "start": 40, "duration": 2, "text": "裁掉的"}]}, ensure_ascii=False), encoding="utf-8")
+    if manual:
+        path = sess / "edits" / "03.json"
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        saved["subtitles"]["sentence_overrides"] = [{"t0": 41, "t1": 44, "original": "舰长寄来发件礼，", "text": "舰长寄来了律师函"}]
+        path.write_text(json.dumps(saved, ensure_ascii=False), encoding="utf-8")
     stickers = tmp_path / "stickers"
     stickers.mkdir()
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=pink:s=64x64", "-frames:v", "1",
@@ -110,9 +116,10 @@ def test_render_pipeline(tmp_path):
     assert props["width"] == 640 and props["height"] == 360 and props["duration"] == 20
     assert [(i["type"], i["start"]) for i in props["items"]] == [("zoom", 6.5), ("text", 7.0), ("sticker", 8.0)]
     ev = props["subtitles"]["events"]
-    assert ev and ev[0]["t0"] == pytest.approx(6.0) and "发舰礼" in ev[0]["text"]      # 41 秒 → 成片第 6 秒，已纠错
+    assert ev and ev[0]["t0"] == pytest.approx(6.0)
+    assert ("舰长寄来了律师函" if manual else "发舰礼") in ev[0]["text"]
     assert all(e["t1"] <= 20 for e in ev) and not any("裁剪范围之外" in e["text"] for e in ev)
-    assert ev[0]["words"][0] == [6.0, 6.3, "舰"]
+    assert ev[0]["words"] == [] if manual else ev[0]["words"][0] == [6.0, 6.3, "舰"]
     assert props["subtitles"]["style"]["font_size"] == 70 and props["subtitles"]["style"]["karaoke"] is True
     assert "舰长" in props["subtitles"]["keywords"]
     assert (sess / "render" / "job_03" / "stickers" / "doge.png").exists()

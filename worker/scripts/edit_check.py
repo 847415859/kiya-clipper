@@ -19,6 +19,8 @@ from clipper import callbacks as CB  # noqa: E402
 from clipper import music as M  # noqa: E402
 from clipper.beats import SNAP_MIN_CONFIDENCE  # noqa: E402
 from clipper.edit import EditError, density_problems, missing_assets, snap_to_beats, validate_edit  # noqa: E402
+from clipper.asr import load_transcript  # noqa: E402
+from clipper.speech_edit import apply_overrides  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -65,6 +67,12 @@ def main() -> int:
         warnings = music_warnings(edit, args.clip_len)
         warnings += callback_warnings(edit, Path(args.file).resolve().parent.parent)
         warnings += density_problems(edit)
+        overrides = edit["subtitles"].get("sentence_overrides") or []
+        if overrides:
+            transcript = load_transcript(Path(args.file).resolve().parent.parent / "transcript.json") or {}
+            _, unmatched = apply_overrides(transcript.get("sentences") or [], overrides)
+            if unmatched:
+                warnings.append(f"{len(unmatched)} 条字幕修订无法匹配当前转写，渲染时不会套用；请重新校对原文和时间")
         stickers = os.environ.get("KIYA_STICKERS") or REPO / "assets" / "stickers"
         warnings += [f"贴图库里没有 {a}，渲染会失败" for a in missing_assets(edit, stickers)]
         print(json.dumps({"edit": edit, "warnings": warnings}, ensure_ascii=False))

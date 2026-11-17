@@ -35,6 +35,7 @@ from clipper import music as music_lib  # noqa: E402
 from clipper.boiler import business_cuts, compact_time, keep_ranges  # noqa: E402
 from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
+from clipper.speech_edit import apply_overrides  # noqa: E402
 from clipper.edit import EditError, default_edit, edit_window, validate_edit, validate_item  # noqa: E402
 from clipper.streamer import resolve_config  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
@@ -102,17 +103,17 @@ def link(src: Path, dst: Path) -> None:
         shutil.copy(src, dst)
 
 
-def subtitle_events(sentences, start, end, style, corrections) -> list[dict]:
-    events = build_events(sentences, start, end, style, corrections)
+def subtitle_events(sentences, start, end, style, corrections, sentence_overrides=None) -> list[dict]:
+    events = build_events(sentences, start, end, style, corrections, sentence_overrides)
     for e in events:          # 逐字变色用的词：与烧录字幕一致地纠错、去标点
         words = []
         for a, b, w in e["words"]:
-            w = apply_corrections(w, corrections)
+            w = apply_corrections(w, None if e.get("manual") else corrections)
             if style["strip_punct"]:
                 w = w.rstrip(STRIP_PUNCT)
             if w:
                 words.append([round(a, 3), round(b, 3), w])
-        e["words"] = words
+        e["words"] = [] if e.get("manual") else words
         e["t0"], e["t1"] = round(e["t0"], 3), round(e["t1"], 3)
     return events
 
@@ -201,7 +202,11 @@ def main() -> int:
         keywords = sorted({*(lore_keywords(streamer) if style["highlight_lore"] else []), *style["highlight_words"]},
                           key=len, reverse=True)
         corrections = sub_cfg.get("corrections") or {}
-        events = subtitle_events(tr["sentences"], t_start, t_end, style, corrections)
+        overrides = edit["subtitles"].get("sentence_overrides") or []
+        _, unmatched = apply_overrides(tr["sentences"], overrides)
+        if unmatched:
+            print(f"提醒：{len(unmatched)} 条字幕修订的原文或时间已变化，未套用；请回编辑器重新校对")
+        events = subtitle_events(tr["sentences"], t_start, t_end, style, corrections, overrides)
         if removed:
             events = compact_events(events, t_start, removed)
         subs = {"enabled": True, "style": style, "events": events, "keywords": keywords}

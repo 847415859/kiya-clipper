@@ -6,6 +6,8 @@
       <span class="muted">高峰 {{ hms(info.t) }}，素材 {{ hms(winStart) }}–{{ hms(winEnd) }}（{{ fmt(info.clipLen) }}）</span>
       <span class="spacer" />
       <el-tag v-if="dirty" type="warning" size="small">未保存</el-tag>
+      <el-button :disabled="!canUndo || saving || drafting || cutting" @click="stepHistory('undo')">撤销</el-button>
+      <el-button :disabled="!canRedo || saving || drafting || cutting" @click="stepHistory('redo')">重做</el-button>
       <el-tooltip content="让大模型按精排结果写一版花字 / 运镜 / 贴图，再手动微调" placement="bottom">
         <el-button :loading="drafting" @click="aiDraft">AI 初稿</el-button>
       </el-tooltip>
@@ -86,6 +88,8 @@
 
         <div class="controls">
           <el-button size="small" @click="togglePlay">{{ playing ? '暂停' : '播放' }}</el-button>
+          <el-button size="small" @click="seek(time - 1 / 30)">前一帧</el-button>
+          <el-button size="small" @click="seek(time + 1 / 30)">后一帧</el-button>
           <span class="time">{{ fmt(time) }} / {{ fmt(info.clipLen) }}</span>
           <el-button size="small" @click="addText">+ 花字</el-button>
           <el-button size="small" @click="addZoom">+ 放大运镜</el-button>
@@ -132,7 +136,16 @@
           <el-slider v-model="trimRange" range :min="0" :max="info.clipLen || 60" :step="0.1" :format-tooltip="fmt" />
           <span class="muted">{{ fmt(edit.trim.start) }} – {{ fmt(edit.trim.end) }}（{{ fmt(edit.trim.end - edit.trim.start) }}）</span>
         </div>
+        <div class="trim">
+          <el-button size="small" @click="setBoundary({ edge: 'start', time })">I · 当前设为起点</el-button>
+          <el-button size="small" @click="setBoundary({ edge: 'end', time })">O · 当前设为终点</el-button>
+          <el-button size="small" @click="audition({ start: edit.trim.start, end: edit.trim.end })" :disabled="windowStale">试听成片范围</el-button>
+          <span class="muted">J/L ±5 秒 · ←/→ 按 30fps 步进 · Ctrl+Z 撤销 · Ctrl+Shift+Z 重做 · Ctrl+S 保存</span>
+        </div>
         <p class="muted hint">预览说明：动画和位置与成片一致；画面上的字幕是审核片段里烧好的，放大时会跟着放大，成片里字幕由渲染器单独绘制、不会被放大。</p>
+        <TranscriptEditor :edit="edit" :speech="info.speech" :time="time" :asr-doubt="!!info.llm?.asrDoubt"
+                          :loading="speechLoading" :stale-video="windowStale" @seek="seek" @audition="audition"
+                          @boundary="setBoundary" @expand="expandForSentence" @correction="correctSentence" @remove-correction="removeCorrection" />
       </section>
 
       <aside class="right">
@@ -140,6 +153,7 @@
                       :cover-url="pack.cover ? api.coverUrl(name, rank, pack.cover_version) : ''"
                       :final-file="latestFinal"
                       @caption="addContextCaption" @seek="seek" @preview="openViewerPreview" />
+        <EditComparison :edit="edit" :ai="info.aiDraft" :candidate-start="info.sourceCandidateStart" @select="selectComparedEffect" />
         <el-card shadow="never" class="card">
           <template #header><b>字幕</b></template>
           <el-form label-width="64px" size="small">
@@ -497,6 +511,9 @@ import { narrationView, fakeUiView } from '../../../renderer/src/fakeui.js'
 import FxView from '../components/FxView.vue'
 import ViewerReview from '../components/ViewerReview.vue'
 import { makeCaption } from '../viewer-review'
+import TranscriptEditor from '../components/TranscriptEditor.vue'
+import EditComparison from '../components/EditComparison.vue'
+import { clone, createHistory, sentenceKey, updateSentenceOverride } from '../editor-tools'
 
 const route = useRoute()
 const router = useRouter()
@@ -537,7 +554,8 @@ const generatedBy = ref('')
 const aiNote = ref('')
 let restoredAi = false           // 刚点了“还原 AI 原稿”：下一次保存不算人工修改
 const info = reactive({ aiDraft: null, clipLen: 60, clip: null, preview: null, t: 0, finals: [], llm: null, exists: false,
-  candidate: { start: 0, end: 60 }, videoWindow: null, variants: [], chosenVariant: null, quality: null })
+  candidate: { start: 0, end: 60 }, videoWindow: null, variants: [], chosenVariant: null, quality: null,
+  sourceCandidateStart: 0, sourceCandidateEnd: 60, speech: { available: false, sentences: [] } })
 const edit = reactive({ window: { start: 0, end: 60 }, trim: { start: 0, end: 60 }, subtitles: { enabled: true }, items: [], music: null, callback: null })
 const callbackRelation = { flag_payoff: '立 flag 与打脸', reversal: '话题前后反转' }
 const callbackLen = computed(() => {
@@ -598,6 +616,9 @@ const video = ref(null)
 const stage = ref(null)
 const track = ref(null)
 const stageSize = reactive({ w: 960, h: 540 })
+const speechLoading = ref(false)
+let speechRequest = 0
+let auditionEnd = null
 let loaded = false
 let raf = 0
 let resizeObs = null
@@ -685,7 +706,13 @@ function stickerStyle(it) {
 }
 
 function syncTime() {
-  if (video.value) time.value = video.value.currentTime
+  if (video.value) {
+    time.value = video.value.currentTime
+    if (auditionEnd !== null && time.value >= auditionEnd) {
+      video.value.pause()
+      auditionEnd = null
+    }
+  }
 }
 function tick() {
   cancelAnimationFrame(raf)
@@ -705,9 +732,50 @@ function measure() {
   }
 }
 function seek(t) {
+  auditionEnd = null
   t = clamp(t, 0, info.clipLen)
   time.value = t
   if (video.value) video.value.currentTime = t
+}
+function audition(range) {
+  if (!video.value || windowStale.value) return ElMessage.info('先生成与当前素材范围一致的预览')
+  const start = clamp(range.start, 0, info.clipLen), end = clamp(range.end, 0, info.clipLen)
+  if (end <= start) return
+  seek(start)
+  auditionEnd = end
+  video.value.play().catch(() => { auditionEnd = null; ElMessage.info('请点击播放按钮重试') })
+}
+function setBoundary({ edge, time: value }) {
+  const t = round(clamp(value, 0, info.clipLen))
+  if (edge === 'start' && edit.trim.end - t >= 1) edit.trim.start = t
+  else if (edge === 'end' && t - edit.trim.start >= 1) edit.trim.end = t
+  else return ElMessage.warning('成片起止之间至少保留 1 秒；请先调整另一端')
+}
+function correctSentence({ sentence, text }) {
+  edit.subtitles.sentence_overrides = updateSentenceOverride(edit.subtitles.sentence_overrides || [], sentence, text)
+}
+function removeCorrection(sentence) {
+  edit.subtitles.sentence_overrides = (edit.subtitles.sentence_overrides || []).filter(r => sentenceKey(r) !== sentenceKey(sentence))
+}
+function selectComparedEffect(item) {
+  const local = item.start - edit.window.start
+  selected.value = item.id || null
+  seek(local)
+}
+function expandForSentence(sentence) {
+  setWindow(Math.max(0, Math.min(edit.window.start, sentence.t0 - 1)), Math.min(86400, Math.max(edit.window.end, sentence.t1 + 1)))
+}
+async function refreshSpeech() {
+  const ticket = ++speechRequest, key = `${name.value}/${rank.value}`
+  speechLoading.value = true
+  try {
+    const result = await api.editSpeech(name.value, rank.value, Math.max(0, edit.window.start - 15), Math.min(86400, edit.window.end + 15))
+    if (ticket === speechRequest && key === `${name.value}/${rank.value}`) info.speech = result
+  } catch (e) {
+    if (ticket === speechRequest) info.speech = { available: false, sentences: [], error: '原话加载失败，可调整素材范围后重试' }
+  } finally {
+    if (ticket === speechRequest) speechLoading.value = false
+  }
 }
 function togglePlay() {
   const v = video.value
@@ -894,10 +962,12 @@ async function addNetSticker(url, i) {
 
 // ---------------------------------------------------------------- 加载 / 保存 / 渲染
 function apply(e) {
-  if (e.window) Object.assign(edit.window, { start: e.window.start, end: e.window.end })
+  Object.assign(edit.window, e.window || { start: info.sourceCandidateStart, end: info.sourceCandidateEnd })
+  info.clipLen = edit.window.end - edit.window.start
   edit.trim.start = e.trim.start
   edit.trim.end = e.trim.end
   edit.subtitles.enabled = e.subtitles ? e.subtitles.enabled !== false : true
+  edit.subtitles.sentence_overrides = clone(e.subtitles?.sentence_overrides || [])
   styleId.value = (e.subtitles && e.subtitles.style_id) || null
   edit.items.splice(0, edit.items.length, ...(e.items || []).map((i) => ({ ...i, id: i.id || newId() })))
   edit.music = e.music ? { track: e.music.track, start: e.music.start ?? 0, volume: e.music.volume ?? 0.18, duck: e.music.duck !== false, snap: !!e.music.snap } : null
@@ -910,14 +980,20 @@ function apply(e) {
 async function load() {
   loading.value = true
   loaded = false
+  clearTimeout(historyTimer)
+  speechRequest++
   try {
     const r = await api.getEdit(name.value, rank.value)
     Object.assign(info, { clipLen: r.clipLen, clip: r.clip, preview: r.preview || null, t: r.t, finals: r.finals || [],
-      llm: r.llm || null, exists: !!r.exists, aiDraft: r.aiDraft || null, variants: r.variants || [], chosenVariant: r.chosenVariant || null, quality: r.quality || null, candidate: r.candidate || { start: 0, end: r.clipLen } })
+      llm: r.llm || null, exists: !!r.exists, aiDraft: r.aiDraft || null, variants: r.variants || [], chosenVariant: r.chosenVariant || null, quality: r.quality || null, candidate: r.candidate || { start: 0, end: r.clipLen },
+      sourceCandidateStart: r.sourceCandidateStart ?? r.clipStart ?? 0,
+      sourceCandidateEnd: r.sourceCandidateEnd ?? ((r.clipStart || 0) + r.clipLen),
+      speech: r.speech || { available: false, sentences: [] } })
     info.videoWindow = null
     videoSrc.value = ''
-    pickVideo()
     apply(r.edit)
+    restoredAi = false
+    pickVideo()
     styles.value = await api.styles()
     loadTracks()
     loadPublish()
@@ -927,6 +1003,10 @@ async function load() {
     loading.value = false
     await nextTick()
     dirty.value = false
+    savedSnapshot = fingerprint(snapshot())
+    history.reset(snapshot())
+    historyVersion.value++
+    speechLoading.value = false
     loaded = true
     measure()
   }
@@ -938,28 +1018,86 @@ async function load() {
   }
 }
 
-watch([edit, styleId], () => { if (loaded) dirty.value = true }, { deep: true })
+const history = createHistory()
+const historyVersion = ref(0)
+const canUndo = computed(() => { historyVersion.value; return history.canUndo })
+const canRedo = computed(() => { historyVersion.value; return history.canRedo })
+let historyTimer = null, savedSnapshot = '', historyRestoring = false
+function stateFromEdit(source, style, restored = false) {
+  const body = { version: 1, window: clone(source.window), trim: clone(source.trim), subtitles: { enabled: source.subtitles.enabled }, items: clone(source.items) }
+  if (source.subtitles.sentence_overrides?.length) body.subtitles.sentence_overrides = clone(source.subtitles.sentence_overrides)
+  if (source.music?.track) body.music = clone(source.music)
+  if (source.callback) body.callback = clone(source.callback)
+  if (source.generated_by) Object.assign(body, { generated_by: source.generated_by, note: source.note || '' })
+  return { edit: body, styleId: style, restoredAi: restored }
+}
+function snapshot() { return stateFromEdit({ ...edit, generated_by: generatedBy.value, note: aiNote.value }, styleId.value, restoredAi) }
+function fingerprint(value) { return JSON.stringify({ edit: value.edit, styleId: value.styleId }) }
+function recordHistory() {
+  clearTimeout(historyTimer)
+  if (!loaded || historyRestoring) return
+  history.record(snapshot())
+  historyVersion.value++
+}
+watch([edit, styleId, generatedBy, aiNote], () => {
+  if (!loaded || historyRestoring) return
+  dirty.value = fingerprint(snapshot()) !== savedSnapshot
+  clearTimeout(historyTimer)
+  historyTimer = setTimeout(recordHistory, 300)
+}, { deep: true })
+async function stepHistory(direction) {
+  if (saving.value || drafting.value || cutting.value) return
+  recordHistory()
+  const target = history[direction]()
+  if (!target) return
+  historyRestoring = true
+  const previousWindow = JSON.stringify(edit.window)
+  video.value?.pause()
+  auditionEnd = null
+  apply(target.edit)
+  styleId.value = target.styleId
+  restoredAi = target.restoredAi
+  selected.value = edit.items.some(i => i.id === selected.value) ? selected.value : null
+  pickVideo()
+  await nextTick()
+  dirty.value = fingerprint(snapshot()) !== savedSnapshot
+  historyRestoring = false
+  historyVersion.value++
+  if (previousWindow !== JSON.stringify(edit.window)) refreshSpeech()
+}
 
 async function save(quiet) {
+  if ((edit.subtitles.sentence_overrides || []).some(r => !r.text.trim())) {
+    ElMessage.warning('有字幕修订内容为空，请填写或恢复原文后保存')
+    return false
+  }
+  recordHistory()
   saving.value = true
   try {
-    const body = { version: 1, window: { ...edit.window }, trim: { ...edit.trim }, subtitles: { enabled: edit.subtitles.enabled }, items: edit.items }
-    if (edit.music && edit.music.track) body.music = { ...edit.music }
-    if (edit.callback) body.callback = { ...edit.callback }
-    if (generatedBy.value) Object.assign(body, { generated_by: generatedBy.value, note: aiNote.value })
-    const r = await api.saveEdit(name.value, rank.value, body, edit.subtitles.enabled ? styleId.value : null, restoredAi)
-    restoredAi = false
+    const sent = snapshot()
+    const sentStyle = edit.subtitles.enabled ? sent.styleId : null
+    const r = await api.saveEdit(name.value, rank.value, sent.edit, sentStyle, sent.restoredAi)
     warnings.value = r.warnings || []
     info.exists = true
-    loaded = false
-    const sel = selected.value
-    apply(r.edit)
-    selected.value = sel
-    await nextTick()
-    dirty.value = false
-    loaded = true
-    if (!quiet) ElMessage[warnings.value.length ? 'warning' : 'success'](warnings.value.length ? `已保存，有 ${warnings.value.length} 条提醒` : '已保存')
-    return true
+    if (fingerprint(snapshot()) === fingerprint(sent)) {
+      loaded = false
+      const sel = selected.value
+      apply(r.edit)
+      restoredAi = false
+      selected.value = sel
+      await nextTick()
+      dirty.value = false
+      savedSnapshot = fingerprint(snapshot())
+      loaded = true
+    } else {
+      // 校验可能耗时数秒；保留提交之后继续输入的内容，不能用旧响应覆盖。
+      savedSnapshot = fingerprint(stateFromEdit(r.edit, sentStyle))
+      dirty.value = fingerprint(snapshot()) !== savedSnapshot
+      ElMessage.info('已保存提交时的版本，之后的修改仍保留在编辑器中，请再次保存')
+    }
+    recordHistory()
+    if (!quiet && !dirty.value) ElMessage[warnings.value.length ? 'warning' : 'success'](warnings.value.length ? `已保存，有 ${warnings.value.length} 条提醒` : '已保存')
+    return !dirty.value
   } finally {
     saving.value = false
   }
@@ -968,13 +1106,15 @@ async function save(quiet) {
 async function restoreAi() {
   await ElMessageBox.confirm('丢掉现在的修改，回到 AI 刚生成的版本？', '还原 AI 原稿', { type: 'warning', confirmButtonText: '还原' })
   apply(info.aiDraft)
+  pickVideo()
+  refreshSpeech()
   restoredAi = true
   await nextTick()
   dirty.value = true
 }
 
 async function render(height) {
-  if (dirty.value || height >= 1080) await save(true)          // 渲染发布用的 1080p 也算“确认这版”
+  if (dirty.value || height >= 1080) { if (!(await save(true))) return }
   const j = await api.submitJob('RENDER', name.value, { rank: rank.value, height })
   renderJob.value = j.id
   rendering.value = true
@@ -1232,6 +1372,7 @@ function setWindow(start, end) {
   Object.assign(edit.window, { start, end })
   info.clipLen = len
   pickVideo()
+  refreshSpeech()
   if (outside.length) ElMessage.warning(`有 ${outside.length} 个效果落在新的素材范围之外，已删掉`)
 }
 
@@ -1246,7 +1387,7 @@ function resetWindow() {
 async function makePreview() {
   cutting.value = true
   try {
-    if (dirty.value || !info.exists) await save(true)
+    if (dirty.value || !info.exists) { if (!(await save(true))) return }
     if (sameAsCandidate.value) {
       await load()
       if (!info.clip) await cutClip()
@@ -1282,11 +1423,22 @@ function back() {
 }
 
 function onKey(e) {
-  if (finalFile.value) return
+  if (finalFile.value || gallery.value || draftDlg.show || saving.value || drafting.value || cutting.value) return
+  if (e.target?.closest?.('[role="dialog"]')) return
+  const textTarget = e.target?.closest?.('input, textarea, select, [contenteditable="true"], [role="textbox"]')
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); return }
+  if (!textTarget && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+    e.preventDefault(); stepHistory(e.shiftKey ? 'redo' : 'undo'); return
+  }
   const tag = (e.target && e.target.tagName) || ''
-  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || e.ctrlKey || e.metaKey || e.altKey) return
+  if (textTarget || ['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || e.ctrlKey || e.metaKey || e.altKey) return
   if (e.key === ' ') { e.preventDefault(); togglePlay() }
   else if ((e.key === 'Delete' || e.key === 'Backspace') && selected.value) { e.preventDefault(); removeSelected() }
+  else if (e.key.toLowerCase() === 'i') setBoundary({ edge: 'start', time: time.value })
+  else if (e.key.toLowerCase() === 'o') setBoundary({ edge: 'end', time: time.value })
+  else if (e.key.toLowerCase() === 'j') seek(time.value - 5)
+  else if (e.key.toLowerCase() === 'l') seek(time.value + 5)
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); video.value?.pause(); seek(time.value + (e.key === 'ArrowLeft' ? -1 : 1) / 30) }
 }
 
 onBeforeRouteLeave(async () => {
@@ -1308,6 +1460,8 @@ onMounted(() => {
   }
 })
 onBeforeUnmount(() => {
+  clearTimeout(historyTimer)
+  speechRequest++
   cancelAnimationFrame(raf)
   window.removeEventListener('keydown', onKey)
   if (resizeObs) resizeObs.disconnect()

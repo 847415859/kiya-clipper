@@ -53,11 +53,13 @@ def diff_edit(ai: dict, human: dict) -> dict:
     added = [{"type": h_items[j]["type"], "text": h_items[j].get("text") or h_items[j].get("asset") or "",
               "start": round(h_items[j]["start"], 1)} for j in free]
     count = lambda items: {t: sum(1 for i in items if i["type"] == t) for t in TYPE_NAME}
+    subtitle_changed = (ai.get("subtitles") or {}).get("sentence_overrides", []) != (human.get("subtitles") or {}).get("sentence_overrides", [])
     return {"kept": kept, "removed": removed, "added": added, "retimed": retimed,
+            "subtitle_changed": subtitle_changed,
             "text_changed": text_changed, "asset_changed": asset_changed,
             "trim_shift": {"start": round(h_trim["start"] - a_trim["start"], 1), "end": round(h_trim["end"] - a_trim["end"], 1)},
             "ai_counts": count(a_items), "human_counts": count(h_items),
-            "changed": bool(removed or added or retimed or text_changed or asset_changed
+            "changed": bool(removed or added or retimed or text_changed or asset_changed or subtitle_changed
                             or abs(h_trim["start"] - a_trim["start"]) > 0.5 or abs(h_trim["end"] - a_trim["end"]) > 0.5)}
 
 

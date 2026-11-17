@@ -42,6 +42,12 @@ public class EditController {
 
     public record SaveReq(Map<String, Object> edit, Long styleId, Boolean restoredAi) {}
 
+    @GetMapping("/api/sessions/{name}/edits/{rank}/speech")
+    public Map<String, Object> speech(@PathVariable String name, @PathVariable int rank,
+                                      @RequestParam double start, @RequestParam double end) {
+        return edits.speech(name, rank, start, end);
+    }
+
     @PutMapping("/api/sessions/{name}/edits/{rank}")
     public Map<String, Object> save(@PathVariable String name, @PathVariable int rank, @RequestBody SaveReq req) {
         return edits.save(name, rank, req.edit(), req.styleId(), Boolean.TRUE.equals(req.restoredAi()));

@@ -15,6 +15,7 @@ from pathlib import Path
 import yaml
 
 from .overrides import load_overrides
+from .speech_edit import apply_overrides
 
 REPO = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = REPO / "config" / "schema" / "subtitle_style.schema.json"
@@ -176,9 +177,11 @@ def chunk_sentence(sent: dict, max_chars: int) -> list[dict]:
 
 
 def build_events(sentences: list[dict], start: float, end: float, style: dict,
-                 corrections: dict | None = None) -> list[dict]:
+                 corrections: dict | None = None, sentence_overrides: list[dict] | None = None) -> list[dict]:
     """片段 [start, end]（整场秒数）内的字幕条，时间换算成片段内秒数。"""
     events = []
+    if sentence_overrides:
+        sentences, _ = apply_overrides(sentences, sentence_overrides)
     for s in sentences:
         if s["t1"] <= start or s["t0"] >= end:
             continue
@@ -186,7 +189,10 @@ def build_events(sentences: list[dict], start: float, end: float, style: dict,
             if c["t1"] <= start or c["t0"] >= end:
                 continue
             ws = [[max(0.0, a - start), max(0.0, b - start), t] for a, b, t in c["words"]]
-            events.append({"t0": max(0.0, c["t0"] - start), "t1": min(end, c["t1"]) - start, "words": ws})
+            event = {"t0": max(0.0, c["t0"] - start), "t1": min(end, c["t1"]) - start, "words": ws}
+            if s.get("subtitle_manual"):
+                event["manual"] = True
+            events.append(event)
     events.sort(key=lambda e: e["t0"])
     # 时长下限 + 相邻条之间的小空隙补齐（减少闪烁），且不与下一条重叠
     for i, e in enumerate(events):
@@ -196,7 +202,7 @@ def build_events(sentences: list[dict], start: float, end: float, style: dict,
         e["t1"] = min(max(e["t1"], e["t0"] + style["min_duration"]), max(nxt, e["t0"] + 0.2))
     for e in events:
         text = "".join(w[2] for w in e["words"])
-        text = apply_corrections(text, corrections)
+        text = apply_corrections(text, None if e.get("manual") else corrections)
         if style["strip_punct"]:
             text = text.strip().rstrip(STRIP_PUNCT).replace("，", " ").replace(",", " ").replace("。", " ")
         e["text"] = re.sub(r"\s+", " ", text).strip()
@@ -287,7 +293,7 @@ def to_ass(events: list[dict], style: dict, width: int = 1920, height: int = 108
     hl = ass_color(style["highlight_color"])
     lines = []
     for e in events:
-        text = _karaoke(e, corrections, style["strip_punct"]) if style["karaoke"] else _highlight(e["text"], kw, hl, ass_color(primary))
+        text = _karaoke(e, corrections, style["strip_punct"]) if style["karaoke"] and not e.get("manual") else _highlight(e["text"], kw, hl, ass_color(primary))
         t0, t1 = ass_time(e["t0"]), ass_time(e["t1"])
         if style["box"]:
             lines.append(f"Dialogue: 0,{t0},{t1},Box,,0,0,0,,{_esc(e['text'])}")

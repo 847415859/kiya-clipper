@@ -18,6 +18,7 @@ from typing import Any
 from .boiler import business_cuts
 from .edit import density_problems, missing_assets, validate_edit
 from .editdiff import diff_edit
+from .speech_edit import apply_overrides
 
 
 @dataclass
@@ -280,6 +281,12 @@ def _edit_check(report: QualityReport, session_dir: Path, rank: int, edit: dict[
     try:
         length = float((edit.get("window") or {}).get("end", 0)) - float((edit.get("window") or {}).get("start", 0)) if edit.get("window") else float((edit.get("trim") or {}).get("end", 0))
         normalized = validate_edit(edit, max(length, 1))
+        overrides = normalized["subtitles"].get("sentence_overrides") or []
+        if overrides:
+            transcript = _load(session_dir / "transcript.json") or {}
+            _, unmatched = apply_overrides(transcript.get("sentences") or [], overrides)
+            if unmatched:
+                report.issue("subtitle_override_stale", "warning", "部分字幕修订的原文或时间已变化，未套用", count=len(unmatched))
         problems = density_problems(normalized)
         missing = missing_assets(normalized, Path(__file__).resolve().parents[2] / "assets" / "stickers")
         report.check("effects", "warning" if problems or missing else "pass", count=len(normalized.get("items", [])), density=problems, missing_assets=missing)
