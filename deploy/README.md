@@ -213,3 +213,15 @@ cd /opt/kiya-clipper/worker
 ```
 
 `BVxxxxxxxxxx` 必须替换为已核对的真实 BV 号；若采用新目录结构，候选路径改为 `output/<主播>/20261111-2126/candidates.json`。此命令不运行 biliup，不重新上传；若已有另一条成功投稿记录则拒绝覆盖。脚本每次任务重新加载，更新该 Python 文件不需要重启录播姬。
+
+
+### 重投后仍保存旧回执
+
+旧版本可能在重投成功后、保存新回执前因本地绑定错误退出，导致 `<序号>.bili.json` 仍记录旧 BV。默认补记命令会拒绝覆盖另一条成功记录；确认创作中心的新旧稿件后，用 `--replace-bvid` 指定当前旧记录：
+
+```bash
+cd /opt/kiya-clipper/worker
+.venv/bin/python scripts/publish_bili.py output/20261111-2126/candidates.json --rank 6 --bind-bvid BV1UGsg63E8Y --replace-bvid BV1k9WX6nEyq
+```
+
+以上 BV 仅对应本次故障示例，使用前需核对实际稿件。旧号须与当前回执一致；已经成功替换为目标 BV 时允许重复补记。替换前把旧回执原始内容备份到该场次 `publish/history/`，新回执包含 `previous` 和 `previous_receipt`。补记时间标记为 `time_source: repair`，不沿用旧稿件的投稿时间或上传日志。此操作仅更新本地记录与精排记忆，不调用 biliup；`--replace-bvid` 不能单独使用，`--bind-bvid` 不能与 `--again`、`--dry-run`、`--status` 混用。

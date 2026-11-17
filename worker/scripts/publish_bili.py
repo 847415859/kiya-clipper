@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -221,20 +222,40 @@ def save_result(path: Path, result: dict) -> None:
     tmp.replace(path)
 
 
-def repair_binding(candidates: Path, rank: int, bvid: str) -> dict:
+def repair_binding(candidates: Path, rank: int, bvid: str, replace_bvid: str | None = None) -> dict:
     """Explicit recovery for an existing post. Never starts biliup or uploads a file."""
     if not re.fullmatch(r"BV[0-9A-Za-z]{10}", bvid):
         raise Refuse("BV 号格式不对")
+    if replace_bvid is not None and not re.fullmatch(r"BV[0-9A-Za-z]{10}", replace_bvid):
+        raise Refuse("要替换的旧 BV 号格式不对")
     data = read(candidates, {})
     if not any(c.get("rank") == rank for c in data.get("candidates", [])):
         raise Refuse(f"没有序号 {rank} 的候选")
     sess = candidates.parent
     result_file = sess / "publish" / f"{rank:02d}.bili.json"
+    original = result_file.read_bytes() if result_file.exists() else None
     result = read(result_file, {}) or {}
-    if result.get("status") == "ok" and result.get("bvid") and result["bvid"] != bvid:
-        raise Refuse("已有另一个成功投稿的 BV 号，请先在后台核对绑定")
+    old_bvid = result.get("bvid")
+    replacing = bool(old_bvid and old_bvid != bvid)
+    if replace_bvid is not None and old_bvid not in (replace_bvid, bvid):
+        raise Refuse(f"当前记录的 BV 号是 {old_bvid or '空'}，与指定的旧 BV 不一致；未修改")
+    if result.get("status") == "ok" and replacing and replace_bvid is None:
+        raise Refuse(f"已有另一个成功投稿的 BV 号 {old_bvid}；核对后用 --replace-bvid {old_bvid} 明确指定替换，只更新本地记录")
     now = time.time()
+    if original != (result_file.read_bytes() if result_file.exists() else None):
+        raise Refuse("投稿记录在恢复期间已变化，请重新核对；未修改")
+    if replacing:
+        archive_dir = result_file.parent / "history"
+        archive_dir.mkdir(exist_ok=True)
+        backup = archive_dir / f"{rank:02d}.bili.{time.time_ns()}.{uuid.uuid4().hex[:8]}.json"
+        backup.write_bytes(original)
+        previous = {k: result.get(k) for k in ("bvid", "mode_text", "at", "at_text")}
+        result = {"previous": previous, "previous_receipt": str(backup.relative_to(sess)), "time_source": "repair",
+                  "mode_text": "手动补记重投稿件（时间为补记时间）"}
+    if "at" not in result:
+        result["time_source"] = "repair"
     result.update(status="ok", session=sess.name, rank=rank, bvid=bvid, bound=False, recovered=True)
+    result["repaired_at"] = now
     result.setdefault("at", now)
     result.setdefault("at_text", datetime.fromtimestamp(now).strftime("%m-%d %H:%M"))
     result.setdefault("mode_text", "手动补记已投稿稿件")
@@ -336,9 +357,14 @@ def main() -> int:
     ap.add_argument("--allow-taboo", action="store_true")
     ap.add_argument("--again", action="store_true", help="已经投过也再投一次")
     ap.add_argument("--bind-bvid", help="仅补记已投稿稿件的 BV 号，不上传；请先在创作中心核对")
+    ap.add_argument("--replace-bvid", help="配合 --bind-bvid，明确指定被替换的旧 BV；自动备份旧回执，不上传")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--config", default=None)
     args = ap.parse_args()
+    if args.replace_bvid and not args.bind_bvid:
+        ap.error("--replace-bvid 必须配合 --bind-bvid，不能用于上传")
+    if args.bind_bvid and (args.dry_run or args.again or args.status):
+        ap.error("--bind-bvid 仅用于补记，不能与 --dry-run / --again / --status 同时使用")
 
     if args.status:
         cfg = load_cfg(resolve_config(args.config, Path(args.candidates).parent if args.candidates else None))
@@ -347,7 +373,7 @@ def main() -> int:
     if not args.candidates or not args.rank:
         ap.error("需要 candidates.json 和 --rank")
     try:
-        res = repair_binding(Path(args.candidates), args.rank, args.bind_bvid) if args.bind_bvid else run(args)
+        res = repair_binding(Path(args.candidates), args.rank, args.bind_bvid, args.replace_bvid) if args.bind_bvid else run(args)
     except Refuse as e:
         print(str(e), file=sys.stderr)
         return 2

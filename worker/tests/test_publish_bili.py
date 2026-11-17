@@ -252,3 +252,43 @@ def test_repair_binding_records_receipt_and_never_uploads(tmp_path, monkeypatch)
     assert result["status"] == "ok" and result["bound"] and result["recovered"]
     assert json.loads((sess / "publish/01.bili.json").read_text(encoding="utf-8"))["bvid"] == "BV1ab411c7de"
     assert json.loads(Path(env["KIYA_MEMORY_DECISIONS"]).read_text(encoding="utf-8"))["published"]["BV1ab411c7de"]["rank"] == 1
+
+
+def test_replace_receipt_requires_matching_old_bvid_and_backs_up_original(tmp_path, monkeypatch):
+    import pytest
+    sess, cfg, env = setup_case(tmp_path)
+    monkeypatch.setenv("KIYA_MEMORY_DECISIONS", env["KIYA_MEMORY_DECISIONS"])
+    monkeypatch.setattr(pb, "run_biliup", lambda *a: (_ for _ in ()).throw(AssertionError("must not upload")))
+    receipt = sess / "publish/01.bili.json"
+    old = {"status": "ok", "bvid": "BV1k9WX6nEyq", "at": 100, "at_text": "11-12 14:55", "mode_text": "立即发布",
+           "exit_code": 0, "output_tail": "old upload log", "video": "old.mp4"}
+    original = json.dumps(old, ensure_ascii=False).encode("utf-8")
+    receipt.write_bytes(original)
+    for expected in (None, "BV1wrong0000"):
+        with pytest.raises(pb.Refuse):
+            pb.repair_binding(sess / "candidates.json", 1, "BV1UGsg63E8Y", expected)
+        assert receipt.read_bytes() == original
+        assert not (receipt.parent / "history").exists()
+    result = pb.repair_binding(sess / "candidates.json", 1, "BV1UGsg63E8Y", old["bvid"])
+    assert result["bound"] and result["bvid"] == "BV1UGsg63E8Y"
+    assert result["previous"]["bvid"] == old["bvid"] and result["previous"]["at_text"] == "11-12 14:55"
+    assert (sess / result["previous_receipt"]).read_bytes() == original
+    assert result["time_source"] == "repair" and result["at"] != 100
+    assert "output_tail" not in result and "video" not in result
+    repeated = pb.repair_binding(sess / "candidates.json", 1, result["bvid"], old["bvid"])
+    assert repeated["bound"] and len(list((receipt.parent / "history").iterdir())) == 1
+
+
+def test_replace_cli_only_repairs_and_rejects_upload_or_dry_run_flags(tmp_path):
+    sess, cfg, env = setup_case(tmp_path)
+    receipt = sess / "publish/01.bili.json"
+    receipt.write_text(json.dumps({"status": "ok", "bvid": "BV1k9WX6nEyq"}), encoding="utf-8")
+    for flags in [("--replace-bvid", "BV1k9WX6nEyq"),
+                  ("--bind-bvid", "BV1UGsg63E8Y", "--dry-run"),
+                  ("--bind-bvid", "BV1UGsg63E8Y", "--again")]:
+        assert run(sess, cfg, env, *flags).returncode == 2
+        assert json.loads(receipt.read_text(encoding="utf-8"))["bvid"] == "BV1k9WX6nEyq"
+    r = run(sess, cfg, env, "--bind-bvid", "BV1UGsg63E8Y", "--replace-bvid", "BV1k9WX6nEyq")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert last(r)["bvid"] == "BV1UGsg63E8Y" and last(r)["bound"]
+    assert not (tmp_path / "log.txt").exists()
