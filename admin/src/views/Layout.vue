@@ -17,6 +17,7 @@
         <el-menu-item index="/memes">梗库</el-menu-item>
         <el-menu-item index="/stickers">素材库</el-menu-item>
         <el-menu-item index="/weekly">主播周报</el-menu-item>
+        <el-menu-item index="/schedule">直播日程</el-menu-item>
         <el-menu-item index="/settings">配置</el-menu-item>
       </el-menu>
       <div class="user">

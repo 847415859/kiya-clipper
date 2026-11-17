@@ -27,6 +27,8 @@ class AdminApplicationTests {
     @Test
     void apiRequiresLogin() throws Exception {
         mvc.perform(get("/api/sessions")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/schedules")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/schedules/images/" + "a".repeat(32))).andExpect(status().isUnauthorized());
     }
 
     @Test

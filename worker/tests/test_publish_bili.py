@@ -81,10 +81,10 @@ def test_resolve_dtime():
     assert d == now + 14 * 86400
     assert pb.resolve_dtime("hold", None, 99, now) < now + 15 * 86400          # 夹在 15 天以内
     assert pb.resolve_dtime("hold", None, 0.01, now) >= now + 4 * 3600          # 不会短于 4 小时
-    at = time.strftime("%Y-%m-%dT%H:%M", time.localtime(now + 86400))
+    at = pb.parse_at(now + 86400).strftime("%Y-%m-%dT%H:%M")
     assert abs(pb.resolve_dtime("timed", at, 14, now) - (now + 86400)) < 60
-    for bad in (None, "明天", time.strftime("%Y-%m-%dT%H:%M", time.localtime(now + 3600)),
-                time.strftime("%Y-%m-%dT%H:%M", time.localtime(now + 20 * 86400))):
+    for bad in (None, "明天", pb.parse_at(now + 3600).strftime("%Y-%m-%dT%H:%M"),
+                pb.parse_at(now + 20 * 86400).strftime("%Y-%m-%dT%H:%M")):
         try:
             pb.resolve_dtime("timed", bad, 14, now)
             assert False, bad

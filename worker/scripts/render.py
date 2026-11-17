@@ -47,6 +47,7 @@ from clipper.subtitles import (STRIP_PUNCT, StyleError, apply_corrections, build
                                load_config, lore_keywords, validate_style)
 from clipper.media import probe_duration  # noqa: E402
 from clipper.quality import quality_report, write_report  # noqa: E402
+from clipper.schedule import for_pack, append_description  # noqa: E402
 from cut import cut_one, pieces, probe_size  # noqa: E402
 
 FPS = 30
@@ -135,9 +136,13 @@ def main() -> int:
     ap.add_argument("--config", default=None, help="主播配置；不填时按 candidates.json 所在目录推导主播")
     ap.add_argument("--range-start", type=float, help="局部试渲染起点（成片秒数，含前情呼应）")
     ap.add_argument("--range-end", type=float)
+    ap.add_argument("--schedule-tail", action="store_true", help="只试渲染日程片尾")
     args = ap.parse_args()
-    partial = args.range_start is not None or args.range_end is not None
-    if partial and (args.range_start is None or args.range_end is None or
+    has_range = args.range_start is not None or args.range_end is not None
+    partial = has_range or args.schedule_tail
+    if args.schedule_tail and has_range:
+        ap.error("日程片尾试渲染不能同时指定时间范围")
+    if has_range and (args.range_start is None or args.range_end is None or
                     not all(math.isfinite(v) for v in (args.range_start, args.range_end)) or
                     not 0 <= args.range_start < args.range_end or args.range_end - args.range_start > 30):
         ap.error("局部试渲染须提供起止时间，长度不超过 30 秒")
@@ -145,6 +150,19 @@ def main() -> int:
 
     cpath = Path(args.candidates)
     sess_dir = cpath.parent
+    cfg_path = resolve_config(args.config, sess_dir)
+    cfg = load_cfg(cfg_path) if cfg_path.exists() else {}
+    pack_path = sess_dir / "publish" / f"{args.rank:02d}.json"
+    pack = json.loads(pack_path.read_text(encoding="utf-8")) if pack_path.exists() else {}
+    try:
+        schedule = for_pack(sess_dir.parent, pack, cfg)
+        append_description(pack.get("description") or "", schedule)
+    except (ValueError, OSError, TypeError) as e:
+        print(f"日程预告无法生成：{e}", file=sys.stderr)
+        return 1
+    if args.schedule_tail and not schedule["enabled"]:
+        print(schedule["reason"] + "，无法试渲染日程片尾", file=sys.stderr)
+        return 1
     data = json.loads(cpath.read_text(encoding="utf-8"))
     cand = next((c for c in data["candidates"] if c["rank"] == args.rank), None)
     if not cand:
@@ -218,6 +236,11 @@ def main() -> int:
         shutil.rmtree(job)
     job.mkdir(parents=True)
     link(src, job / "source.mp4")
+    portrait_file = schedule.pop("_portrait_file", None)
+    if portrait_file:
+        portrait_name = "schedule-portrait" + Path(portrait_file).suffix.lower()
+        link(Path(portrait_file), job / portrait_name)
+        schedule["portrait"] = portrait_name
     shift = edit["trim"]["start"]
     source_origin = compact_time(t_start, removed)
     items = []
@@ -280,6 +303,8 @@ def main() -> int:
         bgm = {"file": "music/" + track["file"], "start": round(m["start"] + shift, 3), "volume": m["volume"], "duck": m["duck"]}
         print(f"背景音乐：{track['title']}（音量 {m['volume']}，{'说话时压低' if m['duck'] else '不压低'}）")
     used = {subs["style"]["font"]} if subs.get("enabled") else set()
+    if schedule["enabled"]:
+        used.add("Noto Sans CJK SC")
     used |= {it.get("font") for it in items if it["type"] == "text"}
     fonts = []
     for fam, f in font_files().items():
@@ -287,11 +312,18 @@ def main() -> int:
             link(f, job / "fonts" / f.name)
             fonts.append({"family": fam, "file": "fonts/" + f.name})
     cb_len = callback["duration"] if callback else 0.0
-    props = {"width": width, "height": height, "fps": FPS, "duration": round(dur + cb_len, 3), "mainDuration": round(dur, 3), "video": "source.mp4",
+    # Quantize each sequence independently so the outro starts on the exact next frame.
+    main_frames, cb_frames = round(dur * FPS), round(cb_len * FPS)
+    tail_frames = round(schedule["duration"] * FPS)
+    props = {"width": width, "height": height, "fps": FPS, "duration": (main_frames + cb_frames + tail_frames) / FPS,
+             "mainDuration": main_frames / FPS, "video": "source.mp4", "schedule": schedule,
              "subtitles": subs, "items": items, "fonts": fonts, "music": bgm, "callback": callback}
     (job / "props.json").write_text(json.dumps(props, ensure_ascii=False, indent=1), encoding="utf-8")
 
     frame_args = []
+    if args.schedule_tail:
+        args.range_start = (main_frames + cb_frames) / FPS
+        args.range_end = props["duration"]
     if partial:
         first = int(math.floor(args.range_start * FPS + 1e-6))
         last = min(int(math.ceil(args.range_end * FPS - 1e-6)), max(1, int(math.floor(props["duration"] * FPS + 0.5)))) - 1
@@ -310,6 +342,15 @@ def main() -> int:
     if r.returncode != 0 or not tmp.exists():
         print("渲染失败（看上面 Remotion 的输出）", file=sys.stderr)
         return 1
+    if not partial:
+        # Record the new file before replacing the video. An interrupted replacement
+        # leaves a detectable mismatch, never a new outro without its matching receipt.
+        metadata = out.with_suffix(".schedule.json")
+        metadata_tmp = metadata.with_suffix(".json.tmp")
+        metadata_tmp.write_text(json.dumps({**schedule, "callback_duration": cb_frames / FPS,
+            "outro_duration": tail_frames / FPS, "video_size": tmp.stat().st_size,
+            "video_mtime_ns": tmp.stat().st_mtime_ns}, ensure_ascii=False, indent=1), encoding="utf-8")
+        metadata_tmp.replace(metadata)
     tmp.replace(out)
     out.with_suffix(".edit.json").write_text(json.dumps(edit, ensure_ascii=False, indent=1), encoding="utf-8")
     if partial:

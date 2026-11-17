@@ -27,8 +27,8 @@ spring:
     time-zone: Asia/Shanghai
   servlet:
     multipart:
-      max-file-size: 5MB      # 贴图上传
-      max-request-size: 6MB
+      max-file-size: 8MB      # 周表图片；贴图仍按自身接口限制
+      max-request-size: 9MB
 
 mybatis-plus:
   configuration:

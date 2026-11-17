@@ -6,6 +6,7 @@ import { Narration } from './components/Narration';
 import { Subtitles } from './components/Subtitles';
 import { Sticker } from './components/Sticker';
 import { TextFx } from './components/TextFx';
+import { ScheduleEndCard } from './components/ScheduleEndCard';
 
 // 一个切片的成片：源视频（已裁好时间段、不带字幕）+ 放大运镜 + 字幕 + 花字 + 贴图 + 吐槽旁白 + 伪 UI + 背景音乐（可选）。
 // 所有文件（源视频、贴图、字体）由 render.mjs 起的本地 HTTP 服务提供，地址前缀是 assetBase。
@@ -80,7 +81,7 @@ export const Clip = (props) => {
           <Callback cb={callback} assetBase={assetBase} />
         </Sequence>
       )}
-      <Sequence from={cbFrames} layout="none">
+      <Sequence from={cbFrames} durationInFrames={Math.max(1, Math.round(mainDuration * fps))} layout="none">
       <Camera zooms={zooms}>
         <OffthreadVideo src={url(assetBase, props.video || 'source.mp4')} />
       </Camera>
@@ -97,6 +98,9 @@ export const Clip = (props) => {
       ))}
       {music && <Bgm music={music} events={subtitles.enabled !== false ? subtitles.events : []} duration={mainDuration} assetBase={assetBase} />}
       </Sequence>
+      {props.schedule?.enabled && <Sequence from={cbFrames + Math.round(mainDuration * fps)} durationInFrames={Math.round(props.schedule.duration * fps)}>
+        <ScheduleEndCard schedule={props.schedule} assetBase={assetBase} />
+      </Sequence>}
     </AbsoluteFill>
   );
 };

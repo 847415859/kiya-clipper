@@ -320,6 +320,9 @@ def quality_report(session_dir: Path, rank: int, final: Path | None = None,
     media = _find_media(session_dir, rank, final)
     report.media = str(media) if media else ""
     start, end, expected = _expected_window(session_dir, rank, candidate, edit)
+    if media and expected is not None:
+        recorded = _load(media.with_suffix(".schedule.json")) or {}
+        expected += float(recorded.get("callback_duration") or 0) + float(recorded.get("outro_duration") or 0)
     media_info = _media_checks(report, media, expected) if media else _media_checks(report, session_dir / "final" / f"{rank:02d}.mp4", expected)
     edit_file = session_dir / "edits" / f"{rank:02d}.json"
     ai_file = session_dir / "edits" / f"{rank:02d}.ai.json"

@@ -12,6 +12,7 @@ import Settings from './views/Settings.vue'
 import Editor from './views/Editor.vue'
 import Memory from './views/Memory.vue'
 import Weekly from './views/Weekly.vue'
+import Schedule from './views/Schedule.vue'
 import Memes from './views/Memes.vue'
 import Stickers from './views/Stickers.vue'
 
@@ -49,6 +50,7 @@ const router = createRouter({
         { path: 'memes', component: Memes, meta: { title: '梗库' } },
         { path: 'stickers', component: Stickers, meta: { title: '素材库' } },
         { path: 'weekly', component: Weekly, meta: { title: '主播周报' } },
+        { path: 'schedule', component: Schedule, meta: { title: '直播日程' } },
         { path: 'settings', component: Settings, meta: { title: '配置' } }
       ]
     },

@@ -420,6 +420,10 @@ public class JobService {
         }
         String cand = paths.sessionDir(session).resolve("candidates.json").toString();
         List<String> args = new ArrayList<>(List.of(cand, "--rank", String.valueOf(rank), "--height", String.valueOf(height)));
+        if (Boolean.TRUE.equals(p.get("scheduleTail"))) {
+            if (p.containsKey("previewStart") || p.containsKey("previewEnd")) throw ApiException.badRequest("日程片尾试渲染不能同时指定范围");
+            args.add("--schedule-tail");
+        }
         if (p.containsKey("previewStart") || p.containsKey("previewEnd")) {
             double start = numParam(p, "previewStart"), end = numParam(p, "previewEnd");
             if (!Double.isFinite(start) || !Double.isFinite(end) || start < 0 || end <= start || end - start > 30) {

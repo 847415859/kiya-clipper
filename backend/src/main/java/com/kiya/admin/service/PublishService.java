@@ -182,6 +182,16 @@ public class PublishService {
 
     public synchronized Map<String, Object> save(String session, int rank, String title, String description, List<String> tags,
                                                    Map<String, Object> seedreamOptions, String coverText) {
+        return save(session, rank, title, description, tags, seedreamOptions, coverText, null, null);
+    }
+
+    public synchronized Map<String, Object> save(String session, int rank, String title, String description, List<String> tags,
+                                                   Map<String, Object> seedreamOptions, String coverText,
+                                                   Boolean includeSchedule, String schedulePublishAt) {
+        if (schedulePublishAt != null && !schedulePublishAt.isBlank()) {
+            try { java.time.LocalDateTime.parse(schedulePublishAt); }
+            catch (java.time.format.DateTimeParseException e) { throw ApiException.badRequest("预计公开时间格式不对，请重新选择（北京时间）"); }
+        }
         if (coverText != null && (coverText.length() > 30 || coverText.indexOf('\0') >= 0)) {
             throw ApiException.badRequest("封面文字最多 30 个字，不能包含空字符");
         }
@@ -192,6 +202,8 @@ public class PublishService {
             addSeedreamOptions(new ArrayList<>(), (String)seedreamOptions.get("supplement"), (String)seedreamOptions.get("reference"));
         }
         Map<String, Object> pack = new LinkedHashMap<>(get(session, rank));
+        if (includeSchedule != null) pack.put("include_schedule", includeSchedule);
+        if (schedulePublishAt != null) pack.put("schedule_publish_at", schedulePublishAt.strip());
         if (coverText != null) pack.put("cover_text", coverText.strip());
         if (seedreamOptions != null) pack.put("cover_seedream_options", Map.of("supplement", ((String)seedreamOptions.get("supplement")).strip(),
                 "reference", seedreamOptions.get("reference")));

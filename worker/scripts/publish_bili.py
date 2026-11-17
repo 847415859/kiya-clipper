@@ -36,6 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from clipper.kcfg import load_cfg  # noqa: E402
+from clipper.schedule import for_pack, append_description, check_rendered_schedule, parse_at  # noqa: E402
 from clipper.streamer import decisions_path, resolve_config, streamer_from_session_dir  # noqa: E402
 
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")   # biliup 输出里的颜色控制码
@@ -106,7 +107,7 @@ def resolve_dtime(mode: str, at: str | None, hold_days: float, now: float | None
         if not at:
             raise Refuse("定时发布需要指定时间（--at 2026-11-20T20:00）")
         try:
-            t = datetime.fromisoformat(at).timestamp()
+            t = parse_at(at).timestamp()
         except ValueError:
             raise Refuse(f"时间格式不对：{at}（要像 2026-11-20T20:00）")
         if t < now + MIN_AHEAD:
@@ -301,14 +302,21 @@ def run(args: argparse.Namespace) -> dict:
     video = find_video(sess, args.rank, int(bc["height"]))
     cover = sess / "publish" / f"{args.rank:02d}_cover.jpg"
     dtime = resolve_dtime(args.mode, args.at, bc["hold_days"], now)
+    try:
+        schedule = for_pack(sess.parent, pack, cfg, at=dtime or now)
+        check_rendered_schedule(video, schedule)
+        pack = dict(pack, description=append_description(pack.get("description") or "", schedule))
+    except (ValueError, OSError, TypeError) as e:
+        raise Refuse(str(e)) from e
     bin_ = biliup_bin()
     ck = cookie_path(bc)
-    mode_text = {"hold": f"先放着（{datetime.fromtimestamp(dtime):%m-%d %H:%M} 定时，可在创作中心改 / 撤回）" if dtime else "",
+    mode_text = {"hold": f"先放着（{parse_at(dtime):%m-%d %H:%M} 定时，可在创作中心改 / 撤回）" if dtime else "",
                  "now": "立即公开发布",
-                 "timed": f"定时 {datetime.fromtimestamp(dtime):%m-%d %H:%M}" if dtime else "",
+                 "timed": f"定时 {parse_at(dtime):%m-%d %H:%M}" if dtime else "",
                  "private": "仅自己可见"}[args.mode]
     base = {"session": sess.name, "rank": args.rank, "mode": args.mode, "mode_text": mode_text, "dtime": dtime,
-            "video": video.name, "title": pack["title"], "at": now, "at_text": datetime.fromtimestamp(now).strftime("%m-%d %H:%M")}
+            "video": video.name, "title": pack["title"], "at": now, "at_text": parse_at(now).strftime("%m-%d %H:%M")}
+    base["schedule"] = {k:schedule.get(k) for k in ("fingerprint", "version", "as_of", "description_block")}
 
     if args.dry_run:
         cmd = build_cmd(bin_ or "biliup", ck, video, pack, cover if cover.exists() else None, bc, dtime, extra)
@@ -352,7 +360,7 @@ def main() -> int:
     ap.add_argument("candidates", nargs="?")
     ap.add_argument("--rank", type=int)
     ap.add_argument("--mode", default="hold", choices=MODES)
-    ap.add_argument("--at", help="定时发布时间 2026-11-20T20:00（本机时区）")
+    ap.add_argument("--at", help="定时发布时间 2026-11-20T20:00（北京时间）")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--allow-taboo", action="store_true")
     ap.add_argument("--again", action="store_true", help="已经投过也再投一次")

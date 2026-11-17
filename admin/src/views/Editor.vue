@@ -419,8 +419,12 @@
               <span class="muted">{{ pack.source }}</span>
               <el-button link size="small" @click="copy(pack.source)">复制</el-button>
             </el-form-item>
+            <SchedulePublish v-if="pack.title" :enabled="pack.include_schedule !== false" :at="pack.schedule_publish_at || ''"
+              :description="pack.description || ''" :rendering="rendering"
+              @update:enabled="pack.include_schedule = $event" @update:at="pack.schedule_publish_at = $event"
+              @render-tail="render(480, {scheduleTail:true})" />
             <el-form-item>
-              <el-button type="primary" :disabled="covering" @click="savePack">保存文字与生图设置</el-button>
+              <el-button type="primary" :disabled="covering" @click="savePack()">保存发布设置</el-button>
             </el-form-item>
           </el-form>
           <div class="bili">
@@ -464,6 +468,9 @@
         <el-radio v-if="bili.env?.private" value="private">仅自己可见</el-radio>
       </el-radio-group>
       <div class="muted" style="margin-top: 4px">“仅自己可见”需要在配置里填验证过的 biliup 参数，没配置时这里不显示（不会悄悄公开发出去）。</div>
+      <el-alert v-if="pack.include_schedule !== false" type="info" :closable="false" style="margin-top:10px"
+        title="日程按这次选择的公开时间重新核对。若与成片片尾不同，会在上传前提示重新渲染。“先放着”按未来定时日期计算；在创作中心再次改期前，也请重新核对片尾。" />
+      <pre v-if="biliScheduleText" class="cover-prompt">{{ biliScheduleText }}</pre>
       <div v-if="(pack.taboo_hits || []).length" style="margin-top: 8px">
         <el-checkbox v-model="bili.allowTaboo">我已看过命中的禁区词，仍然发布</el-checkbox>
       </div>
@@ -560,6 +567,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import SchedulePublish from '../components/SchedulePublish.vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, hms } from '../api'
@@ -606,6 +614,17 @@ const pub = reactive({ bvid: '', completion: '', followers: '', saved: '' })
 const bili = reactive({ show: false, env: null, last: null, mode: 'hold', at: '', allowTaboo: false, again: false,
   running: false, result: '', resultOk: false, log: '' })
 const pack = ref({})
+const biliScheduleText = ref('')
+let biliScheduleRequest = 0
+watch(()=>[bili.show,bili.mode,bili.at,bili.env?.hold_days,pack.value.include_schedule],async()=>{
+  const n=++biliScheduleRequest
+  biliScheduleText.value=''
+  if(!bili.show || pack.value.include_schedule===false)return
+  const at=bili.mode==='timed'?bili.at:bili.mode==='hold'?new Date(Date.now()+(bili.env?.hold_days || 14)*86400000).toISOString():''
+  if(bili.mode==='timed' && !at)return
+  try{const s=await api.schedulePreview({enabled:true,at,description:pack.value.description || ''});if(n===biliScheduleRequest)biliScheduleText.value=s.description_block || s.reason}
+  catch{if(n===biliScheduleRequest)biliScheduleText.value='日程暂时无法预览，请检查后再发布'}
+})
 const packLoading = ref(false)
 const covering = ref(false)
 const coverText = ref('')
@@ -1291,12 +1310,15 @@ async function restoreAi() {
 
 async function render(height, range = null) {
   if (rendering.value) return
-  if (dirty.value || !info.exists || height >= 1080) { if (!(await save(true))) return }
-  const j = await api.submitJob('RENDER', name.value, { rank: rank.value, height, ...(range || {}) })
-  renderJob.value = j.id
+  if (covering.value) return ElMessage.info('请等待封面生成完成，再保存发布设置并渲染')
+  if (packLoading.value) return ElMessage.info('正在读取发布设置，请稍后渲染')
   rendering.value = true
-  ElMessage.success(range ? '已提交局部试渲染，完成后自动打开' : `已提交渲染（${height}p），完成后会出现在右下“成片”里`)
   try {
+    if (pack.value.title) await savePack(false)
+    if (dirty.value || !info.exists || height >= 1080) { if (!(await save(true))) return }
+    const j = await api.submitJob('RENDER', name.value, { rank: rank.value, height, ...(range || {}) })
+    renderJob.value = j.id
+    ElMessage.success(range ? '已提交局部试渲染，完成后自动打开' : `已提交渲染（${height}p），完成后会出现在右下“成片”里`)
     for (;;) {
       await new Promise((r) => setTimeout(r, 4000))
       const s = await api.job(j.id)
@@ -1358,7 +1380,7 @@ async function makeCover(variant = null, mode = null) {
 
 function mergeCoverPack(result) {
   // Generating a cover must not replace title/description/tag edits made in the publishing form.
-  const editable = Object.fromEntries(['title', 'description', 'tags'].filter(k => pack.value[k] !== undefined).map(k => [k, pack.value[k]]))
+  const editable = Object.fromEntries(['title', 'description', 'tags', 'include_schedule', 'schedule_publish_at'].filter(k => pack.value[k] !== undefined).map(k => [k, pack.value[k]]))
   pack.value = {...pack.value, ...result, ...editable}
 }
 async function previewCoverPrompt() {
@@ -1394,13 +1416,14 @@ async function chooseCoverVersion(version) {
   } finally { covering.value = false }
 }
 
-async function savePack() {
+async function savePack(notify = true) {
   if (covering.value) return
   mergeCoverPack(await api.savePublishPack(name.value, rank.value,
     { title: pack.value.title, description: pack.value.description, tags: pack.value.tags || [],
       coverText: coverText.value,
+      includeSchedule: pack.value.include_schedule !== false, schedulePublishAt: pack.value.schedule_publish_at || '',
       seedreamOptions: {supplement: seedreamSupplement.value, reference: seedreamReference.value} }))
-  ElMessage.success('已保存')
+  if (notify) ElMessage.success('已保存')
 }
 
 async function regenPack() {
@@ -1449,7 +1472,9 @@ async function unpublish() {
 
 // ---------------------------------------------------------------- 一键发布到 B站
 async function openBili() {
-  Object.assign(bili, { show: true, mode: 'hold', at: '', allowTaboo: false, again: false, result: '', resultOk: false, log: '' })
+  if (covering.value) return ElMessage.info('请等待封面生成完成')
+  await savePack(false)
+  Object.assign(bili, { show: true, mode: pack.value.schedule_publish_at ? 'timed' : 'hold', at: pack.value.schedule_publish_at || '', allowTaboo: false, again: false, result: '', resultOk: false, log: '' })
   try {
     const d = await api.biliInfo(name.value, rank.value)
     bili.env = d.env

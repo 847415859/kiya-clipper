@@ -22,6 +22,13 @@ http.interceptors.response.use(
 )
 
 export const api = {
+  schedule: (weekStart) => http.get('/api/schedules', {params:{weekStart}}),
+  saveSchedule: (week, body) => http.put(`/api/schedules/${encodeURIComponent(week)}`, body),
+  deactivateSchedule: (week, expectedRevision) => http.post(`/api/schedules/${encodeURIComponent(week)}/deactivate`, {expectedRevision}),
+  schedulePreview: (body) => http.post('/api/schedules/preview', body, {quiet:true}),
+  uploadScheduleImage: (file) => {const body=new FormData();body.append('file',file);return http.post('/api/schedules/images',body)},
+  scheduleImageUrl: (id) => `/api/schedules/images/${encodeURIComponent(id)}`,
+  extractSchedule: (week, imageId) => http.post(`/api/schedules/${encodeURIComponent(week)}/extract`,{imageId},{timeout:150000}),
   me: () => http.get('/api/auth/me', { quiet: true }),
   login: (username, password) =>
     http.post('/api/auth/login', new URLSearchParams({ username, password }), { quiet: true }),

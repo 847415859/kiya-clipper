@@ -111,7 +111,7 @@ nginx -t && systemctl reload nginx
 
 后台的“成片编辑”需要渲染器（Remotion）：按 [renderer/README.md](../../renderer/README.md) 安装 Node 依赖和浏览器。不装也不影响其他功能，只是“渲染”任务会失败并提示安装。
 
-如果之前已经配置过 nginx，把 `/etc/nginx/conf.d/kiya-admin.conf` 里的 `client_max_body_size` 改成 `8m`（上传贴图用），然后 `nginx -t && systemctl reload nginx`。
+如果之前已经配置过 nginx，把 `/etc/nginx/conf.d/kiya-admin.conf` 里的 `client_max_body_size` 改成 `9m`（支持最大 8MB 周表图片），然后 `nginx -t && systemctl reload nginx`。
 
 ## 7. 更新
 
