@@ -35,6 +35,7 @@ http.interceptors.response.use(
 )
 
 export const api = {
+  deleteSchedule: (week,expectedRevision,entry=null)=>http.delete(`/api/schedules/${encodeURIComponent(week)}`,{data:{expectedRevision,entry}}),
   schedulePosters: week => http.get(`/api/schedules/${encodeURIComponent(week)}/posters`),
   generateSchedulePoster: (week,body) => http.post(`/api/schedules/${encodeURIComponent(week)}/posters`,body,{timeout:660000}),
   schedulePosterUrl: (week,id,download=false) => `/api/schedules/${encodeURIComponent(week)}/posters/${encodeURIComponent(id)}.png${download?'?download=true':''}`,
@@ -57,6 +58,7 @@ export const api = {
 
   sessions: () => http.get('/api/sessions'),
   scan: () => http.post('/api/sessions/scan', null, { timeout: 200000 }),
+  valueStrategy: (name) => http.get(`/api/sessions/${encodeURIComponent(name)}/value-strategy`),
   candidates: (name) => http.get(`/api/sessions/${encodeURIComponent(name)}/candidates`),
   mark: (name, rank, body) => http.put(`/api/sessions/${encodeURIComponent(name)}/candidates/${rank}/mark`, body),
   clipUrl: (name, file) => `/api/sessions/${encodeURIComponent(name)}/clips/${encodeURIComponent(file)}`,

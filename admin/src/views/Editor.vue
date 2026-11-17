@@ -402,7 +402,7 @@
             </el-form-item>
             <el-form-item label="标题">
               <el-select v-model="pack.title" filterable allow-create default-first-option style="width: 100%">
-                <el-option v-for="t in pack.title_candidates || []" :key="t" :label="t" :value="t" />
+                <el-option v-for="t in ((pack.title_candidates?.length ? pack.title_candidates : null) || (pack.title_options || []).map(x => typeof x === 'string' ? x : x.title).filter(Boolean))" :key="t" :label="t" :value="t" />
               </el-select>
               <span class="muted">{{ (pack.title || '').length }}/80</span>
               <el-button link size="small" @click="copy(pack.title)">复制</el-button>
@@ -542,6 +542,10 @@
       </template>
     </el-dialog>
       <el-dialog v-model="draftDlg.show" title="AI 初稿：生成哪几个版本" width="460px">
+      <el-select v-model="draftDlg.template" style="width:100%;margin-bottom:12px" aria-label="剪辑模板">
+        <el-option label="默认综艺模板" value="default" />
+        <el-option label="克制萌点：原声、少量效果（需通过证据检查）" value="cute" />
+      </el-select>
       <el-checkbox-group v-model="draftDlg.styles" class="style-pick">
         <el-checkbox v-for="o in styleOptions" :key="o.key" :value="o.key" border>
           <b>{{ o.label }}</b> <span class="muted">{{ o.hint }}</span>
@@ -1547,7 +1551,7 @@ async function pickVariant(key) {
 }
 
 // 点“AI 初稿”先选要几个版本（默认三个都选）；选一个就只出那一版
-const draftDlg = reactive({ show: false, styles: ['restrained', 'standard', 'lively'] })
+const draftDlg = reactive({ show: false, template: 'default', styles: ['restrained', 'standard', 'lively'] })
 const styleOptions = [
   { key: 'restrained', label: '克制', hint: '只在笑点出 1–3 个效果，最多 1 个梗' },
   { key: 'standard', label: '标准', hint: '默认编排：铺垫克制、笑点集中、反应补一个' },
@@ -1568,7 +1572,7 @@ async function runDraft() {
   }
   drafting.value = true
   try {
-    const j = await api.submitJob('AUTO_EDIT', name.value, { rank: rank.value, force: has, styles: [...draftDlg.styles] })
+    const j = await api.submitJob('AUTO_EDIT', name.value, { rank: rank.value, force: has, template: draftDlg.template, styles: [...draftDlg.styles] })
     const s = await waitJob(j.id, 3000)
     if (s.status !== 'SUCCESS') return ElMessage.error(`初稿没有生成：${s.summary || s.status}（详情见任务页）`)
     await load()

@@ -37,7 +37,7 @@ from clipper.clipwin import clip_origin, read_windows  # noqa: E402
 from clipper.edit import edit_window  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
 from clipper.publish import (COVER_THEMES, DEFAULT_TAGS, build_description, build_tags, clean_title,
-                             cover_concept, render_cover, render_theme_cover)  # noqa: E402
+                             cover_concept, normalize_title_options, render_cover, render_theme_cover)  # noqa: E402
 from clipper.cover_prompt import seedream_options, seedream_prompt  # noqa: E402
 from clipper.seedream import SeedreamError, generate as generate_seedream  # noqa: E402
 from cut import pieces  # noqa: E402
@@ -158,7 +158,7 @@ def main() -> int:
         print(str(e), file=sys.stderr)
         return 1
     streamer = cfg.get("streamer") or {}
-    titles = [clean_title(t) for t in llm.get("title_candidates") or [] if clean_title(t)]
+    titles, title_options = normalize_title_options(llm)
     tr = load_transcript(sess / "transcript.json")
     speech = "".join(s["text"] for s in (tr or {}).get("sentences", []) if s["t1"] > a and s["t0"] < b)
     lore_cfg = cfg.get("lore") or {}
@@ -182,7 +182,10 @@ def main() -> int:
         if args.refresh or not pack.get(k):
             pack[k] = v
     pack["taboo_hits"] = find_taboo(" ".join([pack.get("title", ""), pack.get("description", ""), speech]), cfg.get("taboo") or [])
-    pack.update(session=sess.name, rank=args.rank, title_candidates=titles,
+    pack.update(strategy_version=llm.get("strategy_version"), rubric_version=llm.get("rubric_version"),
+                prompt_version=rr.get("prompt_version"), packaging_evidence=llm.get("value_evidence") or llm.get("evidence") or [],
+                candidate_id=f"{sess.name}:{args.rank}", hook_caption=llm.get("hook_caption") or "",
+                session=sess.name, rank=args.rank, title_candidates=titles, title_options=title_options,
                 source=streamer.get("live_url", ""), copyright="转载",
                 range={"start": round(a, 1), "end": round(b, 1)})
 

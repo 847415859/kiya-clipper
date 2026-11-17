@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect Kiya fixed-age video metrics every 15 minutes (%i)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=kiya-value-metrics@%i.service
+
+[Install]
+WantedBy=timers.target

@@ -163,7 +163,7 @@ class Bili:
         s = d.get("stat") or {}
         return {"bvid": bvid, "title": d.get("title", ""), "pubdate": d.get("pubdate"), "duration": d.get("duration"),
                 "owner_mid": (d.get("owner") or {}).get("mid"),
-                "tname": d.get("tname", ""), **{k: s.get(k, 0) for k in
+                "tname": d.get("tname", ""), **{k: s.get(k) for k in
                                                 ("view", "like", "coin", "favorite", "share", "reply", "danmaku")}}
 
     # ---------------------------------------------------------------- 热门（梗库用，只取标题 / 词条文字）

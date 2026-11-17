@@ -3,6 +3,7 @@
     <div class="topbar">
       <el-button link @click="$router.push('/sessions')">← 场次</el-button>
       <b>{{ name }}</b>
+      <ValueStrategy :session="name" :show-ai="reviewMode === 'fast'" />
       <span class="muted">已标 {{ done }}/{{ list.length }}，有趣 {{ yes }}<template v-if="done">（{{ Math.round((yes / done) * 100) }}%）</template></span>
       <span v-if="data.signals" class="muted">信号 {{ data.signals }}；弹幕延迟 {{ data.delay }} 秒</span>
       <span v-if="data.minScore != null" class="muted">分数线 {{ data.minScore }}，另有 {{ data.belowThreshold }} 个未过线</span>
@@ -167,6 +168,7 @@
 </template>
 
 <script setup>
+import ValueStrategy from '../components/ValueStrategy.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'

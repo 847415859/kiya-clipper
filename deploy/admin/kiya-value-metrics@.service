@@ -1,0 +1,10 @@
+[Unit]
+Description=Kiya fixed-age video metrics (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/kiya-clipper/worker
+ExecStart=/opt/kiya-clipper/worker/.venv/bin/python scripts/collect_value_metrics.py --streamer %i
+TimeoutStartSec=12min

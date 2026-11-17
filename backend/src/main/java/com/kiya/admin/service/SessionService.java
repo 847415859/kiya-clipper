@@ -601,6 +601,21 @@ public class SessionService {
 
     // ------------------------------------------------------------------ 工具
     /** rerank.json（精排结果）按原序号整理成前端要的字段；没有精排或解析失败返回空表。 */
+    public Map<String, Object> valueStrategy(String session) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (String name : List.of("rerank", "exploration_candidates", "exploration_rerank")) {
+            JsonNode data = readJson(paths.sessionDir(session).resolve(name + ".json"));
+            result.put(name, data == null ? Map.of() : om.convertValue(data, new TypeReference<Map<String, Object>>() {}));
+        }
+        if (result.get("exploration_candidates") instanceof Map<?, ?> source
+                && result.get("exploration_rerank") instanceof Map<?, ?> judged
+                && source.get("recall_id") != null
+                && !source.get("recall_id").equals(judged.get("candidate_source_id"))) {
+            result.put("exploration_rerank", Map.of("stale", true));
+        }
+        return result;
+    }
+
     Map<Integer, Map<String, Object>> rerankByRank(JsonNode rr) {
         Map<Integer, Map<String, Object>> out = new HashMap<>();
         if (rr == null) {

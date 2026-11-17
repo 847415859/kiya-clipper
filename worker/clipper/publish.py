@@ -27,6 +27,39 @@ def clean_title(t: str) -> str:
     return t[:TITLE_MAX]
 
 
+def normalize_title_options(llm: dict) -> tuple[list[str], list[dict]]:
+    """归一化新标题结构，非法项回退到旧 title_candidates。"""
+    options: list[dict] = []
+    for raw in llm.get("title_options") or []:
+        if not isinstance(raw, dict):
+            continue
+        if not isinstance(raw.get("title"), str):
+            continue
+        title = clean_title(raw["title"])
+        if not title:
+            continue
+        option = {"title": title}
+        for key in ("style", "why"):
+            value = raw.get(key)
+            if value is not None and str(value).strip():
+                option[key] = str(value).strip()[:300]
+        refs = raw.get("evidence_refs")
+        if isinstance(refs, list):
+            evidence = llm.get("value_evidence") or []
+            valid_refs = [x for x in refs if type(x) is int and 0 <= x < len(evidence)]
+            if llm.get("value_schema_version") is not None and (not valid_refs or len(valid_refs) != len(refs)):
+                continue
+            option["evidence_refs"] = valid_refs
+        elif llm.get("value_schema_version") is not None:
+            continue
+        if title not in {x["title"] for x in options}:
+            options.append(option)
+    titles = [item["title"] for item in options]
+    if not titles:
+        titles = list(dict.fromkeys(clean_title(t) for t in llm.get("title_candidates") or [] if isinstance(t, str) and clean_title(t)))
+    return titles, options
+
+
 def build_description(tpl: str | None, **v) -> str:
     text = (tpl or DEFAULT_DESC)
     for k, val in v.items():

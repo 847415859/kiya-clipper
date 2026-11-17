@@ -3,6 +3,8 @@ import json
 import sys
 from pathlib import Path
 
+from scripts.autoedit import cute_template_guidance
+
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,6 +13,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from clipper import variants as V  # noqa: E402
 from test_memes import world  # noqa: E402,F401  (复用假服务 + 示例场次)
+
+
+def test_cute_template_guidance():
+    from test_value_strategy import item
+    llm = item(cute=.9, contrast=.9, charm=.9, unique=.9, funny_strength=.5, main_value="情绪回报")
+    assert cute_template_guidance(llm)[0] == "edit_cute_v1"
+    assert cute_template_guidance({**llm, "value_evidence": []})[0] is None
+    assert cute_template_guidance({**llm, "main_value": "信息价值"})[0] is None
+    assert cute_template_guidance({**llm, "risk_level": "high"})[0] is None
 
 
 def test_cfg_resolve_and_gate():
@@ -81,3 +92,20 @@ def test_pick_styles_explicitly(world):
     assert len(cur["items"]) == 3 and cur["generated_by"].endswith("/ 克制") and ai["variant"] == "restrained"
     r = world.run("autoedit.py", world.sess / "candidates.json", "--rank", 1, "--force", "--styles", "wild")
     assert r.returncode == 1 and "不认识的版本：wild" in r.stderr
+
+
+def test_cute_loads_real_template_and_preserves_explicit_short_trim(world):
+    from test_value_workflow import high
+    path = world.sess / "rerank.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    rec = data["candidates"][0]
+    rec["value_llm"] = high(main_value="情绪回报")
+    rec["refined"] = {"start":125,"end":127}
+    path.write_text(json.dumps(data,ensure_ascii=False),encoding="utf-8")
+    result = world.run("autoedit.py",world.sess/"candidates.json","--rank",1,"--template","cute")
+    assert result.returncode == 0, result.stdout + result.stderr
+    edit = json.loads((world.sess/"edits"/"01.json").read_text(encoding="utf-8"))
+    assert edit["template"] == "cute-v1" and edit["original_audio"]
+    assert len(edit["items"]) <= 3 and "music" not in edit
+    assert edit["trim"]["end"]-edit["trim"]["start"] == 2
+    assert edit["boundary_trace"]["refined"]["start"] == 125

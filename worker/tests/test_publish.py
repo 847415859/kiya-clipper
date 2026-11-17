@@ -11,13 +11,16 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from clipper.publish import H, W, build_description, build_tags, clean_title, render_cover, wrap  # noqa: E402
+from clipper.publish import H, W, build_description, build_tags, clean_title, normalize_title_options, render_cover, wrap  # noqa: E402
 
 pytestmark = pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("fc-match"), reason="需要 ffmpeg 和 fontconfig")
 
 
 def test_text_helpers():
     assert clean_title("《怪不得叫金油！》") == "怪不得叫金油！" and len(clean_title("啊" * 100)) == 80
+    titles, options = normalize_title_options({"title_options": [{"title": "《结构化标题》", "style": "反转", "evidence_refs": ["e1"]}]})
+    assert titles == ["结构化标题"] and options[0]["evidence_refs"] == ["e1"]
+    assert normalize_title_options({"title_options": [{"title": ""}], "title_candidates": ["旧标题"]})[0] == ["旧标题"]
     tags = build_tags(["虚拟主播", "直播切片", "虚拟主播"], "娜由纪雅kiya", "破防", ["金油", "做局", "律师函"],
                       "怪不得叫金油 这下做局了")
     assert tags[:4] == ["娜由纪雅kiya", "虚拟主播", "直播切片", "破防"] and set(tags[4:]) == {"金油", "做局"}

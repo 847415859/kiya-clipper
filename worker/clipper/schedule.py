@@ -119,8 +119,11 @@ def calendar_history(root: Path) -> dict:
     for path in files[:520]:
         try:
             state = read_state(root, path.stem)
+            if state.get('deleted'):continue
             plans = {key: validate_plan(state[key], path.stem) if state.get(key) else None for key in ("published", "draft")}
-            weeks.append({"week_start": path.stem, "active": bool(state.get("active")), **plans})
+            revision=schedule_db.import_week(root,path.stem)[1] if schedule_db.enabled() else hashlib.sha256(path.read_bytes()).hexdigest()
+            if not any((p or {}).get('entries') for p in plans.values()):continue
+            weeks.append({"week_start": path.stem, "revision":revision,"active": bool(state.get("active")), **plans})
         except (ValueError, TypeError, KeyError, OSError) as e:
             warnings.append(f"{path.stem} 读取失败：{e}")
     return {"weeks": weeks, "warnings": warnings, "truncated": len(files) > 520}

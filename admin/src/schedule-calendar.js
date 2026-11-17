@@ -4,7 +4,7 @@ export const categoryOf=row=>categories.find(c=>c.id===row.category)||categories
 export function calendarWeeks(weeks,source,query='',category=''){
   const text=query.trim().toLowerCase()
   return weeks.flatMap(week=>{
-    const plan=week[source];if(!plan)return []
+    const plan=week[source];if(!plan || !plan.entries?.length)return []
     const entries=plan.entries.filter(r=>(!category || (r.category||'other')===category) && (!text || `${r.title} ${r.date} ${categoryOf(r).label}`.toLowerCase().includes(text)))
     if((text||category)&&!entries.length)return []
     return [{...week,days:Array.from({length:7},(_,i)=>{const date=addDays(week.week_start,i);return {date,entries:entries.filter(r=>r.date===date)}})}]

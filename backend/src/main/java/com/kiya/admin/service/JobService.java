@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -48,7 +49,10 @@ public class JobService {
             Map.entry("TRANSCRIBE", "语音转写"),
             Map.entry("SCREEN", "粗筛"),
             Map.entry("RERANK", "大模型精排"),
+            Map.entry("VALUE_RECALL", "非峰值召回 / 人工标记"),
+            Map.entry("VALUE_EXPLORE", "探索候选价值评审"),
             Map.entry("RESCORE", "按新权重重排"),
+            Map.entry("VALUE_METRICS", "采集到期快照"),
             Map.entry("LEARN", "更新精排记忆"),
             Map.entry("MEME_REFRESH", "刷新梗库"),
             Map.entry("CUT", "剪切"),
@@ -217,7 +221,7 @@ public class JobService {
     // ------------------------------------------------------------------ 执行
     private static boolean needsSession(String type) {
         return switch (type) {
-            case "TRANSCRIBE", "SCREEN", "RERANK", "RESCORE", "CUT", "PIPELINE", "RENDER", "AUTO_EDIT", "EDIT_PREVIEW", "PUBLISH_BILI", "INDEX_TRANSCRIPT" -> true;
+            case "VALUE_RECALL", "VALUE_EXPLORE", "TRANSCRIBE", "SCREEN", "RERANK", "RESCORE", "CUT", "PIPELINE", "RENDER", "AUTO_EDIT", "EDIT_PREVIEW", "PUBLISH_BILI", "INDEX_TRANSCRIPT" -> true;
             default -> false;
         };
     }
@@ -242,8 +246,26 @@ public class JobService {
             }
             case "RENDER" -> steps.add(render(session, p));
             case "RERANK" -> steps.add(rerank(session, p));
+            case "VALUE_RECALL" -> {
+                int budget = intParam(p, "budget", 5);
+                if (budget < 0 || budget > 10) throw ApiException.badRequest("探索预算限 0–10 条");
+                List<String> a = new ArrayList<>(List.of(paths.sessionDir(session).resolve("candidates.json").toString(), "--budget", String.valueOf(budget)));
+                if (p.get("start") != null || p.get("end") != null) {
+                    double start, end;
+                    try { start = Double.parseDouble(String.valueOf(p.get("start"))); end = Double.parseDouble(String.valueOf(p.get("end"))); }
+                    catch (NumberFormatException ex) { throw ApiException.badRequest("人工时间必须为秒数"); }
+                    if (!Double.isFinite(start) || !Double.isFinite(end) || start < 0 || end <= start) {
+                        throw ApiException.badRequest("人工时间范围无效");
+                    }
+                    a.addAll(List.of("--mark", String.valueOf(start), String.valueOf(end), "--note", String.valueOf(p.getOrDefault("note", ""))));
+                }
+                if (Boolean.TRUE.equals(p.get("semantic"))) a.add("--semantic");
+                steps.add(runner.command("recall.py", a));
+            }
+            case "VALUE_EXPLORE" -> steps.add(runner.command("rerank.py", List.of(paths.sessionDir(session).resolve("exploration_candidates.json").toString())));
             case "RESCORE" -> steps.add(runner.command("rerank.py",
                     List.of(paths.sessionDir(session).resolve("candidates.json").toString(), "--rescore")));
+            case "VALUE_METRICS" -> steps.add(runner.command("collect_value_metrics.py", List.of()));
             case "LEARN" -> steps.add(runner.command("learn.py",
                     Boolean.TRUE.equals(p.get("noFetch")) ? List.of("--no-fetch") : List.of()));
             case "MEME_REFRESH" -> steps.add(runner.command("memes.py",
@@ -373,6 +395,13 @@ public class JobService {
             a.addAll(List.of("--styles", String.join(",", keys)));
         } else if (Boolean.TRUE.equals(p.get("variants"))) {
             a.addAll(List.of("--variants", "auto"));          // 批量：AI 评分靠前的前 N 个出三版，其余只出标准版
+        }
+        if (p.get("template") != null) {
+            String template = String.valueOf(p.get("template"));
+            if (!Set.of("auto", "default", "cute").contains(template)) {
+                throw ApiException.badRequest("不认识的剪辑模板");
+            }
+            a.addAll(List.of("--template", template));
         }
         return runner.command("autoedit.py", a);
     }

@@ -28,6 +28,8 @@ ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
+from clipper.value_metrics import observe, summarize, attach_attribution, snapshot_store, valid_metric
+from clipper.value_review import publication_quota
 from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.streamer import (decisions_path as streamer_decisions_path, output_root,  # noqa: E402
                               resolve_config, reviews_dir, streamer_from_args)
@@ -81,9 +83,10 @@ def fetch_my_uploads(b: Bili, uid: str, limit: int, cached: list[dict], publishe
             mine = []
             for row in rows:
                 try:
-                    mine.append({**row, **b.stat(row["bvid"])})
+                    mine.append({**row, **b.stat(row["bvid"]), "stats_stale": False, "stats_fetched_at": time.time(), "data_source": "account_stat"})
                 except BiliError as e:
-                    mine.append(row)
+                    previous = next((x for x in cached if x.get("bvid") == row["bvid"]), {})
+                    mine.append({**previous, **row, "stats_stale": True})
                     errors.append(f"{row['bvid']} 数据拉取失败：{e}")
             return mine
         except BiliError as e:
@@ -100,7 +103,7 @@ def fetch_my_uploads(b: Bili, uid: str, limit: int, cached: list[dict], publishe
                 mine.pop(bvid, None)
                 errors.append(f"{bvid} 投稿 UID 与配置的切片号 UID 不一致或无法确认，未用于切片号统计")
                 continue
-            mine[bvid] = {**mine.get(bvid, {}), **row, "stats_stale": False, "data_source": "bound_bv"}
+            mine[bvid] = {**mine.get(bvid, {}), **row, "stats_stale": False, "stats_fetched_at": time.time(), "data_source": "bound_bv"}
             updated += 1
         except BiliError as e:
             errors.append(f"已绑定 {bvid} 数据拉取失败，保留已有缓存：{e}")
@@ -132,6 +135,7 @@ def main() -> int:
 
     # 1. B站投稿
     su, mine = old.get("streamer_uploads") or [], old.get("my_uploads_raw") or []
+    mine = [{**row, "stats_stale": True} for row in mine]
     if not args.no_fetch:
         b = Bili(cookie_file=memory_cookie_file(cfg))
         uid = (cfg.get("streamer") or {}).get("uid")
@@ -155,12 +159,25 @@ def main() -> int:
         if link.get("session") and link.get("rank"):
             rr = read_json(out_dir / link["session"] / "rerank.json", {}) or {}
             o = next((c.get("llm") for c in rr.get("candidates", []) if c["rank"] == int(link["rank"])), None) or {}
+            pack = read_json(out_dir / link["session"] / "publish" / f"{int(link['rank']):02d}.json", {}) or {}
+            row.update(candidate_id=f"{link['session']}:{link['rank']}",
+                       event_id=link.get("event_id") or f"{link['session']}:{link['rank']}",
+                       main_value=o.get("main_value"), types=o.get("types"),
+                       strategy_version=o.get("strategy_version"), rubric_version=o.get("rubric_version"),
+                       prompt_version=rr.get("prompt"), original_bounds=next(
+                           ({"start": c.get("clip_start"), "end": c.get("clip_end")} for c in rr.get("candidates", []) if c["rank"] == int(link["rank"])), None),
+                       title_version=pack.get("title"), cover_version=pack.get("cover_version"), cover_variant=pack.get("cover_variant"),
+                       attribution=link.get("attribution"), repost_of=link.get("repost_of"), newcomer=link.get("newcomer"))
             row.update(session=link["session"], rank=int(link["rank"]), type=o.get("type") or "",
                        mark=(marks.get(link["session"], {}).get(int(link["rank"])) or {}).get("mark"))
         for k in ("completion", "followers"):
             if link.get(k) is not None:
                 row[k] = link[k]
         my_uploads.append(row)
+    snapshots = observe(my_uploads, old.get("value_snapshots"))
+    snapshots = snapshot_store(out_dir / "_memory" / "value_metrics.sqlite3", snapshots)
+    snapshots = attach_attribution(snapshots, published)
+    value_stats = summarize(snapshots, int(mc["min_published"]))
     ts = type_stats(my_uploads, int(mc["min_published"]))
     top_titles = [u["title"] for u in sorted(my_uploads, key=lambda u: -(u.get("view") or 0))[:5]]
 
@@ -192,6 +209,10 @@ def main() -> int:
            "review": rv, "edit_taste": edit_taste(out_dir, int(mc.get("min_edits", 5)), int(mc.get("min_edit_sessions", 2))),
            "type_stats": ts, "my_top_titles": top_titles if len(my_uploads) >= int(mc["min_published"]) else [],
            "weights": {"active": active, "default": DEFAULT_WEIGHTS, **{k: v for k, v in cal.items() if k != "active"}},
+           "value_snapshots": snapshots, "value_stats": value_stats, "publication_quota": publication_quota(my_uploads),
+           "data_counts": {"bound": binding_count,
+                           "fetched": sum(not u.get("stats_stale", True) for u in my_uploads),
+                           "valid": sum(not u.get("stats_stale", True) and valid_metric(u.get("view")) for u in my_uploads)},
            "errors": errors}
     mem["version"] = version_of(mem)
     mem_file.parent.mkdir(parents=True, exist_ok=True)

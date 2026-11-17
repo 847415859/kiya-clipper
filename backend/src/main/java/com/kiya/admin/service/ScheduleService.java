@@ -56,6 +56,12 @@ public class ScheduleService {
 
     public Map<String, Object> get(String week) { return run("get", week, null, List.of(), 30); }
     public Map<String, Object> calendar() { return run("calendar", null, null, List.of(), 30); }
+    public Map<String,Object> delete(String week,String revision,Map<String,Object> entry) {
+        if(revision==null) throw ApiException.badRequest("缺少日程版本，请刷新后删除");
+        var body=new java.util.LinkedHashMap<String,Object>();body.put("expected_revision",revision);
+        if(entry!=null)body.put("entry",entry);
+        return run("delete",week,body,List.of(),30);
+    }
     public Map<String, Object> posterHistory(String week) { return run("poster-history", week, null, List.of(), 30); }
     public Map<String, Object> generatePoster(String week, Map<String,Object> body) { return run("poster-generate", week, body, List.of(), 600); }
     public Path posterFile(String week, String id) {

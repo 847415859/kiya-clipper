@@ -40,9 +40,10 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from clipper.recall import explore  # noqa: E402
 from clipper.asr import format_speech, load_transcript, speech_between  # noqa: E402
 from clipper.danmaku import Segment, all_events  # noqa: E402
-from clipper.media import extract_session, load_features, save_features  # noqa: E402
+from clipper.media import extract_session, load_features, save_features, probe_duration  # noqa: E402
 from clipper.peaks import find_top_peaks, hhmmss  # noqa: E402
 from clipper.session import drop_active, find_sessions  # noqa: E402
 from clipper.streamer import config_path, output_root, streamer_from_args  # noqa: E402
@@ -91,6 +92,11 @@ def write_outputs(name: str, segs: list[Segment], peaks, sig: dict, out_dir: Pat
             d["speech"] = [{"t0": s["t0"], "t1": s["t1"], "text": s["text"]}
                            for s in speech_between(sents, p.clip_start, p.clip_end)]
         cands.append(d)
+    durations = [s.offset + s.last_t for s in segs] + [s["t1"] for s in sents] + [0]
+    if segs and segs[-1].video_path.exists():
+        actual = probe_duration(segs[-1].video_path)
+        if actual:
+            durations.append(segs[-1].offset + actual)
     data = {
         "session": name, "signals_used": used, "delay_seconds": sig["delay"], "delay_note": sig["delay_note"],
         "weights": sig["weights"], "generated_at": time.strftime("%F %T"),
@@ -98,12 +104,18 @@ def write_outputs(name: str, segs: list[Segment], peaks, sig: dict, out_dir: Pat
         "min_score": min_score,
         "below_threshold": [{"rank": p.rank, "t": p.t, "score": round(p.score, 3), "clip_start": p.clip_start,
                              "clip_end": p.clip_end} for p in dropped],
+        "duration_seconds": max(durations),
         "segments": [{"video": str(s.video_path), "offset": s.offset} for s in segs],
         "candidates": cands,
     }
     if extra:
         data.update(extra)
     (out_dir / "candidates.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    recall_cfg = cfg.get("value_recall") or {}
+    if recall_cfg.get("enabled", True) and not data.get("live") and data["duration_seconds"] > 0:
+        marks = _read(out_dir / "manual_marks.json") or []
+        queue = explore(data, sents, int(recall_cfg.get("budget", 5)), marks)
+        (out_dir / "exploration_candidates.json").write_text(json.dumps(queue, ensure_ascii=False, indent=2), encoding="utf-8")
     with open(out_dir / "peaks.csv", "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(["序号", "高峰时间", "片段起", "片段止", "分数", "弹幕/分钟", "情绪词", "礼物价值",
@@ -178,8 +190,7 @@ def main() -> int:
         n_dm = sum(e.kind == "danmaku" for e in events)
         print(f"\n== {name}：{len(segs)} 个分段，弹幕 {n_dm} 条" + (f"（边播边筛，共 {total_segs} 段，在写的不算）" if args.live else "") + " ==")
         if n_dm < 20:
-            print("  弹幕太少，跳过")
-            continue
+            print("  弹幕少：仍处理其他信号和独立探索，不把安静内容直接丢弃")
         feats = None
         if not args.danmaku_only:
             cache = out_dir / ("features.npz" if not args.no_video else "features_novideo.npz")

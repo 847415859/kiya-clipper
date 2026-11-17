@@ -34,10 +34,12 @@ from clipper.boundary import refine_bounds  # noqa: E402
 from clipper.peaks import emotion_matcher  # noqa: E402
 from clipper.context import danmaku_lines, extract_frames, load_events, profile, speech_lines  # noqa: E402
 from clipper.llm import LLMClient, fill, image_part, load_prompt, text_part  # noqa: E402
-from clipper.memory import active_weights, context_text, final_score, load_memory  # noqa: E402
+from clipper.memory import active_weights, context_text, final_score, load_memory, value_final_score, value_score  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
 
-TYPES = ("破防", "口胡", "互动", "金句", "高能", "整活", "反差", "其他", "无")
+from clipper.value_strategy import annotate_shadow, evidence_errors, is_value, route, verify_evidence  # noqa: E402
+
+TYPES = ("破防", "口胡", "互动", "金句", "高能", "整活", "反差", "其他", "无", "萌点", "温柔", "微事件")
 
 
 class Story(BaseModel):
@@ -90,6 +92,19 @@ class RerankOut(BaseModel):
     story: Story = Field(default_factory=Story)
     title_candidates: list[str] = Field(default_factory=list)
     # ---- v4：把关与交接（旧提示词不会输出这些，全部有默认值，旧结果照常读）
+    value_schema_version: int | None = None
+    cute: float | None = Field(default=None, ge=0, le=1)
+    contrast: float | None = Field(default=None, ge=0, le=1)
+    charm: float | None = Field(default=None, ge=0, le=1)
+    unique: float | None = Field(default=None, ge=0, le=1)
+    funny_strength: float | None = Field(default=None, ge=0, le=1)
+    value_evidence: list[dict] = Field(default_factory=list)
+    main_value: str = ""
+    cover_text: str = ""
+    hook_caption: str = ""
+    title_options: list[dict] = Field(default_factory=list)
+    strategy_version: str = ""
+    rubric_version: str = ""
     confidence: float = Field(default=1.0, ge=0, le=1)       # 大模型对自己判断的把握
     evidence: list[Evidence] = Field(default_factory=list)   # 笑点证据：原话 + 秒数
     asr_doubt: bool = False                                  # 笑点依赖的词可能被语音识别听错
@@ -114,10 +129,27 @@ class RerankOut(BaseModel):
     cover_time: float = -1                                   # 封面帧（相对片段开头；-1 = 没有）
     tier: str = ""                                           # 同场二次比较后写入：推荐 / 备选 / 淘汰
 
+    @field_validator("cute", "contrast", "charm", "unique", "funny_strength", mode="before")
+    @classmethod
+    def _dimension(cls, v):
+        from clipper.value_strategy import finite
+        return v if finite(v) and 0 <= v <= 1 else None
+
+    @field_validator("value_schema_version", mode="before")
+    @classmethod
+    def _value_version(cls, v):
+        return v if type(v) is int else (-1 if v is not None else None)
+
     @field_validator("punch_time", "start_time", "end_time", "cover_time", mode="before")
     @classmethod
-    def _secs(cls, v):
-        return _as_num(v)
+    def _secs(cls, v, info):
+        from clipper.value_strategy import finite
+        number = _as_num(v)
+        if number is None:
+            return None if info.field_name in ("start_time", "end_time") else -1
+        if type(number) in (bool, int, float) and not finite(number):
+            return None if info.field_name in ("start_time", "end_time") else -1
+        return number
 
     @field_validator("risk_level")
     @classmethod
@@ -215,19 +247,27 @@ class RerankOut(BaseModel):
         return [t[:40] for t in clean if t][:5]
 
 
-def is_pick(llm: dict | None, taboo: bool, pick_score: float = 8.0, min_conf: float = 0.0) -> bool:
-    """推荐发布：判为有趣 + 能单独看懂 + 起承转合完整 + 分数达标，且没命中禁区话题。
-    v4 起再加：风险不能是 high、把握（confidence）达标；跑过同场二次比较的，还要被判“推荐”档。"""
+def is_pick(llm: dict | None, taboo: bool, pick_score: float = 8.0, min_conf: float = 0.0,
+            value_pick_score: float = 0.65) -> bool:
+    """旧结构沿用 funny/score；新 v1 结构改用五维价值分，不把 funny 当唯一价值依据。"""
     if not llm or taboo:
         return False
-    if not (llm.get("funny") and llm.get("standalone") and llm.get("complete", True)
-            and not llm.get("needs_context") and float(llm.get("score", 0)) >= pick_score):
+    if is_value(llm):
+        return route(llm, taboo, value_pick_score, min_conf)[0] == "normal" and (llm.get("tier") or "推荐") == "推荐"
+    if not (llm.get("funny") and float(llm.get("score", 0)) >= pick_score):
+        return False
+    if not (llm.get("standalone") and llm.get("complete", True) and not llm.get("needs_context")):
         return False
     if llm.get("risk_level") == "high" or float(llm.get("confidence", 1.0)) < min_conf:
         return False
-    if llm.get("in_character") is False:                     # 单独发出去会被误读成真失态 / 真冒犯：留给人看，不自动推荐
+    if llm.get("in_character") is False:
         return False
-    return (llm.get("tier") or "推荐") == "推荐"           # 没跑二次比较（tier 为空）按单条结论
+    return (llm.get("tier") or "推荐") == "推荐"
+
+
+def legacy_pick(llm, taboo, pick_score=8, min_conf=0):
+    old = {k: v for k, v in (llm or {}).items() if k != "value_schema_version"}
+    return is_pick(old, taboo, pick_score, min_conf)
 
 
 class ListItem(BaseModel):
@@ -248,10 +288,17 @@ class ListOut(BaseModel):
 
 def listwise_pool(recs: list[dict], min_score: float, top_n: int) -> list[dict]:
     """进入同场二次比较的候选：判为有趣、分数够、没命中禁区，按分数（再按粗筛名次）取前 top_n 条。"""
-    pool = [r for r in recs if r.get("llm") and r["llm"].get("funny") and not r.get("taboo")
-            and float(r["llm"].get("score", 0)) >= min_score]
-    pool.sort(key=lambda r: (-float(r["llm"]["score"]), r["rank"]))
+    def eligible(r):
+        llm = r.get("llm") or {}
+        if not llm or r.get("taboo"):
+            return False
+        if is_value(llm):
+            return route(llm, False, float(r.get("value_pick_score", min_score / 10)))[0] == "normal"
+        return bool(llm.get("funny")) and float(llm.get("score", 0)) >= min_score
+    pool = [r for r in recs if eligible(r)]
+    pool.sort(key=lambda r: (-(value_score(r["llm"]) if is_value(r["llm"]) else float(r["llm"]["score"]) / 10), r["rank"]))
     return pool[:top_n]
+
 
 
 def list_item_text(r: dict) -> str:
@@ -338,11 +385,14 @@ def main() -> int:
 
     cpath = Path(args.candidates)
     sess = cpath.parent
+    exploration = cpath.name == "exploration_candidates.json"
+    result_path = sess / ("exploration_rerank.json" if exploration else "rerank.json")
     cfg = load_cfg(resolve_config(args.config, sess))
     rc = {"prompt": "rerank_v1", "model": "", "frames": 8, "width": 640, "context_before": 60, "workers": 3,
           "frames_mode": "uniform", "danmaku_smart": True, "danmaku_limit": 60, "min_len": 10, "max_len": 240, "context_after": 45, "pick_score": 8, "pick_confidence": 0.6,
           "listwise": False, "listwise_prompt": "rerank_list_v1", "listwise_min_score": 7, "listwise_top_n": 10,
-          "listwise_max_pick": 3, "price_in": None, "price_out": None,
+          "listwise_max_pick": 3, "value_shadow": True, "value_shadow_top_n": 5, "value_prompt": "rerank_value_v1", "value_pick_score": 0.65, "value_screen_weight": 0.2,
+          "price_in": None, "price_out": None,
           **(cfg.get("rerank") or {})}
     data = json.loads(cpath.read_text(encoding="utf-8"))
     dec_file = Path(os.environ.get("KIYA_MEMORY_DECISIONS") or decisions_path())
@@ -355,7 +405,7 @@ def main() -> int:
     taboo = cfg.get("taboo") or []
     if args.rescore:
         tr0 = load_transcript(sess / "transcript.json")
-        return rescore(sess / "rerank.json", w, n_total, taboo, tr0["sentences"] if tr0 else [])
+        return rescore(result_path, w, n_total, taboo, tr0["sentences"] if tr0 else [])
     mem_file = Path(os.environ.get("KIYA_MEMORY_FILE") or sess.parent / "_memory" / "memory.json")
     memory, mem_version = context_text(load_memory(mem_file), sess.name, cfg, decisions)
     cands = [c for c in data["candidates"] if not args.ranks or c["rank"] in args.ranks]
@@ -373,9 +423,11 @@ def main() -> int:
     print(f"精排 {len(cands)} 个候选，模型 {client.model}，提示词 {rc['prompt']}，每个 {rc['frames']} 张图；"
           f"精排记忆 {mem_version or '（无）'}")
 
+    shadow_ranks = {c["rank"] for c in data["candidates"][:max(0, int(rc["value_shadow_top_n"]))]} if rc["value_shadow"] else set()
+
     def one(c: dict) -> dict:
         msgs, version, nframes = build_messages(c, segs, sents, events, delay, cfg, rc,
-                                                sess / "rerank_frames" / f"{c['rank']:02d}", memory)
+                                                sess / ("exploration_frames" if exploration else "rerank_frames") / f"{c['rank']:02d}_{c['clip_start']:.2f}_{c['clip_end']:.2f}", memory)
         rec = {"rank": c["rank"], "t": c["t"], "clip_start": c["clip_start"], "clip_end": c["clip_end"],
                "screen_score": c["score"], "frames": nframes, "prompt_version": version, "memory_version": mem_version,
                "taboo": taboo_hits(sents, c["clip_start"], c["clip_end"], taboo)}
@@ -395,11 +447,37 @@ def main() -> int:
         o = r.data
         a, b = c["clip_start"], c["clip_end"]
         punch = a + o.punch_time if o.punch_time >= 0 else None
-        start = a + max(o.start_time, -float(rc["context_before"])) if o.start_time is not None else None
-        end = a + min(o.end_time, (b - a) + float(rc["context_after"])) if o.end_time is not None else None
+        start = a + min(max(o.start_time, -min(a, float(rc["context_before"]))), b - a + float(rc["context_after"])) if o.start_time is not None else None
+        end = a + max(-min(a, float(rc["context_before"])), min(o.end_time, (b - a) + float(rc["context_after"]))) if o.end_time is not None else None
         rec["llm"] = o.model_dump()
-        rec["pick"] = is_pick(rec["llm"], bool(rec["taboo"]), float(rc["pick_score"]), float(rc["pick_confidence"]))
-        rec["refined"] = refine_bounds(sents, c["t"], punch, start, end, float(rc["min_len"]), float(rc["max_len"]))
+        # Official result remains on the legacy contract; shadow has separate output/cache tags.
+        rec["llm"]["value_schema_version"] = None
+        rec["pick"] = legacy_pick(rec["llm"], bool(rec["taboo"]), float(rc["pick_score"]), float(rc["pick_confidence"]))
+        if c["rank"] in shadow_ranks:
+            shadow_rc = {**rc, "prompt": rc["value_prompt"]}
+            smsgs, sversion, _ = build_messages(c, segs, sents, events, delay, cfg, shadow_rc,
+                                                sess / ("exploration_frames" if exploration else "rerank_frames") / f"{c['rank']:02d}_{c['clip_start']:.2f}_{c['clip_end']:.2f}", memory)
+            sr = client.chat_json(smsgs, RerankOut, tag=sversion)
+            rec.update(value_llm=sr.data.model_dump() if sr.data else None,
+                       value_error=sr.error, value_usage=sr.usage, value_cached=sr.cached,
+                       value_prompt_version=sversion)
+            if rec["value_llm"]:
+                frame_inputs = extract_frames(segs, a, b, int(rc["frames"]), sess / ("exploration_frames" if exploration else "rerank_frames") / f"{c['rank']:02d}_{c['clip_start']:.2f}_{c['clip_end']:.2f}",
+                                              int(rc["width"]), peak=c["t"], mode=rc.get("frames_mode", "uniform"))
+                rec["value_llm"]["evidence_errors"] = verify_evidence(
+                    rec["value_llm"], c, sents, events, [t for t, _ in frame_inputs],
+                    float(rc["context_before"]), float(rc["context_after"]), delay)
+                v = rec["value_llm"]
+                def absolute_time(key):
+                    raw = v.get(key)
+                    return a + max(-min(a, float(rc["context_before"])), min(raw, b-a+float(rc["context_after"]))) if raw is not None else None
+                rec["value_refined"] = refine_bounds(sents, c["t"],
+                    a + v["punch_time"] if v.get("punch_time", -1) >= 0 else None,
+                    absolute_time("start_time"), absolute_time("end_time"), float(rc["min_len"]), float(rc["max_len"]),
+                    material_end=data.get("duration_seconds") or data.get("covered_seconds"))
+                rec["value_refined"]["removed"] = []  # Value review never automatically discards context as mere SC/business.
+        rec["refined"] = refine_bounds(sents, c["t"], punch, start, end, float(rc["min_len"]), float(rc["max_len"]),
+                                        material_end=data.get("duration_seconds") or data.get("covered_seconds"))
         return rec
 
     t0 = time.time()
@@ -414,7 +492,8 @@ def main() -> int:
         lw_msg = run_listwise(client, recs, cfg, rc)
         for r in recs:
             if r.get("llm"):
-                r["pick"] = is_pick(r["llm"], bool(r.get("taboo")), float(rc["pick_score"]), float(rc["pick_confidence"]))
+                r["pick"] = legacy_pick(r["llm"], bool(r.get("taboo")), float(rc["pick_score"]),
+                                       float(rc["pick_confidence"]))
         print(lw_msg)
     for r in recs:
         r["final"] = round(final_score(r.get("llm"), r["rank"], n_total, w, bool(r.get("taboo"))), 4)
@@ -423,18 +502,27 @@ def main() -> int:
         r["new_rank"] = i
 
     cost = client.cost(rc["price_in"], rc["price_out"])
-    out = {"session": sess.name, "model": client.model, "prompt": rc["prompt"], "memory_version": mem_version,
+    out = {"session": sess.name, "candidate_source_id": data.get("recall_id"), "model": client.model, "prompt": rc["prompt"], "memory_version": mem_version,
            "generated_at": time.strftime("%F %T"), "listwise": lw_msg,
            "weights": w, "tokens": client.total, "cost_yuan": round(cost, 4) if cost is not None else None,
            "candidates": recs}
     # 只精排了部分序号时，和已有结果合并
-    old = sess / "rerank.json"
+    old = result_path
     if args.ranks and old.exists():
         prev = json.loads(old.read_text(encoding="utf-8"))
         keep = [r for r in prev.get("candidates", []) if r["rank"] not in args.ranks]
         out["candidates"] = sorted(keep + recs, key=lambda r: -r["final"])
         for i, r in enumerate(out["candidates"], 1):
             r["new_rank"] = i
+    if exploration:
+        out["review_only"] = True
+        for item in out["candidates"]:
+            item["pick"] = False
+    annotate_shadow(out["candidates"], n_total, float(rc["value_pick_score"]),
+                    float(rc["value_screen_weight"]), float(rc["pick_confidence"]))
+    out["value_policy"] = {"mode": "shadow", "threshold": rc["value_pick_score"],
+                           "screen_weight": rc["value_screen_weight"], "min_conf": rc["pick_confidence"],
+                           "budget": rc["value_shadow_top_n"], "prompt": rc["value_prompt"]}
     old.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
 
     print(f"{'新':>3} {'原':>3}  {'高峰':<9}{'分':>5}  {'有趣':<4}{'类型':<5}{'修正后起止':<20}  一句话")
@@ -495,6 +583,9 @@ def rescore(path: Path, w: dict, n_total: int, taboo: list[str] | None = None, s
     d["candidates"].sort(key=lambda c: -c["final"])
     for i, c in enumerate(d["candidates"], 1):
         c["new_rank"] = i
+    policy = d.get("value_policy") or {}
+    annotate_shadow(d["candidates"], n_total, float(policy.get("threshold", .65)),
+                    float(policy.get("screen_weight", .2)), float(policy.get("min_conf", .6)))
     d["weights"] = w
     d["rescored_at"] = time.strftime("%F %T")
     path.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")

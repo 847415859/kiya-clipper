@@ -67,6 +67,11 @@ rerank:
   context_after: 240         # 后续：片段后多少秒的原话（看笑点之后的反应；起止也最多往后取这么多）
   pick_score: 8              # 推荐发布的最低分（还要求：有趣 + 能单独看懂 + 起承转合完整 + 风险不是 high）
   pick_confidence: 0.6       # 推荐发布要求大模型的把握（confidence）不低于这个值；0 = 不看
+  value_shadow: true         # 独立输出影子结果，不改变正式推荐、不自动投稿
+  value_shadow_top_n: 5       # 每场最多额外评审 5 个；0 关闭额外调用
+  value_prompt: rerank_value_v1
+  value_pick_score: 0.65     # 新五维价值路径的独立推荐阈值；旧结果继续使用 pick_score
+  value_screen_weight: 0.2   # 新路径影子排序中保留粗筛顺序的权重
   listwise: true             # 同场二次比较：通过单条评审的候选再横向比一次，分 推荐 / 备选 / 淘汰（多一次文本请求，很便宜；失败不影响单条结果）
   listwise_prompt: rerank_list_v1
   listwise_min_score: 7      # 单条分数达到这个值的才进二次比较

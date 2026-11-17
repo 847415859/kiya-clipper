@@ -122,14 +122,33 @@ def run(args):
         return snap
     if args.action == "extract":
         return extract(root, args.image_id, week, cfg)
-    if args.action in ("save", "deactivate"):
+    if args.action in ("save", "deactivate", "delete"):
         with locked(path.with_suffix(".lock")):
             if raw.get("expected_revision") != revision(path):
                 return {"conflict": True, "error": "日程已被其他页面更新，请保留当前输入并重新读取后再保存"}
             state = read_state(root, week)
-            if args.action == "deactivate":
+            if args.action=='delete':
+                target=raw.get('entry')
+                if target is None:
+                    state={'deleted':True,'active':False,'draft':{'entries':[],'image_id':'','portrait_id':'','week_start':week,'timezone':'Asia/Shanghai'},'published':None}
+                else:
+                    if not isinstance(target,dict) or not isinstance(target.get('id'),str) or not isinstance(target.get('date'),str):
+                        raise ValueError('缺少要删除的日程标识和日期')
+                    changed=False
+                    for key in ('draft','published'):
+                        if not isinstance(state.get(key),dict):continue
+                        state[key]={**state[key],**validate_plan(state[key],week)}
+                        rows=state[key].get('entries',[])
+                        kept=[r for r in rows if not (r.get('id')==target['id'] and r.get('date')==target['date'])]
+                        if len(kept)!=len(rows):
+                            changed=True;state[key]['entries']=kept
+                            if key=='published':state[key]['version']=uuid.uuid4().hex
+                    if not changed:raise ValueError('日程已不存在，请刷新汇总')
+                    if not (state.get('published') or {}).get('entries'):state['active']=False
+            elif args.action == "deactivate":
                 state["active"] = False
             else:
+                state.pop('deleted',None)
                 plan = validate_plan(raw.get("plan"), week)
                 if plan["image_id"] and not (root / "_schedule/images" / (plan["image_id"] + ".jpg")).is_file():
                     raise ValueError("周表图片已不存在，请重新上传或移除图片")
@@ -179,7 +198,7 @@ def run(args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("action", choices=["get", "save", "deactivate", "preview", "extract", "calendar", "poster-history", "poster-generate", "image-register"])
+    ap.add_argument("action", choices=["get", "save", "deactivate", "delete", "preview", "extract", "calendar", "poster-history", "poster-generate", "image-register"])
     ap.add_argument("--root", required=True)
     ap.add_argument("--week-start")
     ap.add_argument("--input")

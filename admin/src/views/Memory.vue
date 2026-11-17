@@ -217,6 +217,47 @@
       </div>
 
       <el-card shadow="never" class="card">
+        <template #header><b>价值策略复盘</b> <el-button size="small" @click="collectMetrics">采集到期快照</el-button></template>
+        <p v-if="mem?.data_counts">已绑定 {{ mem.data_counts.bound }} · 本次抓取 {{ mem.data_counts.fetched }} · 有效数据 {{ mem.data_counts.valid }}</p>
+        <p v-if="mem?.publication_quota">最近 {{ mem.publication_quota.n }} 条，适合新观众 {{ mem.publication_quota.newcomer }} 条，未判断 {{ mem.publication_quota.unknown }} 条；目标每 10 条约 6 条。</p>
+        <el-collapse>
+          <el-collapse-item title="标记新观众适配与重复事件" name="outcome-meta">
+            <el-space wrap>
+              <el-input v-model="outcomeMeta.bvid" placeholder="已绑定 BV" maxlength="12" />
+              <el-select v-model="outcomeMeta.newcomer" placeholder="适合新观众？" style="width:170px"><el-option label="适合新观众" :value="true" /><el-option label="更适合熟悉主播的观众" :value="false" /></el-select>
+              <el-input v-model="outcomeMeta.eventId" placeholder="相同事件填相同编号（可选）" maxlength="100" />
+              <el-button :disabled="outcomeMeta.newcomer == null" @click="act({ action: 'valueOutcome', ...outcomeMeta })">保存标记</el-button>
+            </el-space>
+          </el-collapse-item>
+        </el-collapse>
+        <el-collapse>
+          <el-collapse-item title="补充可核实的关注 / 回访归因" name="attribution">
+            <el-form label-width="110px" style="max-width:650px">
+              <el-form-item label="已绑定 BV"><el-input v-model="outcome.bvid" placeholder="BV 号" maxlength="12" /></el-form-item>
+              <el-form-item label="目标"><el-select v-model="outcome.target"><el-option label="切片号关注" value="clip_account" /><el-option label="主播关注" value="streamer" /><el-option label="主播回访" value="streamer_return" /></el-select></el-form-item>
+              <el-form-item label="观察窗口"><el-select v-model="outcome.window"><el-option label="24 小时" value="24h" /><el-option label="7 天" value="7d" /></el-select></el-form-item>
+              <el-form-item label="归因人数"><el-input-number v-model="outcome.count" :min="0" /></el-form-item>
+              <el-form-item label="对应播放量"><el-input-number v-model="outcome.view" :min="1" /></el-form-item>
+              <el-form-item label="来源"><el-input v-model="outcome.source" placeholder="创作后台导出或其他可核实依据" maxlength="200" /></el-form-item>
+              <el-form-item label="核实"><el-checkbox v-model="outcome.verified">已确认归因目标、观察窗口及对应播放量</el-checkbox></el-form-item>
+              <el-form-item><el-button type="primary" :disabled="!outcome.verified || !outcome.source.trim()" @click="act({ action: 'valueOutcome', ...outcome })">保存归因</el-button></el-form-item>
+            </el-form>
+            <p class="muted">保存后用本地数据更新复盘。仅在对应快照的播放量一致时计算每千播放；账户总涨粉不能作为单片归因。</p>
+          </el-collapse-item>
+        </el-collapse>
+        <p>按投稿后 24 小时、7 天分别观察。同一事件的重发只计一个样本；缺失归因显示未知。</p>
+        <el-table :data="valueStats" empty-text="尚无固定稿龄快照；请在对应窗口更新精排记忆" size="small">
+          <el-table-column prop="window" label="稿龄" width="70" />
+          <el-table-column prop="type" label="主价值" width="110" />
+          <el-table-column prop="n" label="独立样本" width="90" />
+          <el-table-column prop="median_view" label="播放中位数" />
+          <el-table-column label="播放范围"><template #default="{ row }">{{ row.view_min }}–{{ row.view_max }}</template></el-table-column>
+          <el-table-column label="切片号每千播放关注"><template #default="{ row }">{{ row.clip_follows_per_1000?.median ?? '未知' }}（{{ row.clip_follows_per_1000?.n || 0 }} 样本）</template></el-table-column>
+          <el-table-column label="样本情况"><template #default="{ row }">{{ row.sufficient ? '可描述比较，尚非因果结论' : '样本不足' }}</template></el-table-column>
+        </el-table>
+      </el-card>
+
+      <el-card shadow="never" class="card">
         <template #header><b>排序权重</b> <span class="muted">（综合分 = 大模型分 × llm + 粗筛名次 × screen；判为不值得切的 × not_funny）</span></template>
         <div class="weights">
           <div><span class="muted">正在用</span> <code>{{ fmtW(w.active) }}</code>
@@ -261,6 +302,8 @@ const mem = ref(null)
 const dec = ref({})
 const jobId = ref(null)
 const myUid = ref('')
+const outcomeMeta = reactive({ bvid: '', newcomer: null, eventId: '' })
+const outcome = reactive({ bvid: '', target: 'clip_account', window: '24h', count: 0, view: 1, source: '', verified: false })
 const newLore = reactive({ text: '', note: '' })
 const newTaboo = reactive({ word: '', note: '' })
 const promoteDlg = reactive({ show: false, text: '', kind: 'meme', note: '' })
@@ -283,6 +326,7 @@ const examples = computed(() => (mem.value && mem.value.examples) || [])
 const streamerUploads = computed(() => (mem.value && mem.value.streamer_uploads) || [])
 const myUploads = computed(() => (mem.value && mem.value.my_uploads) || [])
 const publishedBindingCount = computed(() => Object.values(dec.value.published || {}).filter(v => v && v.session && v.rank).length)
+const valueStats = computed(() => Object.entries(mem.value?.value_stats || {}).flatMap(([window, groups]) => Object.entries(groups).map(([type, row]) => ({ window, type, ...row }))))
 const typeStats = computed(() => Object.entries((mem.value && mem.value.type_stats) || {}).map(([type, v]) => ({ type, ...v })))
 const promoted = computed(() => dec.value.promoted_lore || [])
 const taboo = computed(() => (dec.value.taboo || []).map((x) => (typeof x === 'string' ? { word: x } : x)))
@@ -305,6 +349,11 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+async function collectMetrics() {
+  const job = await api.submitJob('VALUE_METRICS', null, {})
+  ElMessage.success(`已提交任务 #${job.id}，完成后刷新此页；只查询到期窗口`)
 }
 
 async function act(body) {

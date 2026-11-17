@@ -42,6 +42,8 @@ from clipper.variants import DEFAULT, STYLES, load as variants_load, resolve, sa
 from clipper.memes import (enforce_memes, load_library, offer_text, retrieve, settings as meme_settings,  # noqa: E402
                            situation_text)
 
+from clipper.value_strategy import constrain_cute, route
+
 COLORS = "#FFE14D|#FFFFFF|#FF7EB6|#7FE3FF"
 
 
@@ -70,10 +72,24 @@ def shift_beats(beats: list[str], delta: float) -> str:
     return "\n".join(f"- {x}" for x in out)
 
 
+def cute_template_guidance(llm: dict) -> tuple[str | None, str]:
+    """仅在主价值和可核对证据同时满足时建议克制萌点包装。"""
+    main_value = str(llm.get("main_value") or "").strip()
+    allowed_values = {"情绪回报", "关系维护"}
+    group, reasons = route(llm)
+    evidence = llm.get("value_evidence") or []
+    usable = [e for e in evidence if isinstance(e, dict) and e.get("dimension") in {"cute", "charm"}]
+    if main_value not in allowed_values or group != "normal" or not usable:
+        return None, "萌点自动建议未通过证据、风险或完整性检查；保留默认模板与人工选择"
+    return "edit_cute_v1", "情绪回报/关系维护且证据可核对，使用原声和轻量反应"
+
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("candidates")
     ap.add_argument("--rank", type=int, required=True)
+    ap.add_argument("--template", choices=["auto", "default", "cute"], default="auto", help="人工模板优先；cute 仍需证据与风险检查")
     ap.add_argument("--force", action="store_true", help="覆盖已有的剪辑脚本")
     ap.add_argument("--styles", help="指定要生成哪几版（逗号分隔：restrained,standard,lively）；指定后不受前 top_n 个的限制。默认 --variants auto 的三版")
     ap.add_argument("--variants", choices=["off", "auto"], default="off",
@@ -103,13 +119,23 @@ def main() -> int:
     if rpath.exists():
         rr = next((r for r in json.loads(rpath.read_text(encoding="utf-8"))["candidates"] if r["rank"] == args.rank), None)
     llm = (rr or {}).get("llm") or {}
-    refined = (rr or {}).get("refined")
+    # Shadow assessments do not silently select a production template.
+    template_llm = ((rr or {}).get("value_llm") or llm) if args.template == "cute" else llm
+    cute_prompt, cute_reason = cute_template_guidance(template_llm)
+    if args.template == "default" or (args.styles and args.template == "auto"):
+        cute_prompt, cute_reason = None, "人工风格选择优先"
+    if args.template == "cute" and not cute_prompt:
+        print(cute_reason, file=sys.stderr)
+        return 1
+    if args.template == "cute":
+        llm = template_llm
+    refined = ((rr or {}).get("value_refined") or (rr or {}).get("refined")) if args.template == "cute" else (rr or {}).get("refined")
     window = suggest_window(c, refined)              # 素材范围：候选片段 ∪ 精排修正后的起止
     a, b = window["start"], window["end"]
     clip_len = b - a
     t_start = max(0.0, refined["start"] - a) if refined else ca - a
     t_end = min(clip_len, refined["end"] - a) if refined else c["clip_end"] - a
-    if t_end - t_start < 5:
+    if t_end <= t_start:
         t_start, t_end = 0.0, clip_len
     story = llm.get("story") or {}
     sdir = sticker_dir()
@@ -119,7 +145,10 @@ def main() -> int:
         print(f"提示：贴图库里有 {len(undescribed(sdir))} 个贴图没有含义说明，AI 不会用它们（AI 只看得到文件名）；"
               "运行 python scripts/describe_stickers.py 自动补，或手写 assets/stickers/stickers.json")
     caption = (llm.get("context_caption") or "").strip()
+    if not caption and cute_prompt and llm.get("value_schema_version") == 1:
+        caption = (llm.get("hook_caption") or "").strip()
     handoff = dict(caption=caption or "（不需要）", punch_line=llm.get("punch_line") or "（无）",
+                   cute_template=cute_prompt or "（不启用）", cute_reason=cute_reason,
                    hook_note=llm.get("hook_note") or "（不需要）", pace=llm.get("pace") or "（未知，按精排结论自己判断）",
                    highlight_danmaku=" ｜ ".join(llm.get("highlight_danmaku") or []) or "（没有）",
                    types="、".join(llm.get("types") or [llm.get("type") or ""]).strip("、") or "（未知）",
@@ -128,6 +157,10 @@ def main() -> int:
                    beats=shift_beats(llm.get("beats") or [], ca - a) or "（没有节拍，按精排结论自己判断）")
     dm, _ = danmaku_lines(load_events(data["segments"]), a, b, a, float(data.get("delay_seconds") or 0), limit=40)
     version, system_t, user = load_prompt(ac["prompt"])
+    if cute_prompt:
+        cute_version, cute_system, _ = load_prompt(cute_prompt)
+        system_t += "\n\n【萌点模板约束】\n" + cute_system
+        version = f"{version}+{cute_version}"
     ms = meme_settings(cfg)
     # 剪辑师口味：人改过 AI 初稿的记录攒够了才生效（clipper/editdiff.py）；提示词用 edit_v2 才有这一块
     taste = edit_taste(sess.parent, int(mc.get("min_edits", 5)), int(mc.get("min_edit_sessions", 2)))
@@ -213,7 +246,8 @@ def main() -> int:
             except EditError as e:
                 bad.append(str(e))
         trim = {"start": t_start, "end": t_end}
-        if out.trim and 0 <= out.trim.start < out.trim.end <= clip_len and out.trim.end - out.trim.start >= 5:
+        keep_explicit = refined and (cute_prompt or refined["end"] - refined["start"] < 5)
+        if not keep_explicit and out.trim and 0 <= out.trim.start < out.trim.end <= clip_len and out.trim.end - out.trim.start > 0:
             trim = {"start": round(out.trim.start, 2), "end": round(out.trim.end, 2)}
         items = [i for i in items if trim["start"] <= i["start"] < trim["end"]]
         items, st_dropped = limit_stickers(items, int(ac.get("max_stickers", 2)))
@@ -221,8 +255,9 @@ def main() -> int:
         if "{{caption}}" in user:                        # edit_v5：精排要求补的前情字幕，模型漏了就在开头补上
             items = ensure_caption(items, caption, trim)
         edit = {"version": 1, "window": window, "trim": trim, "subtitles": {"enabled": True}, "items": items,
+                "boundary_trace": {"refined": refined, "chosen": dict(trim)},
                 "generated_by": f"{version} / {client.model}" + (f" / {v['label']}" if multi or key != DEFAULT else ""), "note": out.note[:200]}
-        track = music_lib.pick_track(args.rank, str(llm.get("type") or "")) if ac.get("music", True) else None
+        track = music_lib.pick_track(args.rank, str(llm.get("type") or "")) if ac.get("music", True) and not cute_prompt else None
         if track:                                          # 曲库里有可用的曲子：配 BGM，效果吸附到鼓点（没有曲库就跳过）
             beats = music_lib.load_beats(track["id"])["beats"]
             edit["items"], moved = snap_to_beats(edit["items"], beats, 0.0, clip_len)
@@ -247,6 +282,9 @@ def main() -> int:
         # 密度裁剪、梗过滤和卡点之后再检查，必要前情不能被装饰效果挤掉。
         edit, caption_dropped = finalize_caption(edit, caption, v["max_items"])
         dropped += caption_dropped
+        if cute_prompt:
+            edit = constrain_cute(edit)
+            edit["template_reason"] = cute_reason
         try:
             edit = validate_edit(edit, clip_len)
         except EditError as e:

@@ -1,6 +1,6 @@
 <template>
   <div class="page schedule-page" v-loading="loading">
-    <ScheduleCalendar ref="calendar" @edit="editCalendarDay" />
+    <ScheduleCalendar ref="calendar" @edit="editCalendarDay" @delete-week="deleteCalendarWeek" @delete-entry="deleteCalendarEntry" />
     <div class="toolbar">
       <b>直播日程</b>
       <el-button @click="changeWeek(addDays(week, -7))">上一周</el-button>
@@ -56,12 +56,13 @@
         <el-table-column label="分类" width="120"><template #default="{row}"><el-select :model-value="row.category || 'other'" @update:model-value="row.category=$event" aria-label="日程分类"><el-option v-for="c in categories" :key="c.id" :label="c.label" :value="c.id" /></el-select></template></el-table-column>
         <el-table-column label="内容" min-width="220"><template #default="{row}"><el-input v-model="row.title" maxlength="60" aria-label="日程内容" placeholder="例如：20点游戏回，或休息" /></template></el-table-column>
         <el-table-column label="备注（不写入预告）" min-width="200"><template #default="{row}"><el-input v-model="row.note" maxlength="300" /></template></el-table-column>
-        <el-table-column width="70"><template #default="{row}"><el-button link type="danger" @click="plan.entries = plan.entries.filter(r=>r.id !== row.id)">删除</el-button></template></el-table-column>
+        <el-table-column width="70"><template #default="{row}"><el-button link type="danger" :disabled="saving" @click="removeEntry(row)">删除</el-button></template></el-table-column>
       </el-table>
       <el-button :disabled="plan.entries.length >= 14" @click="plan.entries.push(emptyEntry(week))">添加安排</el-button>
       <p class="muted">已取消的安排不会介绍；今天已经结束的场次会排除。没有结束时间且开始已过的场次不再预告。图片不会整张烧到片尾，片尾只展示剩余的结构化安排。</p>
       <div class="toolbar">
         <el-button :loading="saving" @click="save(false)">保存草稿并生成周计划</el-button>
+        <el-button type="danger" plain :disabled="saving || revision==='none'" @click="deleteCalendarWeek({week_start:week,revision})">删除本周日程</el-button>
         <el-checkbox v-model="checked">我已核对这一周的日期、时间和内容</el-checkbox>
         <el-button type="primary" :loading="saving" :disabled="!checked" @click="save(true)">确认并生成周计划</el-button>
         <el-button v-if="active" type="warning" plain :disabled="saving" @click="deactivate">暂停使用已确认日程</el-button>
@@ -89,6 +90,32 @@ import SchedulePosters from '../components/SchedulePosters.vue'
 import {categories} from '../schedule-calendar'
 const calendar=ref(null)
 const posterPanel=ref(null)
+async function deleteCalendarWeek(target){
+  if(saving.value || uploading.value || extracting.value)return
+  try{await ElMessageBox.confirm(`删除 ${target.week_start} 这一整周的草稿和已确认日程？汇总将移除这一周，历史生成图片保留。当前周的未保存输入也会清除。`,'删除整周日程',{type:'warning',confirmButtonText:'删除整周',cancelButtonText:'取消'})}catch{return}
+  saving.value=true
+  try{await api.deleteSchedule(target.week_start,target.revision);if(week.value===target.week_start)await load();await calendar.value?.refresh();ElMessage.success('整周日程已删除，汇总已更新')}finally{saving.value=false}
+}
+async function deleteCalendarEntry(target){
+  if(saving.value || uploading.value || extracting.value)return
+  try{await ElMessageBox.confirm(`删除 ${target.entry.date} 的「${target.entry.title}」？将同步从草稿和已确认日程中移除；历史图片保留。`,'删除日程',{type:'warning',confirmButtonText:'删除日程',cancelButtonText:'取消'})}catch{return}
+  saving.value=true
+  try{
+    const r=await api.deleteSchedule(target.week,target.revision,{id:target.entry.id,date:target.entry.date})
+    if(week.value===target.week){
+      plan.entries=plan.entries.filter(e=>!(e.id===target.entry.id && e.date===target.entry.date))
+      revision.value=r.revision;active.value=r.active;confirmedPlan.value=r.published;baseline=JSON.stringify(r.draft);checked.value=false
+      await Promise.resolve();dirty.value=signature()!==baseline
+    }
+    await refreshPreview();await calendar.value?.refresh();ElMessage.success('日程已删除，汇总和统计已更新')
+  }finally{saving.value=false}
+}
+async function removeEntry(row){
+  const stored=JSON.parse(baseline || '{}')
+  const exists=[...(stored.entries || []),...(confirmedPlan.value?.entries || [])].some(e=>e.id===row.id && e.date===row.date)
+  if(exists)await deleteCalendarEntry({week:week.value,revision:revision.value,entry:row})
+  else plan.entries=plan.entries.filter(e=>e.id!==row.id)
+}
 async function editCalendarDay(day){await changeWeek(day);document.querySelector('.schedule-page > .toolbar')?.scrollIntoView({behavior:'smooth',block:'start'})}
 const week = ref(monday()), revision = ref('none'), active = ref(false), dirty = ref(false)
 const loading = ref(false), saving = ref(false), uploading = ref(false), extracting = ref(false), checked = ref(false)

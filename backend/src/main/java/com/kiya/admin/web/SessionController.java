@@ -48,6 +48,11 @@ public class SessionController {
         return sessions.candidates(name);
     }
 
+    @GetMapping("/{name}/value-strategy")
+    public Map<String, Object> valueStrategy(@PathVariable String name) {
+        return sessions.valueStrategy(name);
+    }
+
     public record MarkReq(String mark, String note, List<String> reasons, String mode, Long ms, Integer rating) {}
 
     @PutMapping("/{name}/candidates/{rank}/mark")

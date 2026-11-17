@@ -39,6 +39,10 @@ public class ScheduleController {
         return service.save(week, req.plan(), req.expectedRevision(), Boolean.TRUE.equals(req.confirm()));
     }
     public record RevisionReq(String expectedRevision) {}
+    public record DeleteReq(String expectedRevision,Map<String,Object> entry) {}
+    @DeleteMapping("/{week}") public Map<String,Object> delete(@PathVariable String week,@RequestBody DeleteReq req) {
+        return service.delete(week,req.expectedRevision(),req.entry());
+    }
     @PostMapping("/{week}/deactivate") public Map<String, Object> deactivate(@PathVariable String week, @RequestBody RevisionReq req) {
         return service.deactivate(week, req.expectedRevision());
     }

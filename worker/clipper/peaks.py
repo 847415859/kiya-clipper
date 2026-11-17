@@ -83,6 +83,7 @@ def trailing_median(x: np.ndarray, window: int) -> np.ndarray:
 
 
 def smooth(x: np.ndarray, window: int) -> np.ndarray:
+    window = min(window, len(x))
     if window <= 1:
         return x
     return np.convolve(x, np.ones(window) / window, mode="same")

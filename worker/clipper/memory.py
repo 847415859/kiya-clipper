@@ -261,7 +261,13 @@ def pick_examples(examples: list[dict], session: str | None, n_yes: int, n_no: i
 # ---------------------------------------------------------------- 切片号数据
 def type_stats(my_uploads: list[dict], min_n: int) -> dict:
     """已绑定场次的投稿按类型汇总播放和互动率。数量不够返回空。"""
-    linked = [u for u in my_uploads if u.get("type") and u.get("view") is not None]
+    from .value_metrics import valid_metric
+    unique = {}
+    for u in my_uploads:
+        if u.get("type") and valid_metric(u.get("view")):
+            identity = u.get("event_id") or u.get("bvid") or (u.get("session"), u.get("rank"))
+            unique.setdefault(identity, u)
+    linked = list(unique.values())
     if len(linked) < min_n:
         return {}
     allv = statistics.median(u["view"] for u in linked) or 1
@@ -270,17 +276,58 @@ def type_stats(my_uploads: list[dict], min_n: int) -> dict:
         by[u["type"]].append(u)
     out = {}
     for t, us in by.items():
-        med = statistics.median(u["view"] for u in us)
-        rate = statistics.mean((u.get("like", 0) + u.get("coin", 0) + u.get("favorite", 0)) / max(1, u["view"]) for u in us)
-        out[t] = {"n": len(us), "median_view": int(med), "relative": round(med / allv, 2), "engage": round(rate, 4)}
+        views = [u["view"] for u in us]
+        med = statistics.median(views)
+        rates = [(u["like"] + u["coin"] + u["favorite"]) / u["view"] for u in us
+                 if u["view"] > 0 and all(valid_metric(u.get(k)) for k in ("like", "coin", "favorite"))]
+        out[t] = {"n": len(us), "median_view": int(med), "relative": round(med / allv, 2),
+                  "engage": round(statistics.mean(rates), 4) if rates else None,
+                  "engage_n": len(rates), "sufficient": len(us) >= min_n,
+                  "view_min": min(views), "view_max": max(views), "view_stdev": statistics.pstdev(views),
+                  "observation": "legacy_cumulative", "causal_claim": False}
     return dict(sorted(out.items(), key=lambda kv: -kv[1]["relative"]))
+
 
 
 # ---------------------------------------------------------------- 排序权重
 DEFAULT_WEIGHTS = {"llm": 0.8, "screen": 0.2, "not_funny": 0.6}
+VALUE_WEIGHTS = {"cute": 0.20, "contrast": 0.30, "charm": 0.25, "unique": 0.15, "funny_strength": 0.10}
 
 
 TIER_MUL = {"推荐": 1.1, "备选": 1.0, "淘汰": 0.75}          # 同场二次比较的档位对综合分的加减
+
+
+def value_score(llm: dict | None, weights: dict | None = None) -> float | None:
+    """计算完整的新五维价值分；旧结构、未知值和异常值都不隐式回退。"""
+    from math import isfinite
+
+    if not llm or type(llm.get("value_schema_version")) is not int or llm["value_schema_version"] != 1:
+        return None
+    w = VALUE_WEIGHTS if weights is None else weights
+    if set(w) != set(VALUE_WEIGHTS) or any(isinstance(v, bool) or not isinstance(v, (int, float))
+                                           or not isfinite(v) or v < 0 for v in w.values()) \
+            or abs(sum(w.values()) - 1.0) > 1e-6:
+        raise ValueError("五维权重必须完整、非负、有限且总和为 1")
+    values = {k: llm.get(k) for k in w}
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not isfinite(v) or not 0 <= v <= 1
+           for v in values.values()):
+        return None
+    return sum(values[k] * w[k] for k in w)
+
+
+def value_final_score(llm: dict | None, rank: int, n_total: int, weights: dict | None = None,
+                     screen_weight: float = 0.2, taboo: bool = False) -> float | None:
+    """新策略影子排序分；仅对完整 v1 结果生效，禁止把旧 funny 当新强度。"""
+    from math import isfinite
+    if type(screen_weight) not in (int, float) or not isfinite(screen_weight) or not 0 <= screen_weight <= 1:
+        raise ValueError("粗筛权重必须在 0–1 之间")
+    if taboo:
+        return 0.0 if value_score(llm, weights) is not None else None
+    value = value_score(llm, weights)
+    if value is None:
+        return None
+    screen = 1 - (rank - 1) / max(1, n_total - 1)
+    return (1 - screen_weight) * value + screen_weight * screen
 
 
 def final_score(llm: dict | None, rank: int, n_total: int, w: dict, taboo: bool = False) -> float:

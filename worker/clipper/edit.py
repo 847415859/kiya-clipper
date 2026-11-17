@@ -256,7 +256,7 @@ def validate_edit(raw: dict, clip_len: float) -> dict:
     if isinstance(subs.get("style"), dict):          # 后台保存时把选中的样式整份写进来
         out["subtitles"]["style"] = subs["style"]
         out["subtitles"]["style_name"] = str(subs.get("style_name") or "")[:64]
-    for k in ("session", "rank", "updated_at", "generated_by", "note"):
+    for k in ("session", "rank", "updated_at", "generated_by", "note", "template", "template_reason", "original_audio", "boundary_trace"):
         if k in raw:
             out[k] = raw[k]
     return out

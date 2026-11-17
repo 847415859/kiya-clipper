@@ -300,6 +300,35 @@ public class MemoryService {
                 }
                 pub.put(bv, link);
             }
+            case "valueOutcome" -> {
+                String bv = text(req, "bvid", 12);
+                Object bound = map(d, "published").get(bv);
+                if (!BV.matcher(bv).matches() || !(bound instanceof Map<?, ?>)) {
+                    throw ApiException.badRequest("请先绑定有效的 BV 号");
+                }
+                Map<String, Object> link = om.convertValue(bound, new TypeReference<Map<String, Object>>() {});
+                if (req.get("newcomer") instanceof Boolean newcomer) link.put("newcomer", newcomer);
+                if (req.get("eventId") != null) link.put("event_id", text(req, "eventId", 100));
+                if (req.get("target") != null) {
+                    String target = text(req, "target", 30), window = text(req, "window", 10), source = text(req, "source", 200);
+                    Double count = numOrNull(req.get("count")), view = numOrNull(req.get("view"));
+                    if (!List.of("clip_account", "streamer", "streamer_return").contains(target)
+                            || !List.of("24h", "7d").contains(window) || source.isBlank()
+                            || !Boolean.TRUE.equals(req.get("verified")) || count == null || view == null
+                            || !Double.isFinite(count) || !Double.isFinite(view) || count < 0 || view <= 0) {
+                        throw ApiException.badRequest("归因需提供目标、观察窗口、可核实来源、非负人数及对应播放量");
+                    }
+                    Map<String, Object> attribution = link.get("attribution") instanceof Map<?, ?> existing
+                            ? om.convertValue(existing, new TypeReference<Map<String, Object>>() {}) : new LinkedHashMap<>();
+                    Map<String, Object> windows = attribution.get(target) instanceof Map<?, ?> existing
+                            ? om.convertValue(existing, new TypeReference<Map<String, Object>>() {}) : new LinkedHashMap<>();
+                    windows.put(window, Map.of("count", count, "view", view, "window", window,
+                            "source", source, "verified", true, "saved_at", LocalDateTime.now().toString()));
+                    attribution.put(target, windows);
+                    link.put("attribution", attribution);
+                }
+                map(d, "published").put(bv, link);
+            }
             case "unpublish" -> map(d, "published").remove(text(req, "bvid", 12));
             case "applyWeights" -> {
                 Map<String, Object> mem = read(memoryFile());

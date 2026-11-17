@@ -85,4 +85,40 @@ class AdminApplicationTests {
                 .content("{\"type\":\"RM_RF\",\"session\":\"20261109-2014\"}"))
             .andExpect(status().isBadRequest());
     }
+    @Test
+    @WithMockUser
+    void valueStrategyReadIsScopedToValidSessions() throws Exception {
+        mvc.perform(get("/api/sessions/20261109-2014/value-strategy"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.exploration_candidates").isMap());
+        mvc.perform(get("/api/sessions/bad.name/value-strategy"))
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @WithMockUser
+    void valueRecallRejectsInvalidBudgetBeforeExecution() throws Exception {
+        mvc.perform(post("/api/jobs").with(csrf()).contentType("application/json")
+            .content("{\"type\":\"VALUE_RECALL\",\"session\":\"20261109-2014\",\"params\":{\"budget\":11}}"))
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @WithMockUser
+    void attributionKeepsTargetsAndAgeWindowsSeparate() throws Exception {
+        mvc.perform(post("/api/memory/actions").with(csrf()).contentType("application/json")
+            .content("{\"action\":\"publish\",\"bvid\":\"BV1ab411c7de\",\"session\":\"20261109-2014\",\"rank\":1}"))
+            .andExpect(status().isOk());
+        for (String window : java.util.List.of("24h", "7d")) {
+            mvc.perform(post("/api/memory/actions").with(csrf()).contentType("application/json")
+                .content("{\"action\":\"valueOutcome\",\"bvid\":\"BV1ab411c7de\",\"target\":\"clip_account\",\"window\":\"" + window + "\",\"count\":2,\"view\":1000,\"source\":\"test export\",\"verified\":true}"))
+                .andExpect(status().isOk());
+        }
+        mvc.perform(get("/api/memory"))
+            .andExpect(jsonPath("$.decisions.published.BV1ab411c7de.attribution.clip_account.24h.count").value(2))
+            .andExpect(jsonPath("$.decisions.published.BV1ab411c7de.attribution.clip_account.7d.count").value(2));
+        mvc.perform(post("/api/memory/actions").with(csrf()).contentType("application/json")
+            .content("{\"action\":\"valueOutcome\",\"bvid\":\"BV1ab411c7de\",\"target\":\"streamer\",\"window\":\"24h\",\"count\":2,\"view\":1000,\"source\":\"test export\",\"verified\":false}"))
+            .andExpect(status().isBadRequest());
+    }
+
 }
