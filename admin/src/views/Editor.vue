@@ -358,13 +358,42 @@
               <span>{{ v.label }}</span>
             </button>
           </div>
+          <div v-if="pack.cover_history?.length" class="cover-history">
+            <b>已生成版本 · {{ pack.cover_history.length }}</b>
+            <p class="muted">点击版本设为封面，不重新生图。选好后可选择该底图继续补充完善。</p>
+            <div class="cover-history-grid">
+              <button v-for="v in pack.cover_history" :key="v.id" class="cover-variant"
+                      :class="{ selected: v.id === pack.cover_history_selected }" :disabled="covering"
+                      :title="v.meta?.supplement || '自动方案'" @click="chooseCoverVersion(v)">
+                <img :src="api.coverVersionUrl(name, rank, v.id)" :alt="`封面版本 ${v.number}`" loading="lazy" />
+                <span>版本 {{ v.number }}{{ v.legacy ? ' · 原有封面' : '' }}{{ v.id === pack.cover_history_selected ? ' · 使用中' : '' }}</span>
+                <small>{{ v.meta?.supplement || '自动方案' }}</small>
+              </button>
+            </div>
+          </div>
           <el-form label-width="64px" size="small" class="pack">
             <el-form-item label="封面字">
-              <el-input v-model="coverText" maxlength="30" placeholder="空着就是纯截图" />
+              <el-input v-model="coverText" maxlength="30" placeholder="留空不叠加大字" />
             </el-form-item>
             <el-form-item label="画面">
               <span class="muted">{{ pack.cover_t != null ? hms(pack.cover_t) + '（' + (pack.cover_source || '') + '）' : '默认笑点' }}</span>
               <el-button link size="small" @click="coverAtCurrent">用当前播放位置</el-button>
+            </el-form-item>
+            <el-form-item label="生图补充">
+              <div style="width:100%">
+                <el-input v-model="seedreamSupplement" type="textarea" :rows="3" :maxlength="1500" show-word-limit
+                          aria-label="Seedream 补充要求" placeholder="例如：人物靠右，背景简洁，增加一只夸张的猫爪；保留发型和服装，整体改为柔和粉紫色。" />
+                <span class="muted">追加到自动封面方案；需要显示的文字填在上方“封面字”。保存只保留设置，图片需重新生成后更新。</span>
+              </div>
+            </el-form-item>
+            <el-form-item label="生图参考">
+              <el-radio-group v-model="seedreamReference" aria-label="Seedream 参考来源">
+                <el-radio value="frame">直播画面</el-radio>
+                <el-radio value="seedream" :disabled="!hasSeedreamCover">所选 / 上次生图底图</el-radio>
+              </el-radio-group>
+              <span class="muted">选择上次底图，可保留已有设计继续完善。</span>
+              <span v-if="seedreamReference === 'seedream' && selectedCoverHistory?.has_raw === false" class="muted">这个旧版本没有独立底图，将以成品图为参考；已有文字可能影响生成结果。</span>
+              <el-button link :loading="promptLoading" @click="previewCoverPrompt">预览生图提示词</el-button>
             </el-form-item>
             <el-form-item>
               <el-button type="primary" plain :loading="covering" @click="makeCover()">{{ pack.cover ? '重画封面' : '生成封面' }}</el-button>
@@ -391,7 +420,7 @@
               <el-button link size="small" @click="copy(pack.source)">复制</el-button>
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" @click="savePack">保存文字</el-button>
+              <el-button type="primary" :disabled="covering" @click="savePack">保存文字与生图设置</el-button>
             </el-form-item>
           </el-form>
           <div class="bili">
@@ -519,6 +548,10 @@
     </el-dialog>
   </div>
 
+  <el-dialog v-model="coverPromptShow" title="Seedream 生图提示词预览" width="min(90vw, 720px)">
+    <p class="muted">自动主题与补充要求已合并。预览不会调用生图服务；关闭后可继续调整。</p>
+    <pre class="cover-prompt">{{ coverPromptText }}</pre>
+  </el-dialog>
   <el-dialog :model-value="!!partialFile" title="局部试渲染（与完整成片使用相同时间轴）" width="850px" destroy-on-close @close="partialFile = ''">
     <video v-if="partialFile" :src="api.renderPreviewUrl(name, partialFile)" controls playsinline style="width:100%" />
     <p class="muted">播放的是生成时的版本，后续编辑不会更新这个文件。</p>
@@ -576,6 +609,10 @@ const pack = ref({})
 const packLoading = ref(false)
 const covering = ref(false)
 const coverText = ref('')
+const seedreamSupplement = ref(''), seedreamReference = ref('frame')
+const coverPromptShow = ref(false), coverPromptText = ref(''), promptLoading = ref(false)
+const hasSeedreamCover = computed(() => (pack.value.cover_variants || []).some(v => v.variant === 'seedream') || pack.value.cover_variant === 'seedream')
+const selectedCoverHistory = computed(() => (pack.value.cover_history || []).find(v => v.id === pack.value.cover_history_selected))
 let coverT = null
 const warnings = ref([])
 const generatedBy = ref('')
@@ -1288,6 +1325,8 @@ async function loadPack() {
   try {
     pack.value = await api.publishPack(name.value, rank.value)
     coverText.value = pack.value.cover_text ?? (pack.value.title_candidates || [])[0] ?? ''
+    seedreamSupplement.value = pack.value.cover_seedream_options?.supplement || ''
+    seedreamReference.value = pack.value.cover_seedream_options?.reference || 'frame'
     coverT = null
     api.biliInfo(name.value, rank.value).then((d) => {
       const l = d.last
@@ -1306,13 +1345,30 @@ function coverAtCurrent() {
 }
 
 async function makeCover(variant = null, mode = null) {
+  if (covering.value) return
   covering.value = true
   try {
-    pack.value = { ...pack.value, ...(await api.publishCover(name.value, rank.value, { t: coverT, text: coverText.value, variant, mode })) }
+    const additions = mode === 'seedream' ? {supplement: seedreamSupplement.value, reference: seedreamReference.value} : {}
+    mergeCoverPack(await api.publishCover(name.value, rank.value, { t: coverT, text: coverText.value, variant, mode, ...additions }))
     ElMessage.success('封面已生成')
   } finally {
     covering.value = false
   }
+}
+
+function mergeCoverPack(result) {
+  // Generating a cover must not replace title/description/tag edits made in the publishing form.
+  const editable = Object.fromEntries(['title', 'description', 'tags'].filter(k => pack.value[k] !== undefined).map(k => [k, pack.value[k]]))
+  pack.value = {...pack.value, ...result, ...editable}
+}
+async function previewCoverPrompt() {
+  if (promptLoading.value) return
+  promptLoading.value = true
+  try {
+    const result = await api.coverPrompt(name.value, rank.value, {text: coverText.value, supplement: seedreamSupplement.value, reference: seedreamReference.value})
+    coverPromptText.value = result.prompt
+    coverPromptShow.value = true
+  } finally { promptLoading.value = false }
 }
 
 async function chooseCoverVariant(variant) {
@@ -1320,16 +1376,30 @@ async function chooseCoverVariant(variant) {
   covering.value = true
   try {
     // 只把已经生成好的那张设为主封面，不重画、不重新调生图接口
-    pack.value = { ...pack.value, ...(await api.publishCover(name.value, rank.value, { select: variant })) }
+    mergeCoverPack(await api.publishCover(name.value, rank.value, { select: variant }))
     ElMessage.success('已设为封面')
   } finally {
     covering.value = false
   }
 }
 
+async function chooseCoverVersion(version) {
+  if (covering.value || version.id === pack.value.cover_history_selected) return
+  const previousText = coverText.value
+  covering.value = true
+  try {
+    mergeCoverPack(await api.publishCover(name.value, rank.value, {selectVersion: version.id}))
+    if (coverText.value === previousText) coverText.value = version.text ?? ''
+    ElMessage.success('已选择封面版本，未重新生图')
+  } finally { covering.value = false }
+}
+
 async function savePack() {
-  pack.value = await api.savePublishPack(name.value, rank.value,
-    { title: pack.value.title, description: pack.value.description, tags: pack.value.tags || [] })
+  if (covering.value) return
+  mergeCoverPack(await api.savePublishPack(name.value, rank.value,
+    { title: pack.value.title, description: pack.value.description, tags: pack.value.tags || [],
+      coverText: coverText.value,
+      seedreamOptions: {supplement: seedreamSupplement.value, reference: seedreamReference.value} }))
   ElMessage.success('已保存')
 }
 
@@ -1568,7 +1638,7 @@ function back() {
 }
 
 function onKey(e) {
-  if (finalFile.value || partialFile.value || gallery.value || draftDlg.show || saving.value || drafting.value || cutting.value) return
+  if (coverPromptShow.value || finalFile.value || partialFile.value || gallery.value || draftDlg.show || saving.value || drafting.value || cutting.value) return
   if (e.target?.closest?.('[role="dialog"]')) return
   const textTarget = e.target?.closest?.('input, textarea, select, [contenteditable="true"], [role="textbox"]')
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); return }
@@ -1618,6 +1688,10 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .editor { height: 100%; display: flex; flex-direction: column; }
+.cover-prompt { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 65vh; overflow: auto; line-height: 1.7; font-family: inherit; }
+.cover-history { margin: 12px 0; }
+.cover-history-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; max-height: 420px; overflow: auto; }
+.cover-history-grid small { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--el-text-color-secondary); padding: 4px; }
 .viewer-controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
 .final-view { width: 100%; margin: 0 auto; background: #000; }
 .final-view.phone { width: 390px; max-width: 100%; }

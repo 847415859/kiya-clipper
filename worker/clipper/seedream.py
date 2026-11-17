@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
+import io
 import os
 import time
 import urllib.error
@@ -96,7 +97,14 @@ def generate(prompt: str, reference: Path, out: Path, model: str | None = None,
         raise SeedreamError(f"参考帧不存在：{reference}")
     ep = endpoint or os.environ.get("SEEDREAM_ENDPOINT") or DEFAULT_ENDPOINT
     mdl = model or os.environ.get("SEEDREAM_MODEL") or DEFAULT_MODEL
-    b64 = base64.b64encode(reference.read_bytes()).decode()
+    from PIL import Image
+    try:
+        with Image.open(reference) as source:
+            image_buffer = io.BytesIO()
+            source.convert("RGB").save(image_buffer, format="JPEG", quality=95)
+        b64 = base64.b64encode(image_buffer.getvalue()).decode()
+    except (OSError, ValueError) as e:
+        raise SeedreamError("参考图无法读取，请重新选择直播画面或其他封面版本") from e
     image = f"data:image/jpeg;base64,{b64}"
     # Seedream 5.5 不接受 sequential_image_generation；只发送跨版本通用字段。
     body = {"model": mdl, "prompt": prompt, "image": image, "size": size,

@@ -77,9 +77,14 @@ public class PublishService {
 
     /** 生成 / 重画主题化封面。t = 整场秒数，text = 大字，variant = 构图，theme = 抽象主题。 */
     public Map<String, Object> cover(String session, int rank, Double t, String text, String variant, String theme, String mode) {
+        return cover(session, rank, t, text, variant, theme, mode, null, null);
+    }
+
+    public Map<String, Object> cover(String session, int rank, Double t, String text, String variant, String theme, String mode,
+                                      String supplement, String reference) {
         List<String> extra = new ArrayList<>();
         if (t != null) {
-            if (t < 0 || t > 24 * 3600) {
+            if (!Double.isFinite(t) || t < 0 || t > 24 * 3600) {
                 throw ApiException.badRequest("时间不合法");
             }
             extra.addAll(List.of("--cover-t", String.format(Locale.ROOT, "%.2f", t)));
@@ -109,7 +114,29 @@ public class PublishService {
             }
             extra.addAll(List.of("--cover-mode", mode));
         }
-        return runPack(session, rank, extra, 120);
+        addSeedreamOptions(extra, supplement, reference);
+        return runPack(session, rank, extra, "seedream".equals(mode) || "all".equals(mode) ? 300 : 120);
+    }
+
+    private void addSeedreamOptions(List<String> args, String supplement, String reference) {
+        if (supplement != null) {
+            if (supplement.length() > 1500 || supplement.indexOf('\0') >= 0) throw ApiException.badRequest("Seedream 补充要求最多 1500 字，不能包含空字符");
+            args.add("--cover-supplement=" + supplement.strip());
+        }
+        if (reference != null) {
+            if (!List.of("frame", "seedream").contains(reference)) throw ApiException.badRequest("Seedream 参考来源不合法");
+            args.add("--cover-reference=" + reference);
+        }
+    }
+
+    public Map<String, Object> coverPrompt(String session, int rank, String text, String supplement, String reference) {
+        List<String> args = new ArrayList<>(List.of("--cover-prompt-only"));
+        if (text != null) {
+            if (text.length() > 30) throw ApiException.badRequest("封面文字最多 30 个字");
+            args.add("--cover-text=" + text.strip());
+        }
+        addSeedreamOptions(args, supplement, reference);
+        return runPack(session, rank, args, 30);
     }
 
     /** 已生成的候选封面（程序化三种构图 + Seedream 生图）。 */
@@ -123,13 +150,51 @@ public class PublishService {
         return runPack(session, rank, List.of("--cover-select", variant), 30);
     }
 
+    public Map<String, Object> selectCoverVersion(String session, int rank, String version) {
+        checkCoverVersion(version);
+        return runPack(session, rank, List.of("--cover-select-version", version), 30);
+    }
+
+    private void checkCoverVersion(String version) {
+        if (version == null || !version.matches("[a-f0-9]{32}")) throw ApiException.badRequest("封面版本标识不合法");
+    }
+
+    public Path coverVersionFile(String session, int rank, String version) {
+        checkRank(rank);
+        checkCoverVersion(version);
+        return WorkerPaths.inside(paths.output(), paths.sessionDir(session).resolve("publish/cover_history")
+                .resolve(String.format("%02d", rank)).resolve(version + ".jpg"));
+    }
+
     /** 标题 / 简介 / 标签重新按精排结果生成（覆盖改过的）。 */
     public Map<String, Object> regenerate(String session, int rank) {
         return runPack(session, rank, List.of("--refresh", "--no-cover"), 60);
     }
 
     public synchronized Map<String, Object> save(String session, int rank, String title, String description, List<String> tags) {
+        return save(session, rank, title, description, tags, null);
+    }
+
+    public synchronized Map<String, Object> save(String session, int rank, String title, String description, List<String> tags,
+                                                   Map<String, Object> seedreamOptions) {
+        return save(session, rank, title, description, tags, seedreamOptions, null);
+    }
+
+    public synchronized Map<String, Object> save(String session, int rank, String title, String description, List<String> tags,
+                                                   Map<String, Object> seedreamOptions, String coverText) {
+        if (coverText != null && (coverText.length() > 30 || coverText.indexOf('\0') >= 0)) {
+            throw ApiException.badRequest("封面文字最多 30 个字，不能包含空字符");
+        }
+        if (seedreamOptions != null) {
+            if (!(seedreamOptions.get("supplement") instanceof String) || !(seedreamOptions.get("reference") instanceof String)) {
+                throw ApiException.badRequest("Seedream 补充设置格式不对");
+            }
+            addSeedreamOptions(new ArrayList<>(), (String)seedreamOptions.get("supplement"), (String)seedreamOptions.get("reference"));
+        }
         Map<String, Object> pack = new LinkedHashMap<>(get(session, rank));
+        if (coverText != null) pack.put("cover_text", coverText.strip());
+        if (seedreamOptions != null) pack.put("cover_seedream_options", Map.of("supplement", ((String)seedreamOptions.get("supplement")).strip(),
+                "reference", seedreamOptions.get("reference")));
         if (title != null) {
             String t = title.strip();
             if (t.isEmpty() || t.length() > 80) {

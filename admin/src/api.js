@@ -83,7 +83,9 @@ export const api = {
 
   publishPack: (name, rank) => http.get(`/api/sessions/${encodeURIComponent(name)}/publish/${rank}`),
   savePublishPack: (name, rank, body) => http.put(`/api/sessions/${encodeURIComponent(name)}/publish/${rank}`, body),
-  publishCover: (name, rank, body) => http.post(`/api/sessions/${encodeURIComponent(name)}/publish/${rank}/cover`, body, { timeout: 150000 }),
+  publishCover: (name, rank, body) => http.post(`/api/sessions/${encodeURIComponent(name)}/publish/${rank}/cover`, body, { timeout: 330000 }),
+  coverPrompt: (name, rank, body) => http.post(`/api/sessions/${encodeURIComponent(name)}/publish/${rank}/cover/prompt`, body),
+  coverVersionUrl: (name, rank, version) => `/api/sessions/${encodeURIComponent(name)}/publish/${rank}/cover.jpg?version=${encodeURIComponent(version)}`,
   music: () => http.get('/api/music', { quiet: true }),
   musicUrl: (id) => `/api/music/${encodeURIComponent(id)}/audio`,
   musicBeats: (id) => http.get(`/api/music/${encodeURIComponent(id)}/beats`, { quiet: true }),

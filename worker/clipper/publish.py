@@ -90,7 +90,8 @@ def render_cover(frame: Path, out: Path, text: str, font_spec: str, color: str =
     text = text.strip()
     if text:
         file, idx = find_font(font_spec)
-        lines = wrap(text, min(14, max(8, -(-len(text) // 2))))
+        # The editor permits 30 characters: keep both lines complete, shrink the font to fit.
+        lines = wrap(text, max(8, -(-len(text) // 2)))
         size = 210 if max(map(len, lines)) <= 7 else 170 if max(map(len, lines)) <= 9 else 128
         font = ImageFont.truetype(file, size, index=idx)
         draw = ImageDraw.Draw(img)

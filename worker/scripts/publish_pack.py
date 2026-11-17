@@ -16,10 +16,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 
@@ -35,7 +37,8 @@ from clipper.clipwin import clip_origin, read_windows  # noqa: E402
 from clipper.edit import edit_window  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
 from clipper.publish import (COVER_THEMES, DEFAULT_TAGS, build_description, build_tags, clean_title,
-                             cover_concept, render_theme_cover)  # noqa: E402
+                             cover_concept, render_cover, render_theme_cover)  # noqa: E402
+from clipper.cover_prompt import seedream_options, seedream_prompt  # noqa: E402
 from clipper.seedream import SeedreamError, generate as generate_seedream  # noqa: E402
 from cut import pieces  # noqa: E402
 
@@ -45,6 +48,34 @@ def read(p: Path, default=None):
         return json.loads(p.read_text(encoding="utf-8")) if p.exists() else default
     except (OSError, ValueError):
         return default
+
+
+def archive_seedream(out_dir: Path, rank: int, image: Path, raw: Path | None, meta: dict,
+                     history: list[dict], text: str = "", legacy: bool = False) -> dict:
+    """Immutable files for selection and further refinement; never invokes an image model."""
+    version = uuid.uuid4().hex
+    folder = out_dir / "cover_history" / f"{rank:02d}"
+    folder.mkdir(parents=True, exist_ok=True)
+    dst = folder / f"{version}.jpg"
+    raw_dst = folder / f"{version}.raw.jpg"
+    shutil.copyfile(image, dst)
+    if raw and raw.is_file():
+        shutil.copyfile(raw, raw_dst)
+    return {"id": version, "number": max((int(v.get("number", 0)) for v in history), default=0) + 1,
+            "created_at": time.time(), "legacy": legacy, "text": text, "meta": dict(meta, version_id=version),
+            "has_raw": raw_dst.is_file()}
+
+
+def preserve_legacy_seedream(out_dir: Path, rank: int, pack: dict) -> None:
+    if pack.get("cover_history"):
+        return
+    old = out_dir / f"{rank:02d}_cover_seedream.jpg"
+    if not old.is_file():
+        return
+    raw = out_dir / f"{rank:02d}_cover_seedream_raw.jpg"
+    meta = next((v.get("meta") or {} for v in pack.get("cover_variants", []) if v.get("variant") == "seedream"), {})
+    # Legacy covers may not have a raw image; retain the final image but mark that limitation.
+    pack["cover_history"] = [archive_seedream(out_dir, rank, old, raw, meta, [], pack.get("cover_text", ""), True)]
 
 
 def grab(video: Path, t: float, out: Path) -> bool:
@@ -91,8 +122,12 @@ def main() -> int:
     ap.add_argument("--cover-theme", choices=sorted(COVER_THEMES), help="覆盖自动判断的主题")
     ap.add_argument("--cover-mode", choices=["programmatic", "seedream", "all"], default="programmatic",
                     help="封面方式：程序化、Seedream 生图或两者；默认程序化")
+    ap.add_argument("--cover-supplement", help="Seedream 补充要求，在自动方案上追加，最多 1500 字；空字符串清除")
+    ap.add_argument("--cover-reference", choices=["frame", "seedream"], help="直播画面或上次 Seedream 底图")
+    ap.add_argument("--cover-prompt-only", action="store_true", help="仅预览完整生图提示词，不截图、不生成、不保存")
     ap.add_argument("--cover-select", choices=["hero", "comic", "abstract", "seedream"],
                     help="把已经生成好的某张候选设为主封面（不重新生成、不调生图接口）")
+    ap.add_argument("--cover-select-version", help="选择已经保存的 Seedream 历史版本，不重新生成")
     ap.add_argument("--no-cover", action="store_true")
     ap.add_argument("--refresh", action="store_true", help="标题 / 简介 / 标签重新生成（覆盖后台改过的）")
     ap.add_argument("--config", default=None, help="主播配置；不填时按 candidates.json 所在目录推导主播")
@@ -115,9 +150,13 @@ def main() -> int:
     a, b = ws + float(trim["start"]), ws + float(trim["end"])
 
     out_dir = sess / "publish"
-    out_dir.mkdir(exist_ok=True)
     pf = out_dir / f"{args.rank:02d}.json"
     pack = read(pf, {}) or {}
+    try:
+        options = seedream_options(pack.get("cover_seedream_options"), args.cover_supplement, args.cover_reference)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 1
     streamer = cfg.get("streamer") or {}
     titles = [clean_title(t) for t in llm.get("title_candidates") or [] if clean_title(t)]
     tr = load_transcript(sess / "transcript.json")
@@ -147,14 +186,57 @@ def main() -> int:
                 source=streamer.get("live_url", ""), copyright="转载",
                 range={"start": round(a, 1), "end": round(b, 1)})
 
-    if args.cover_select:
+    # Both preview and generation use the same automatic concept and saved additions.
+    text = args.cover_text if args.cover_text is not None else pack.get("cover_text", (titles[0] if titles else "")[:24])
+    concept = cover_concept(llm, text, speech)
+    if not str(text or "").strip() and args.cover_text is None:
+        text = str(llm.get("punch_line") or llm.get("what_happened") or concept.get("label") or "这也能发生？").strip()[:18]
+    if args.cover_theme:
+        concept["theme"] = args.cover_theme
+        concept.update({k: COVER_THEMES[args.cover_theme][k] for k in ("label", "accent", "second", "symbol")})
+    concept["headline"] = str(text or "").strip()[:30]
+    text = concept["headline"]
+    prompt = seedream_prompt(concept, options, text)
+    if args.cover_prompt_only:
+        print(json.dumps({"prompt": prompt, "options": options, "concept": concept, "text": text}, ensure_ascii=False))
+        return 0
+    out_dir.mkdir(exist_ok=True)
+
+    if args.cover_select_version:
+        version = args.cover_select_version
+        if not re.fullmatch(r"[a-f0-9]{32}", version):
+            print("封面版本标识不合法", file=sys.stderr)
+            return 1
+        hit = next((v for v in pack.get("cover_history", []) if v.get("id") == version), None)
+        archived = out_dir / "cover_history" / f"{args.rank:02d}" / f"{version}.jpg"
+        archived_raw = archived.with_name(version + ".raw.jpg")
+        if not hit or not archived.is_file():
+            print("历史封面不存在，请刷新后重试", file=sys.stderr)
+            return 1
+        shutil.copyfile(archived, out_dir / f"{args.rank:02d}_cover.jpg")
+        shutil.copyfile(archived, out_dir / f"{args.rank:02d}_cover_seedream.jpg")
+        current_raw = out_dir / f"{args.rank:02d}_cover_seedream_raw.jpg"
+        if archived_raw.is_file():
+            shutil.copyfile(archived_raw, current_raw)
+        else:
+            current_raw.unlink(missing_ok=True)  # A different version's raw image must never be used here.
+        variants = [v for v in pack.get("cover_variants", []) if v.get("variant") != "seedream"]
+        variants.append({"variant": "seedream", "file": f"{args.rank:02d}_cover_seedream.jpg", "label": "Seedream 生图", "meta": hit.get("meta") or {}})
+        pack.update(cover=f"{args.rank:02d}_cover.jpg", cover_variant="seedream", cover_variants=variants,
+                    cover_history_selected=version, cover_text=hit.get("text", ""), cover_version=time.time_ns() // 1_000_000)
+        print(f"封面：选用历史版本 {hit.get('number', '')}")
+    elif args.cover_select:
         hit = next((x for x in pack.get("cover_variants") or [] if x.get("variant") == args.cover_select), None)
         src_file = out_dir / str((hit or {}).get("file") or "")
         if not hit or not src_file.is_file():
             print(f"还没有生成过“{args.cover_select}”这张候选封面，先生成再选", file=sys.stderr)
             return 1
         shutil.copyfile(src_file, out_dir / f"{args.rank:02d}_cover.jpg")
-        pack.update(cover=f"{args.rank:02d}_cover.jpg", cover_variant=args.cover_select, cover_version=int(time.time()))
+        pack.update(cover=f"{args.rank:02d}_cover.jpg", cover_variant=args.cover_select, cover_version=time.time_ns() // 1_000_000)
+        if args.cover_select != "seedream":
+            pack.pop("cover_history_selected", None)
+        elif (hit.get("meta") or {}).get("version_id"):
+            pack["cover_history_selected"] = hit["meta"]["version_id"]
         print(f"封面：改用已生成的候选 {hit.get('label') or args.cover_select}")
     elif not args.no_cover and (args.cover_t is not None or args.cover_text is not None or args.cover_variant is not None
                               or args.cover_theme is not None or args.cover_mode != "programmatic" or not pack.get("cover")):
@@ -163,21 +245,21 @@ def main() -> int:
             punch = cand["clip_start"] + llm["cover_time"]
         t = args.cover_t if args.cover_t is not None else pack.get("cover_t", punch)
         t = min(max(t, a), b - 0.1)
-        text = args.cover_text if args.cover_text is not None else pack.get("cover_text", (titles[0] if titles else "")[:24])
         frame = out_dir / f"{args.rank:02d}_frame.jpg"
-        src = grab_frame(sess, data, cand, edit, t, frame)
+        reference = frame
+        if args.cover_mode == "seedream" and options["reference"] == "seedream":
+            reference = out_dir / f"{args.rank:02d}_cover_seedream_raw.jpg"
+            if not reference.is_file():
+                reference = out_dir / f"{args.rank:02d}_cover_seedream.jpg"  # Existing covers predate raw-image storage.
+            if not reference.is_file():
+                print("还没有 Seedream 底图，请先选择直播画面生成一张", file=sys.stderr)
+                return 1
+            src = "上次 Seedream 生图"
+        else:
+            src = grab_frame(sess, data, cand, edit, t, frame)
         if not src:
             print("找不到可以截图的视频（录像已移走、也还没有成片 / 预览 / 审核片段）", file=sys.stderr)
             return 1
-        concept = cover_concept(llm, text, speech)
-        if not str(text or "").strip():
-            text = str(llm.get("punch_line") or llm.get("what_happened") or concept.get("label") or "这也能发生？").strip()[:18]
-            concept["headline"] = text
-        if args.cover_theme:
-            concept["theme"] = args.cover_theme
-            concept.update({"label": COVER_THEMES[args.cover_theme]["label"], "accent": COVER_THEMES[args.cover_theme]["accent"],
-                            "second": COVER_THEMES[args.cover_theme]["second"], "symbol": COVER_THEMES[args.cover_theme]["symbol"]})
-        concept["headline"] = text.strip()[:18] if text is not None else concept["headline"]
         selected = args.cover_variant or pack.get("cover_variant") or "hero"
         if args.cover_mode == "programmatic" and selected == "seedream":
             selected = "hero"           # 当前是生图封面时点“重画封面”，重画的是程序化封面
@@ -191,13 +273,39 @@ def main() -> int:
                     variant_files.append({"variant": variant, "file": vf.name, "label": {"hero": "人物海报", "comic": "漫画冲击", "abstract": "抽象事件"}[variant]})
             if args.cover_mode in ("seedream", "all"):
                 seed_file = out_dir / f"{args.rank:02d}_cover_seedream.jpg"
-                prompt = (f"为直播切片制作一张有趣、抽象、适合视频平台缩略图的中文封面。主题：{concept['label']}。"
-                          f"视觉隐喻：{concept.get('subline') or concept['headline']}。"
-                          f"保留参考图中主播的身份特征、发型、服装和表情，不要重绘成陌生人物。"
-                          f"画面要有夸张的漫画构图、强烈色彩和一个清晰的荒诞道具。"
-                          f"不要生成任何文字、字母、数字、水印或 Logo，文字由程序后期叠加。")
-                meta = generate_seedream(prompt, frame, seed_file, model=pc.get("seedream_model"),
-                                         endpoint=pc.get("seedream_endpoint"), size=pc.get("seedream_size", "1920x1200"))
+                if args.cover_mode == "all" and options["reference"] == "seedream":
+                    reference = out_dir / f"{args.rank:02d}_cover_seedream_raw.jpg"
+                    if not reference.is_file():
+                        reference = out_dir / f"{args.rank:02d}_cover_seedream.jpg"
+                    if not reference.is_file():
+                        raise SeedreamError("还没有 Seedream 底图，请先选择直播画面生成一张")
+                raw = out_dir / f".seedream-{uuid.uuid4().hex}.jpg"
+                composed = out_dir / f".seedream-{uuid.uuid4().hex}.jpg"
+                try:
+                    meta = generate_seedream(prompt, reference, raw, model=pc.get("seedream_model"),
+                                             endpoint=pc.get("seedream_endpoint"), size=pc.get("seedream_size", "1920x1200"))
+                    from PIL import Image
+                    with Image.open(raw) as generated:
+                        normalized = generated.convert("RGB")
+                    normalized.save(raw, "JPEG", quality=95)
+                    render_cover(raw, composed, text, pc.get("cover_font") or "Noto Sans CJK SC:bold")
+                    preserve_legacy_seedream(out_dir, args.rank, pack)
+                    history = list(pack.get("cover_history") or [])
+                    meta.update(reference=options["reference"], supplement=options["supplement"])
+                    saved = archive_seedream(out_dir, args.rank, composed, raw, dict(meta, file=f"{args.rank:02d}_cover_seedream.jpg"), history, text)
+                    pack["cover_history"] = [saved, *history]
+                    pack["cover_history_selected"] = saved["id"]
+                    raw.replace(out_dir / f"{args.rank:02d}_cover_seedream_raw.jpg")
+                    composed.replace(seed_file)
+                except (OSError, ValueError) as e:
+                    raise SeedreamError(f"生图结果处理失败：{e}") from e
+                finally:
+                    raw.unlink(missing_ok=True)
+                    composed.unlink(missing_ok=True)
+                meta.update(file=seed_file.name, reference=options["reference"], supplement=options["supplement"], version_id=saved["id"],
+                            raw_file=f"{args.rank:02d}_cover_seedream_raw.jpg")
+                pack["cover_seedream_options"] = options
+                pack.pop("cover_seedream_error", None)
                 variant_files.append({"variant": "seedream", "file": seed_file.name, "label": "Seedream 生图", "meta": meta})
             selected = "seedream" if args.cover_mode == "seedream" else selected
             chosen = next((x for x in variant_files if x["variant"] == selected), variant_files[0])
@@ -210,6 +318,7 @@ def main() -> int:
             if not variant_files:
                 return 1
             chosen = variant_files[0]
+            selected = chosen["variant"]
             shutil.copyfile(out_dir / chosen["file"], cover)
         except RuntimeError as e:
             print(f"封面生成失败：{e}", file=sys.stderr)
@@ -221,12 +330,19 @@ def main() -> int:
                 variant_files.append(old)
         if variant_files:
             chosen = next((x for x in variant_files if x["variant"] == selected), variant_files[0])
+            if chosen["variant"] != "seedream":
+                pack.pop("cover_history_selected", None)
             pack.update(cover=cover.name, cover_t=round(t, 2), cover_text=text, cover_source=src,
                         cover_variant=chosen["variant"], cover_variants=variant_files, cover_concept=concept,
-                        cover_version=int(time.time()))
+                        cover_version=time.time_ns() // 1_000_000)
         print(f"封面：{hhmmss(t)} 的画面（来自{src}），主题 {concept['theme']}，构图 {chosen['variant']} → {cover.name}")
     pack["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-    pf.write_text(json.dumps(pack, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp = pf.with_name(pf.name + ".tmp-" + uuid.uuid4().hex)
+    try:
+        tmp.write_text(json.dumps(pack, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(pf)
+    finally:
+        tmp.unlink(missing_ok=True)
     print(json.dumps(pack, ensure_ascii=False))
     return 0
 

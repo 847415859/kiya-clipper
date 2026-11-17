@@ -39,22 +39,31 @@ public class PublishController {
         return publish.get(name, rank);
     }
 
-    public record SaveReq(String title, String description, List<String> tags) {}
+    public record SaveReq(String title, String description, List<String> tags, Map<String, Object> seedreamOptions, String coverText) {}
 
     @PutMapping
     public Map<String, Object> save(@PathVariable String name, @PathVariable int rank, @RequestBody SaveReq req) {
-        return publish.save(name, rank, req.title(), req.description(), req.tags());
+        return publish.save(name, rank, req.title(), req.description(), req.tags(), req.seedreamOptions(), req.coverText());
     }
 
     /** select = 把已生成的某张候选设为主封面（不重新生成）；不填时按其他字段生成 / 重画。 */
-    public record CoverReq(Double t, String text, String variant, String theme, String mode, String select) {}
+    public record CoverReq(Double t, String text, String variant, String theme, String mode, String select,
+                           String supplement, String reference, String selectVersion) {}
 
     @PostMapping("/cover")
     public Map<String, Object> cover(@PathVariable String name, @PathVariable int rank, @RequestBody CoverReq req) {
+        if (req.selectVersion() != null && !req.selectVersion().isBlank()) {
+            return publish.selectCoverVersion(name, rank, req.selectVersion());
+        }
         if (req.select() != null && !req.select().isBlank()) {
             return publish.selectCover(name, rank, req.select());
         }
-        return publish.cover(name, rank, req.t(), req.text(), req.variant(), req.theme(), req.mode());
+        return publish.cover(name, rank, req.t(), req.text(), req.variant(), req.theme(), req.mode(), req.supplement(), req.reference());
+    }
+
+    @PostMapping("/cover/prompt")
+    public Map<String, Object> coverPrompt(@PathVariable String name, @PathVariable int rank, @RequestBody CoverReq req) {
+        return publish.coverPrompt(name, rank, req.text(), req.supplement(), req.reference());
     }
 
     @PostMapping("/regenerate")
@@ -70,8 +79,9 @@ public class PublishController {
 
     @GetMapping("/cover.jpg")
     public ResponseEntity<Resource> coverImage(@PathVariable String name, @PathVariable int rank,
-                                               @RequestParam(required = false) String variant) {
-        Path p = publish.coverFile(name, rank, variant);
+                                               @RequestParam(required = false) String variant,
+                                               @RequestParam(required = false) String version) {
+        Path p = version == null ? publish.coverFile(name, rank, variant) : publish.coverVersionFile(name, rank, version);
         if (!Files.exists(p)) {
             throw ApiException.notFound("还没有封面");
         }
