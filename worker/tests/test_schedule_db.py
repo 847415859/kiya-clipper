@@ -28,14 +28,26 @@ def test_database_authority_import_cas_and_streamer_isolation(storage):
     assert read_state(storage/'b','2026-11-16')=={}
     assert len(calendar_history(root)['weeks'])==1
 
-def test_save_without_json_and_publication_reads_database(storage):
+def test_save_without_json_and_publication_reads_database(storage,monkeypatch):
     root=storage/'a';root.mkdir()
-    cfg=storage/'cfg.yaml';cfg.write_text('streamer: {name: 测试}',encoding='utf-8')
+    from PIL import Image
+    from clipper import schedule_poster
+    reference=storage/'character.jpg';Image.new('RGB',(100,100),'pink').save(reference)
+    cfg=storage/'cfg.yaml';cfg.write_text('streamer: {name: 测试}\nschedule:\n  portrait_file: '+str(reference).replace('\\','/'),encoding='utf-8')
+    def fake(prompt,reference,out,**kw):Image.new('RGB',(1920,1080),'pink').save(out);return {'model':'mock-seedream'}
+    monkeypatch.setattr(schedule_poster,'generate',fake)
     request=storage/'request.json';request.write_text(json.dumps({'expected_revision':'none','confirm':True,'plan':{'entries':[{'date':'2026-11-18','title':'数据库安排','start_time':'20:00'}]}}),encoding='utf-8')
     args=SimpleNamespace(root=str(root),week_start='2026-11-16',input=str(request),streamer=None,config=str(cfg),action='save')
     saved=cli.run(args)
     assert saved['active'] and saved['revision']!='none'
+    assert saved['poster']['mode']=='seedream' and saved['poster_error'] is None
+    assert len(db.list_records(root,'poster'))==1
     assert not (root/'_schedule/2026-11-16.json').exists()
+    repeated=json.loads(request.read_text());repeated['expected_revision']=saved['revision']
+    request.write_text(json.dumps(repeated),encoding='utf-8')
+    again=cli.run(args)
+    assert again['poster']['id']==saved['poster']['id']
+    assert len(db.list_records(root,'poster'))==1
     snap=for_pack(root,{'schedule_publish_at':'2026-11-17T12:00'},{})
     assert snap['entries'][0]['title']=='数据库安排'
     assert cli.run(args)['conflict']

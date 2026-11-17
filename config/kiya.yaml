@@ -8,6 +8,7 @@ streamer:
 
 # 紫色手账日程片尾；可在直播日程页上传人物图覆盖。示例周表只取左侧人物，右侧日期由确认日程重新生成。
 schedule:
+  poster_template: assets/streamers/kiya/schedule-template.png
   portrait_file: assets/streamers/kiya/schedule-reference.jpg
   portrait_crop: weekly-left
 

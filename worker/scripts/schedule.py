@@ -103,6 +103,7 @@ def run(args):
     path = root / "_schedule" / (week + ".json")
     raw = json.loads(Path(args.input).read_text(encoding="utf-8")) if args.input else {}
     cfg = load_cfg(resolve_config(args.config, streamer=args.streamer))
+    automatic_poster=None;poster_error=None
     if args.action=='image-register':
         if schedule_db.enabled():
             schedule_db.save(root,'image',raw['image_id'],raw)
@@ -148,6 +149,18 @@ def run(args):
                     tmp.replace(path)
             finally:
                 tmp.unlink(missing_ok=True)
+    if args.action=='save' and state.get('draft',{}).get('entries'):
+        try:
+            from clipper.schedule_poster import create,history
+            plan=state['published'] if raw.get('confirm') is True else state['draft']
+            source='published' if raw.get('confirm') is True else 'draft'
+            plan_hash=hashlib.sha256(json.dumps(plan if source=='draft' else {k:v for k,v in plan.items() if k not in ('version','confirmed_at')},ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+            automatic_poster=next((v for v in history(root,week)['versions'] if v.get('generation_style')=='seedream-full-week-v1' and v.get('plan_hash')==plan_hash and (root/'_schedule/posters'/week/v['id']/'poster.png').is_file()),None)
+            if automatic_poster is None:
+                automatic_poster=create(root,week,cfg,{'mode':'seedream','source':source,'expected_revision':revision(path)},revision)
+            if automatic_poster.get('conflict'):poster_error=automatic_poster['error'];automatic_poster=None
+        except (ValueError,OSError,RuntimeError,TypeError) as e:
+            poster_error=f'日程已保存，但 Seedream 周计划图生成失败：{e}'
     if schedule_db.enabled():
         state,token=schedule_db.import_week(root,week)
     else:
@@ -159,7 +172,7 @@ def run(args):
         if not isinstance(state, dict):
             raise ValueError("日程文件格式错误")
         token = hashlib.sha256(content).hexdigest() if content is not None else "none"
-    return {"week_start": week, "revision": token, "active": bool(state.get("active")),
+    return {"week_start": week, "revision": token, "active": bool(state.get("active")), "poster":automatic_poster,"poster_error":poster_error,
             "draft": state.get("draft") or state.get("published") or {"week_start": week, "timezone": "Asia/Shanghai", "image_id": "", "portrait_id": "", "entries": []},
             "published": state.get("published"), "updated_at": state.get("updated_at")}
 

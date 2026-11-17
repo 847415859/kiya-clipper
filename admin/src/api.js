@@ -40,7 +40,7 @@ export const api = {
   schedulePosterUrl: (week,id,download=false) => `/api/schedules/${encodeURIComponent(week)}/posters/${encodeURIComponent(id)}.png${download?'?download=true':''}`,
   scheduleCalendar: () => http.get('/api/schedules/calendar'),
   schedule: (weekStart) => http.get('/api/schedules', {params:{weekStart}}),
-  saveSchedule: (week, body) => http.put(`/api/schedules/${encodeURIComponent(week)}`, body),
+  saveSchedule: (week, body) => http.put(`/api/schedules/${encodeURIComponent(week)}`, body, {timeout:660000}),
   deactivateSchedule: (week, expectedRevision) => http.post(`/api/schedules/${encodeURIComponent(week)}/deactivate`, {expectedRevision}),
   schedulePreview: (body) => http.post('/api/schedules/preview', body, {quiet:true}),
   uploadScheduleImage: (file) => {const body=new FormData();body.append('file',file);return http.post('/api/schedules/images',body)},

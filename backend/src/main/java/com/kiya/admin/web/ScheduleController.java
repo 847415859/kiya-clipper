@@ -20,10 +20,10 @@ public class ScheduleController {
     public ScheduleController(ScheduleService service) { this.service = service; }
     @GetMapping("/calendar") public Map<String, Object> calendar() { return service.calendar(); }
     @GetMapping("/{week}/posters") public Map<String,Object> posters(@PathVariable String week) { return service.posterHistory(week); }
-    public record PosterReq(String source, String supplement, String expectedRevision) {}
+    public record PosterReq(String source, String supplement, String expectedRevision, String mode) {}
     @PostMapping("/{week}/posters") public Map<String,Object> generatePoster(@PathVariable String week,@RequestBody PosterReq req) {
         if(req.expectedRevision()==null) throw ApiException.badRequest("请先读取并保存日程");
-        return service.generatePoster(week,Map.of("source",req.source()==null?"published":req.source(),"supplement",req.supplement()==null?"":req.supplement(),"expected_revision",req.expectedRevision()));
+        return service.generatePoster(week,Map.of("source",req.source()==null?"published":req.source(),"supplement",req.supplement()==null?"":req.supplement(),"expected_revision",req.expectedRevision(),"mode",req.mode()==null?"seedream":req.mode()));
     }
     @GetMapping("/{week}/posters/{id}.png") public ResponseEntity<Resource> poster(@PathVariable String week,@PathVariable String id,
             @RequestParam(defaultValue="false") boolean download) {

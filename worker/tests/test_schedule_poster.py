@@ -13,10 +13,10 @@ def make_case(tmp_path,monkeypatch):
     plan=validate_plan({'entries':[{'date':'2026-11-18','start_time':'20:00','title':'正确日程，不让模型改字'}]},week)
     state=folder/f'{week}.json';state.write_text(json.dumps({'published':plan,'draft':plan,'active':True}),encoding='utf-8')
     def rev(p):return hashlib.sha256(p.read_bytes()).hexdigest()
-    request={'expected_revision':rev(state),'source':'published','supplement':'粉色蝴蝶结'}
+    request={'expected_revision':rev(state),'source':'published','supplement':'粉色蝴蝶结','mode':'seedream'}
     monkeypatch.setattr(poster,'font_file',lambda cfg:('C:/Windows/Fonts/msyh.ttc',0) if Path('C:/Windows/Fonts/msyh.ttc').exists() else __import__('clipper.publish',fromlist=['find_font']).find_font('Noto Sans CJK SC'))
     def fake(prompt,ref,out,**kw):
-        assert '不要生成任何文字' in prompt and ref.exists()
+        assert '完整中文主播周计划图片' in prompt and '正确日程，不让模型改字' in prompt and ref.exists()
         Image.new('RGB',(1920,1200),'lavender').save(out)
         return {'model':'fake-seedream','source_url':'secret-not-persisted'}
     monkeypatch.setattr(poster,'generate',fake)
@@ -32,7 +32,7 @@ def test_versions_are_immutable_and_keep_snapshot(tmp_path,monkeypatch):
     versions=poster.history(tmp_path,week)['versions'];assert len(versions)==2
     assert versions[0]['plan']['entries'][0]['title']=='正确日程，不让模型改字'
     assert 'source_url' not in versions[0]
-    with Image.open(first) as im:assert im.width==1920 and im.height>1200
+    with Image.open(first) as im:assert im.size==(1920,1200)
     assert poster.history(tmp_path/'other',week)['versions']==[]
 
 def test_failure_preserves_history_and_no_paid_call_on_conflict(tmp_path,monkeypatch):
@@ -54,3 +54,13 @@ def test_input_validation_and_draft_snapshot(tmp_path,monkeypatch):
     request['supplement']='x'*1501
     with pytest.raises(ValueError):poster.create(tmp_path,week,cfg,request,rev)
     with pytest.raises(ValueError):poster.history(tmp_path,'../secret')
+
+
+def test_default_template_never_calls_seedream(tmp_path,monkeypatch):
+    week,cfg,request,rev,state=make_case(tmp_path,monkeypatch)
+    request['mode']='template'
+    def forbidden(*args,**kw):raise AssertionError('默认模板不应调用付费生图')
+    monkeypatch.setattr(poster,'generate',forbidden)
+    result=poster.create(tmp_path,week,cfg,request,rev)
+    assert result['mode']=='template' and result['model']=='journal-template-v1'
+    with Image.open(poster.poster_dir(tmp_path,week)/result['id']/'poster.png') as im:assert im.size==(1920,1080)

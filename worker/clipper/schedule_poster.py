@@ -106,26 +106,54 @@ def create(root,week,cfg,request,revision):
     if not state.get(source): raise ValueError('所选版本尚未保存，请先保存日程')
     plan=validate_plan(state[source],week)
     supplement=request.get('supplement','')
+    mode=request.get('mode','seedream')
+    if mode not in ('template','seedream'):raise ValueError('周计划生成模式不合法')
     if not isinstance(supplement,str) or len(supplement)>1500 or '\0' in supplement: raise ValueError('补充要求最多1500字，不能包含空字符')
     name=(cfg.get('streamer') or {}).get('name') or '主播'
     settings=cfg.get('schedule') or {};pc=(cfg.get('publish') or {})
     reference=root/'_schedule/images'/f"{plan['portrait_id']}.jpg" if plan['portrait_id'] else REPO/str(settings.get('portrait_file') or '')
-    if not reference.is_file(): raise ValueError('请先上传片尾人物图并保存，作为主播风格参考')
-    font=font_file(cfg)
+    if mode=='seedream' and settings.get('poster_template') and not plan['portrait_id']:
+        reference=REPO/settings['poster_template']
+    if mode=='seedream' and not reference.is_file(): raise ValueError('请先上传片尾人物图并保存，作为主播风格参考')
+    font=font_file(cfg) if mode=='template' else None
     # Check font availability before issuing a paid generation request.
-    ImageFont.truetype(font[0],36,index=font[1])
+    if font:ImageFont.truetype(font[0],36,index=font[1])
     ident=uuid.uuid4().hex;folder=poster_dir(root,week)/ident;folder.mkdir(parents=True)
     prompt=('制作主播个人周计划海报底图，参考人物发色、服装、眼睛和气质，保持人物身份特征。'
             '紫色手账、纸张拼贴、柔和精致插画，人物在左侧约35%，右侧约60%留浅色干净区域供程序排版。'
             '不要生成任何文字、数字、日期、Logo或水印；参考图已有的文字和日程不要沿用。用户补充风格要求：'+supplement)
     try:
-        with Image.open(reference) as image:
-            if not plan['portrait_id'] and settings.get('portrait_crop')=='weekly-left': image=image.crop((110,175,700,725))
-            image.convert('RGB').save(folder/'reference.jpg',quality=95)
-        meta=generate(prompt,folder/'reference.jpg',folder/'art.jpg',model=pc.get('seedream_model'),endpoint=pc.get('seedream_endpoint'),size=pc.get('seedream_size','1920x1200'))
-        width,height=compose(folder/'art.jpg',folder/'poster.png',plan,name,font)
+        if mode=='template':
+            from .schedule_template import compose_template
+            width,height=compose_template(folder/'poster.png',plan,name,font,cfg,root)
+            meta={'model':'journal-template-v1'};prompt='固定紫色周计划模板，按已保存日程准确排版'
+        else:
+            lines=[]
+            for i in range(7):
+                day=(parse_day(week)+timedelta(days=i)).isoformat()
+                texts=[]
+                for r in plan['entries']:
+                    if r['date']!=day:continue
+                    timing=r['start_time'] or ('全天' if r['status']=='rest' else '时间待定')
+                    if r['end_time']:timing+='–'+r['end_time']+('（次日）' if r['end_time']<r['start_time'] else '')
+                    label={'rest':'休息','cancelled':'已取消','tbd':'待定'}.get(r['status'],'')
+                    texts.append(f"{timing} {label} {r['title']}".strip())
+                lines.append(f"{day} 周{WEEKDAYS[i]}："+'；'.join(texts or ['未填写安排']))
+            prompt=('直接生成一张完整中文主播周计划图片，包括背景、人物和所有日程文字。'
+                '参考所附图片的紫色手账风格、人物相框、姓名丝带、网格纸、笔刷星期、手绘圈选和便签构图。'
+                '保持参考人物发色、服装、眼睛与气质。不要沿用参考图中的旧日期、旧日程或旧姓名。'
+                f'本次姓名：{name}；主标题：本周计划；日期：{week} 至 {(parse_day(week)+timedelta(days=6)).isoformat()}；北京时间。'
+                '以下七天是唯一正确文字来源，按顺序完整排版，中文清晰可读，不猜测缺失安排，无水印：\n'
+                +'\n'.join(lines)+'\n补充要求：'+supplement)
+            with Image.open(reference) as image:
+                image.convert('RGB').save(folder/'reference.jpg',quality=95)
+            meta=generate(prompt,folder/'reference.jpg',folder/'art.jpg',model=pc.get('seedream_model'),endpoint=pc.get('seedream_endpoint'),size=pc.get('seedream_size','1920x1200'))
+            with Image.open(folder/'art.jpg') as generated:
+                generated.convert('RGB').save(folder/'poster.png','PNG')
+                width,height=generated.size
         record={'id':ident,'week_start':week,'created_at':time.time(),'source':source,'supplement':supplement,
-                'file':str((folder/'poster.png').relative_to(root)),'art_file':str((folder/'art.jpg').relative_to(root)),
+                'mode':mode,'generation_style':'seedream-full-week-v1' if mode=='seedream' else 'journal-template-v1',
+                'file':str((folder/'poster.png').relative_to(root)),'art_file':str((folder/'art.jpg').relative_to(root)) if mode=='seedream' else None,
                 'prompt':prompt,'model':meta.get('model'),'plan':plan,'streamer_name':name,'width':width,'height':height,
                 'plan_hash':hashlib.sha256(json.dumps(plan,ensure_ascii=False,sort_keys=True).encode()).hexdigest()}
         tmp=folder/'meta.tmp';tmp.write_text(json.dumps(record,ensure_ascii=False,indent=1),encoding='utf-8');tmp.replace(folder/'meta.json')

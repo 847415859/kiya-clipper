@@ -66,7 +66,7 @@ public class ScheduleService {
     }
     public Map<String, Object> save(String week, Map<String, Object> plan, String revision, boolean confirm) {
         if (plan == null || revision == null) throw ApiException.badRequest("缺少日程或版本，请重新读取后保存");
-        return run("save", week, Map.of("plan", plan, "expected_revision", revision, "confirm", confirm), List.of(), 30);
+        return run("save", week, Map.of("plan", plan, "expected_revision", revision, "confirm", confirm), List.of(), 600);
     }
     public Map<String, Object> deactivate(String week, String revision) {
         if (revision == null) throw ApiException.badRequest("缺少日程版本");

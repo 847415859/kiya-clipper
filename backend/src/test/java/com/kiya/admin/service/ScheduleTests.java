@@ -82,7 +82,7 @@ class ScheduleTests {
         when(runner.run(eq("schedule.py"),anyList(),any())).thenReturn(new ProcessRunner.Result(0,"{\"conflict\":true,\"error\":\"changed\"}"));
         assertThrows(ApiException.class,()->service.save("2026-11-16",Map.of(),"old",true));
         assertThrows(ApiException.class,()->service.get("../file"));
-        verify(runner,times(1)).run(eq("schedule.py"),anyList(),eq(Duration.ofSeconds(30)));
+        verify(runner,times(1)).run(eq("schedule.py"),anyList(),eq(Duration.ofSeconds(600)));
     }
     @Test void publishSettingsPersistWithoutAppendingGeneratedDescription() throws Exception {
         Path file=paths.sessionDir("20261117-1200").resolve("publish/01.json");Files.createDirectories(file.getParent());

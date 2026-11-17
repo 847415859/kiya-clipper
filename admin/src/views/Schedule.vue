@@ -61,19 +61,20 @@
       <el-button :disabled="plan.entries.length >= 14" @click="plan.entries.push(emptyEntry(week))">添加安排</el-button>
       <p class="muted">已取消的安排不会介绍；今天已经结束的场次会排除。没有结束时间且开始已过的场次不再预告。图片不会整张烧到片尾，片尾只展示剩余的结构化安排。</p>
       <div class="toolbar">
-        <el-button :loading="saving" @click="save(false)">保存草稿</el-button>
+        <el-button :loading="saving" @click="save(false)">保存草稿并生成周计划</el-button>
         <el-checkbox v-model="checked">我已核对这一周的日期、时间和内容</el-checkbox>
-        <el-button type="primary" :loading="saving" :disabled="!checked" @click="save(true)">确认并用于发布</el-button>
+        <el-button type="primary" :loading="saving" :disabled="!checked" @click="save(true)">确认并生成周计划</el-button>
         <el-button v-if="active" type="warning" plain :disabled="saving" @click="deactivate">暂停使用已确认日程</el-button>
       </div>
       <p v-if="savedDuringTyping" class="muted">已保存提交时的内容，之后的输入仍留在页面，请再次保存。</p>
+      <p class="muted">保存会调用 Seedream 按参考图风格生成整张本周计划，可能需要几分钟并产生生图费用；相同日程复用历史图片。AI 生成的日期和文字请再次核对。</p>
     </el-card>
     <el-card shadow="never" class="card">
       <template #header><b>现在发布时的剩余安排</b><el-button link @click="refreshPreview">刷新预览</el-button></template>
       <pre>{{ preview?.description_block || preview?.reason || '正在读取…' }}</pre>
       <p class="muted">此处使用已确认版本。每条作品可在发布卡片里选择预计公开时间、关闭日程介绍，并试渲染日程片尾。</p>
     </el-card>
-    <SchedulePosters :week="week" :revision="revision" :dirty="dirty" :busy="saving || uploading || extracting || loading" />
+    <SchedulePosters ref="posterPanel" :week="week" :revision="revision" :dirty="dirty" :busy="saving || uploading || extracting || loading" />
   </div>
 </template>
 
@@ -87,6 +88,7 @@ import ScheduleCalendar from '../components/ScheduleCalendar.vue'
 import SchedulePosters from '../components/SchedulePosters.vue'
 import {categories} from '../schedule-calendar'
 const calendar=ref(null)
+const posterPanel=ref(null)
 async function editCalendarDay(day){await changeWeek(day);document.querySelector('.schedule-page > .toolbar')?.scrollIntoView({behavior:'smooth',block:'start'})}
 const week = ref(monday()), revision = ref('none'), active = ref(false), dirty = ref(false)
 const loading = ref(false), saving = ref(false), uploading = ref(false), extracting = ref(false), checked = ref(false)
@@ -124,6 +126,8 @@ async function save(confirm) {
     else{baseline=JSON.stringify(r.draft);dirty.value=signature()!==baseline;savedDuringTyping.value=true}
     checked.value=false
     ElMessage.success(confirm?'已确认，后续作品可使用这周日程':'草稿已保存，已确认版本不变')
+    if(r.poster_error)ElMessage.warning(r.poster_error)
+    posterPanel.value?.refresh()
     refreshPreview()
     calendar.value?.refresh()
   }finally{saving.value=false}
