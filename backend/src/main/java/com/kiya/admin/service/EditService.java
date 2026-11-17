@@ -30,7 +30,8 @@ import com.kiya.admin.entity.SubtitleStyle;
 @Service
 public class EditService {
     private static final Pattern FINAL = Pattern.compile("^[0-9]{2,3}_[0-9\\-]{1,16}_[0-9]{3,4}p\\.mp4$");
-    private static final Pattern PREVIEW = Pattern.compile("^([0-9]{2,3})_([0-9]+\\.[0-9])_([0-9]+\\.[0-9])\\.mp4$");
+    private static final Pattern PREVIEW = Pattern.compile("^([0-9]{2,3})_([0-9]+\\.[0-9])_([0-9]+\\.[0-9])(_clean)?\\.mp4$");
+    private static final Pattern RENDER_PREVIEW = Pattern.compile("^[0-9]{2,3}_[0-9]+_[0-9]+_(360|480|720|1080)p\\.mp4$");
     static final double MAX_WINDOW = 500;
 
     private final WorkerPaths paths;
@@ -38,6 +39,7 @@ public class EditService {
     private final StyleService styles;
     private final ObjectMapper om;
     private final SessionService sessions;
+    private final EditRecoveryStore recovery;
 
     public EditService(WorkerPaths paths, ProcessRunner runner, StyleService styles, ObjectMapper om,
                        SessionService sessions) {
@@ -46,6 +48,7 @@ public class EditService {
         this.styles = styles;
         this.om = om;
         this.sessions = sessions;
+        this.recovery = new EditRecoveryStore(om);
     }
 
     /** 这个候选的精排结果（没有返回 null）。 */
@@ -223,9 +226,12 @@ public class EditService {
         double cs = c.path("clip_start").asDouble();
         double ce = c.path("clip_end").asDouble();
         Map<String, Object> edit;
+        String revision = "none";
         Path f = editFile(session, rank);
         try {
-            edit = Files.exists(f) ? om.readValue(f.toFile(), new TypeReference<Map<String, Object>>() {}) : null;
+            byte[] content = Files.exists(f) ? Files.readAllBytes(f) : null;
+            if (content != null) revision = recovery.revision(content);
+            edit = content == null ? null : om.readValue(content, new TypeReference<Map<String, Object>>() {});
         } catch (IOException e) {
             edit = null;
         }
@@ -277,6 +283,8 @@ public class EditService {
         // 预览视频：素材范围就是候选片段时前端用审核片段（clip），否则用 edit_preview.py 按素材范围剪好的（preview）
         out.put("clip", findClip(session, rank, c.path("t").asDouble()));
         out.put("preview", findPreview(session, rank, ws, we));
+        out.put("revision", revision);
+        out.put("renderPreviews", renderPreviews(session, rank));
         out.put("finals", finals(session, rank));
         out.put("llm", llm);
         Path quality = paths.sessionDir(session).resolve("quality").resolve(String.format("%02d.json", rank));
@@ -328,6 +336,11 @@ public class EditService {
 
     /** 保存：选了字幕样式就把样式整份写进脚本（以后改样式不影响已编排好的片段）；校验交给 worker。 */
     public Map<String, Object> save(String session, int rank, Map<String, Object> edit, Long styleId, boolean restoredAi) {
+        return save(session, rank, edit, styleId, restoredAi, null);
+    }
+
+    public synchronized Map<String, Object> save(String session, int rank, Map<String, Object> edit, Long styleId, boolean restoredAi, String expectedRevision) {
+        recovery.check(editFile(session, rank), expectedRevision);
         JsonNode c = candidate(session, rank);
         double clipLen = c.path("clip_end").asDouble() - c.path("clip_start").asDouble();   // 有 window 时 worker 按它校验
         Map<String, Object> e = new LinkedHashMap<>(edit == null ? Map.of() : edit);
@@ -383,12 +396,17 @@ public class EditService {
                 norm.put("human_saved_at", LocalDateTime.now().withNano(0).toString());
             }
             Path f = editFile(session, rank);
+            recovery.check(f, expectedRevision);
+            recovery.archive(f, "保存前版本");
             Path part = f.resolveSibling(f.getFileName() + ".tmp");
-            Files.writeString(part, om.writerWithDefaultPrettyPrinter().writeValueAsString(norm), StandardCharsets.UTF_8);
+            byte[] content = om.writerWithDefaultPrettyPrinter().writeValueAsBytes(norm);
+            Files.write(part, content);
             Files.move(part, f, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            recovery.archive(f, "人工保存");
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("edit", norm);
             out.put("warnings", warnings);
+            out.put("revision", recovery.revision(content));
             return out;
         } catch (IOException ex) {
             throw ApiException.badRequest("保存失败：" + ex.getMessage());
@@ -438,6 +456,8 @@ public class EditService {
 
     private String findPreview(String session, int rank, double ws, double we) {
         String name = String.format(java.util.Locale.ROOT, "%02d_%.1f_%.1f.mp4", rank, round1(ws), round1(we));
+        String clean = name.replace(".mp4", "_clean.mp4");
+        if (Files.exists(paths.sessionDir(session).resolve("edit_preview").resolve(clean))) return clean;
         Path f = paths.sessionDir(session).resolve("edit_preview").resolve(name);
         return Files.exists(f) ? name : null;
     }
@@ -447,6 +467,62 @@ public class EditService {
             throw ApiException.badRequest("文件名不合法");
         }
         return WorkerPaths.inside(paths.output(), paths.sessionDir(session).resolve("edit_preview").resolve(file));
+    }
+
+    public Map<String, Object> recovery(String session, int rank) {
+        candidate(session, rank);
+        Path file = editFile(session, rank);
+        return Map.of("revision", recovery.revision(file), "drafts", recovery.drafts(file), "versions", recovery.versions(file));
+    }
+
+    public Map<String, Object> draft(String session, int rank, String client, Map<String, Object> value) {
+        candidate(session, rank);
+        return recovery.draft(editFile(session, rank), client, value);
+    }
+
+    public Map<String, Object> previewPlan(String session, int rank, Map<String, Object> raw, Long styleId) {
+        candidate(session, rank);
+        Map<String, Object> e = new LinkedHashMap<>(raw);
+        Map<String, Object> subs = new LinkedHashMap<>(castMap(e.get("subtitles") instanceof Map<?, ?> m ? m : Map.of()));
+        subs.remove("style");
+        if (styleId != null) {
+            try { subs.put("style", om.readValue(styles.get(styleId).getConfigJson(), Map.class)); }
+            catch (IOException ex) { throw ApiException.badRequest("字幕样式数据损坏"); }
+        }
+        e.put("subtitles", subs);
+        Path tmp = paths.sessionDir(session).resolve(".plan-" + UUID.randomUUID() + ".json");
+        try {
+            Files.writeString(tmp, om.writeValueAsString(e));
+            var result = runner.run("edit_plan.py", List.of(paths.sessionDir(session).resolve("candidates.json").toString(),
+                    "--rank", String.valueOf(rank), "--edit", tmp.toString()), Duration.ofSeconds(30));
+            if (result.exitCode() != 0) throw ApiException.badRequest(SessionService.lastLine(result.output()));
+            return om.readValue(SessionService.lastLine(result.output()), new TypeReference<Map<String, Object>>() {});
+        } catch (IOException ex) { throw ApiException.badRequest("计算预览失败：" + ex.getMessage()); }
+        finally { try { Files.deleteIfExists(tmp); } catch (IOException ignored) {} }
+    }
+
+    public List<Map<String, Object>> renderPreviews(String session, int rank) {
+        Path dir = paths.sessionDir(session).resolve("render_previews");
+        if (!Files.isDirectory(dir)) return List.of();
+        try (var files = Files.list(dir)) {
+            List<Map<String, Object>> result = new ArrayList<>();
+            for (Path p : files.filter(p -> RENDER_PREVIEW.matcher(p.getFileName().toString()).matches())
+                    .filter(p -> p.getFileName().toString().startsWith(String.format("%02d_", rank))).toList()) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("file", p.getFileName().toString());
+                m.put("modified", Files.getLastModifiedTime(p).toMillis());
+                Path range = p.resolveSibling(p.getFileName().toString().replace(".mp4", ".range.json"));
+                if (Files.exists(range)) m.putAll(om.readValue(range.toFile(), Map.class));
+                result.add(m);
+            }
+            result.sort((a, b) -> Long.compare(((Number)b.get("modified")).longValue(), ((Number)a.get("modified")).longValue()));
+            return result;
+        } catch (IOException ex) { throw ApiException.badRequest("读取试渲染失败"); }
+    }
+
+    public Path renderPreviewFile(String session, String file) {
+        if (file == null || !RENDER_PREVIEW.matcher(file).matches()) throw ApiException.badRequest("文件名不合法");
+        return WorkerPaths.inside(paths.output(), paths.sessionDir(session).resolve("render_previews").resolve(file));
     }
 
     /** 审核片段的剪切范围：读 clips/windows.json，没有就是候选窗口。 */

@@ -35,8 +35,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from clipper.kcfg import load_cfg  # noqa: E402
-from clipper.kcfg import decisions_path  # noqa: E402
-from clipper.streamer import resolve_config, streamer_from_session_dir  # noqa: E402
+from clipper.streamer import decisions_path, resolve_config, streamer_from_session_dir  # noqa: E402
 
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")   # biliup 输出里的颜色控制码
 MIN_AHEAD = 4 * 3600 + 600          # B站要求定时发布晚于提交 4 小时以上，多留 10 分钟余量
@@ -214,6 +213,39 @@ def bind_bvid(sess: Path, rank: int, bvid: str) -> None:
     tmp.replace(path)
 
 
+def save_result(path: Path, result: dict) -> None:
+    """Persist the submission receipt before local post-processing can fail."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(path)
+
+
+def repair_binding(candidates: Path, rank: int, bvid: str) -> dict:
+    """Explicit recovery for an existing post. Never starts biliup or uploads a file."""
+    if not re.fullmatch(r"BV[0-9A-Za-z]{10}", bvid):
+        raise Refuse("BV 号格式不对")
+    data = read(candidates, {})
+    if not any(c.get("rank") == rank for c in data.get("candidates", [])):
+        raise Refuse(f"没有序号 {rank} 的候选")
+    sess = candidates.parent
+    result_file = sess / "publish" / f"{rank:02d}.bili.json"
+    result = read(result_file, {}) or {}
+    if result.get("status") == "ok" and result.get("bvid") and result["bvid"] != bvid:
+        raise Refuse("已有另一个成功投稿的 BV 号，请先在后台核对绑定")
+    now = time.time()
+    result.update(status="ok", session=sess.name, rank=rank, bvid=bvid, bound=False, recovered=True)
+    result.setdefault("at", now)
+    result.setdefault("at_text", datetime.fromtimestamp(now).strftime("%m-%d %H:%M"))
+    result.setdefault("mode_text", "手动补记已投稿稿件")
+    save_result(result_file, result)
+    bind_bvid(sess, rank, bvid)
+    result.update(bound=True)
+    result.pop("bind_error", None)
+    save_result(result_file, result)
+    return result
+
+
 def run(args: argparse.Namespace) -> dict:
     cpath = Path(args.candidates)
     sess = cpath.parent
@@ -279,15 +311,18 @@ def run(args: argparse.Namespace) -> dict:
     base.update(status="ok" if code == 0 else "failed", exit_code=code, output_tail=tail, bvid=m.group(0) if m else "")
     if prev.get("status") == "ok":
         base["previous"] = {k: prev.get(k) for k in ("mode_text", "at_text", "bvid")}
+    save_result(result_file, base)
     if code == 0 and base["bvid"]:
         try:
             bind_bvid(sess, args.rank, base["bvid"])
             base["bound"] = True
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError, TypeError) as e:
             base["bound"] = False
             base["bind_error"] = str(e)
+            print(f"投稿成功 {base['bvid']}，本地 BV 绑定失败：{e}；请手动绑定，不要重新上传", flush=True)
     if code == 0:
         base["visibility_note"] = "请在创作中心确认这条的状态" if args.mode in ("hold", "private") else ""
+    save_result(result_file, base)
     return base
 
 
@@ -300,6 +335,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--allow-taboo", action="store_true")
     ap.add_argument("--again", action="store_true", help="已经投过也再投一次")
+    ap.add_argument("--bind-bvid", help="仅补记已投稿稿件的 BV 号，不上传；请先在创作中心核对")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--config", default=None)
     args = ap.parse_args()
@@ -311,13 +347,13 @@ def main() -> int:
     if not args.candidates or not args.rank:
         ap.error("需要 candidates.json 和 --rank")
     try:
-        res = run(args)
+        res = repair_binding(Path(args.candidates), args.rank, args.bind_bvid) if args.bind_bvid else run(args)
     except Refuse as e:
         print(str(e), file=sys.stderr)
         return 2
     if res["status"] != "dry_run":
         out = Path(args.candidates).parent / "publish" / f"{args.rank:02d}.bili.json"
-        out.write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
+        save_result(out, res)
     print(json.dumps(res, ensure_ascii=False))
     return 0 if res["status"] in ("ok", "dry_run") else 1
 

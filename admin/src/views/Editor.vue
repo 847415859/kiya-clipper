@@ -6,6 +6,7 @@
       <span class="muted">高峰 {{ hms(info.t) }}，素材 {{ hms(winStart) }}–{{ hms(winEnd) }}（{{ fmt(info.clipLen) }}）</span>
       <span class="spacer" />
       <el-tag v-if="dirty" type="warning" size="small">未保存</el-tag>
+      <el-button v-if="saveConflict" type="warning" @click="loadLatest">载入服务器最新版本</el-button>
       <el-button :disabled="!canUndo || saving || drafting || cutting" @click="stepHistory('undo')">撤销</el-button>
       <el-button :disabled="!canRedo || saving || drafting || cutting" @click="stepHistory('redo')">重做</el-button>
       <el-tooltip content="让大模型按精排结果写一版花字 / 运镜 / 贴图，再手动微调" placement="bottom">
@@ -26,6 +27,7 @@
         </template>
       </el-dropdown>
       <el-button v-if="renderJob" link type="primary" @click="$router.push({ path: '/jobs', query: { open: renderJob } })">渲染日志</el-button>
+      <el-button :disabled="rendering || !planCurrent" @click="renderPartial">局部试渲染 10 秒</el-button>
     </div>
 
     <div v-if="info.variants && info.variants.length > 1" class="variant-bar">
@@ -68,6 +70,8 @@
         <div ref="stage" class="stage" @pointerdown.self="selected = null">
           <video ref="video" :src="videoSrc" :style="cameraStyle" preload="auto"
                  @loadedmetadata="onMeta" @timeupdate="syncTime" @play="playing = true; tick()" @pause="playing = false" />
+          <audio v-if="edit.music?.track" ref="bgmAudio" :src="api.musicUrl(edit.music.track)" preload="metadata" @error="bgmError = true" />
+          <FxView v-if="subtitleNode && cleanVideo && planCurrent && !outsideTrim" :node="subtitleNode" class="subtitle-layer" />
           <div v-if="windowStale" class="stale">
             素材范围改了，画面还是旧的。
             <el-button size="small" type="primary" :loading="cutting" @click="makePreview">保存并生成新预览</el-button>
@@ -142,13 +146,29 @@
           <el-button size="small" @click="audition({ start: edit.trim.start, end: edit.trim.end })" :disabled="windowStale">试听成片范围</el-button>
           <span class="muted">J/L ±5 秒 · ←/→ 按 30fps 步进 · Ctrl+Z 撤销 · Ctrl+Shift+Z 重做 · Ctrl+S 保存</span>
         </div>
-        <p class="muted hint">预览说明：动画和位置与成片一致；画面上的字幕是审核片段里烧好的，放大时会跟着放大，成片里字幕由渲染器单独绘制、不会被放大。</p>
+        <p class="muted hint" role="status">{{ previewStatus }}
+          <el-button v-if="!cleanVideo" size="small" link type="primary" :loading="cutting" @click="makePreview">生成干净预览</el-button>
+          <el-button v-if="planError" size="small" link @click="refreshPlan">重试同步</el-button>
+          <span v-if="bgmError">背景音乐加载失败，请用试渲染检查音频。</span>
+        </p>
+        <InteriorCuts :edit="edit" :time="time" :clip-len="info.clipLen" @seek="seek" />
         <TranscriptEditor :edit="edit" :speech="info.speech" :time="time" :asr-doubt="!!info.llm?.asrDoubt"
                           :loading="speechLoading" :stale-video="windowStale" @seek="seek" @audition="audition"
                           @boundary="setBoundary" @expand="expandForSentence" @correction="correctSentence" @remove-correction="removeCorrection" />
       </section>
 
       <aside class="right">
+        <EditRecovery ref="recoveryPanel" :name="name" :rank="rank" :state="recoveryState" :revision="revision"
+                      :dirty="dirty" :ready="editorReady" @restore="restoreRecovery" />
+        <el-card v-if="info.renderPreviews?.length" shadow="never" class="card">
+          <template #header><b>局部试渲染</b></template>
+          <p class="muted">成片时间含前情呼应；仅用于核对，不作为发布成片。</p>
+          <p class="muted">已有文件不会随编辑更新，修改后需重新试渲染。</p>
+          <div v-for="p in info.renderPreviews" :key="p.file" class="final">
+            <span>{{ fmt(p.start) }}–{{ fmt(p.end) }}</span>
+            <el-button link @click="partialFile = p.file">播放</el-button>
+          </div>
+        </el-card>
         <ViewerReview :edit="edit" :llm="info.llm" :pack="pack" :quality="info.quality"
                       :cover-url="pack.cover ? api.coverUrl(name, rank, pack.cover_version) : ''"
                       :final-file="latestFinal"
@@ -498,6 +518,11 @@
       </template>
     </el-dialog>
   </div>
+
+  <el-dialog :model-value="!!partialFile" title="局部试渲染（与完整成片使用相同时间轴）" width="850px" destroy-on-close @close="partialFile = ''">
+    <video v-if="partialFile" :src="api.renderPreviewUrl(name, partialFile)" controls playsinline style="width:100%" />
+    <p class="muted">播放的是生成时的版本，后续编辑不会更新这个文件。</p>
+  </el-dialog>
 </template>
 
 <script setup>
@@ -506,14 +531,17 @@ import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, hms } from '../api'
 // 与渲染器共用同一份动画代码：预览里的弹出、抖动、放大和成片一致
-import { cameraAt, enterExit, outlineShadow } from '../../../renderer/src/anim.js'
+import { bgmVolume, cameraAt, enterExit, outlineShadow } from '../../../renderer/src/anim.js'
+import { subtitleView } from '../../../renderer/src/subtitle-view.js'
 import { narrationView, fakeUiView } from '../../../renderer/src/fakeui.js'
 import FxView from '../components/FxView.vue'
 import ViewerReview from '../components/ViewerReview.vue'
 import { makeCaption } from '../viewer-review'
 import TranscriptEditor from '../components/TranscriptEditor.vue'
 import EditComparison from '../components/EditComparison.vue'
-import { clone, createHistory, sentenceKey, updateSentenceOverride } from '../editor-tools'
+import InteriorCuts from '../components/InteriorCuts.vue'
+import EditRecovery from '../components/EditRecovery.vue'
+import { clone, compactTime, createHistory, sentenceKey, updateSentenceOverride } from '../editor-tools'
 
 const route = useRoute()
 const router = useRouter()
@@ -556,7 +584,21 @@ let restoredAi = false           // 刚点了“还原 AI 原稿”：下一次�
 const info = reactive({ aiDraft: null, clipLen: 60, clip: null, preview: null, t: 0, finals: [], llm: null, exists: false,
   candidate: { start: 0, end: 60 }, videoWindow: null, variants: [], chosenVariant: null, quality: null,
   sourceCandidateStart: 0, sourceCandidateEnd: 60, speech: { available: false, sentences: [] } })
-const edit = reactive({ window: { start: 0, end: 60 }, trim: { start: 0, end: 60 }, subtitles: { enabled: true }, items: [], music: null, callback: null })
+const edit = reactive({ window: { start: 0, end: 60 }, trim: { start: 0, end: 60 }, cuts: [], remove_business: true, subtitles: { enabled: true }, items: [], music: null, callback: null })
+const revision = ref('none'), saveConflict = ref(false), editorReady = ref(false), recoveryPanel = ref(null)
+const recoveryState = computed(() => snapshot())
+const partialFile = ref('')
+watch(partialFile, file => { if (file) video.value?.pause() })
+const bgmAudio = ref(null), bgmError = ref(false)
+const previewPlan = ref(null), planKey = ref(''), planError = ref('')
+let planTimer, planRequest = 0
+const planCurrent = computed(() => !!previewPlan.value && planKey.value === fingerprint(snapshot()))
+const cleanVideo = computed(() => videoSrc.value.includes('_clean.mp4'))
+const removedLocal = computed(() => planCurrent.value ? previewPlan.value.removed.map(q => ({start: q.start - edit.window.start, end: q.end - edit.window.start})) : edit.cuts)
+const outputTime = computed(() => compactTime(time.value, removedLocal.value) - compactTime(edit.trim.start, removedLocal.value))
+const subtitleNode = computed(() => subtitleView(previewPlan.value?.subtitles, outputTime.value, stageSize.w, stageSize.h))
+const previewStatus = computed(() => !cleanVideo.value ? '当前为旧审核画面，字幕已烧录。生成干净预览后才能显示当前字幕修订。'
+  : !planCurrent.value ? (planError.value || '正在同步字幕与删除时间…') : `当前字幕与删除时间已同步，主片约 ${previewPlan.value.duration.toFixed(1)} 秒；前情呼应请用局部试渲染核对。`)
 const callbackRelation = { flag_payoff: '立 flag 与打脸', reversal: '话题前后反转' }
 const callbackLen = computed(() => {
   const c = edit.callback
@@ -666,14 +708,16 @@ function hex(v, old) {
 
 // ---------------------------------------------------------------- 预览
 const cameraStyle = computed(() => {
-  const zooms = edit.items.filter((i) => i.type === 'zoom')
-  const c = cameraAt(time.value, zooms, stageSize.w, stageSize.h)
+  const zooms = (planCurrent.value ? previewPlan.value.items : edit.items).filter((i) => i.type === 'zoom')
+  const c = cameraAt(planCurrent.value ? outputTime.value : time.value, zooms, stageSize.w, stageSize.h)
   return { transformOrigin: `${c.x * 100}% ${c.y * 100}%`, transform: `translate(${c.dx}px, ${c.dy}px) scale(${c.scale})` }
 })
 
 function anim(it) {
-  const seed = edit.items.indexOf(it) + 1
-  return enterExit(it.preset || (it.type === 'narration' ? 'fade' : 'pop'), time.value - it.start, it.duration, stageSize.w, stageSize.h, seed)
+  const seedItems = planCurrent.value ? previewPlan.value.items : edit.items
+  const seed = seedItems.filter(i => i.type !== 'zoom').findIndex(i => i.id === it.id) + 1
+  const mapped = planCurrent.value ? previewPlan.value.items.find(i => i.id === it.id) : null
+  return enterExit(it.preset || (it.type === 'narration' ? 'fade' : 'pop'), mapped ? outputTime.value - mapped.start : time.value - it.start, mapped?.duration ?? it.duration, stageSize.w, stageSize.h, seed)
 }
 
 function textStyle(it) {
@@ -682,7 +726,7 @@ function textStyle(it) {
   return {
     left: it.x * 100 + '%', top: it.y * 100 + '%',
     transform: `translate(-50%, -50%) translate(${a.dx}px, ${a.dy}px) rotate(${(it.rotate || 0) + a.rotate}deg) scale(${a.scale})`,
-    opacity: Math.max(0.15, a.opacity),
+    opacity: playing.value ? a.opacity : Math.max(0.15, a.opacity),
     fontFamily: `"${it.font}", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif`,
     fontSize: it.size * k + 'px', color: it.color,
     textShadow: outlineShadow((it.stroke_width ?? 8) * k, it.stroke, 6 * k, 'rgba(0,0,0,0.45)')
@@ -692,7 +736,7 @@ function textStyle(it) {
 // 旁白 / 伪 UI：和成片同一份样式树；预览里最低留一点透明度，免得刚出现时完全看不见、没法选中
 function fxNode(it) {
   const a = anim(it)
-  const b = { ...a, opacity: Math.max(0.15, a.opacity) }
+  const b = { ...a, opacity: playing.value ? a.opacity : Math.max(0.15, a.opacity) }
   return (it.type === 'narration' ? narrationView : fakeUiView)(it, stageSize.w, stageSize.h, b)
 }
 
@@ -701,17 +745,22 @@ function stickerStyle(it) {
   return {
     left: it.x * 100 + '%', top: it.y * 100 + '%', width: it.scale * 100 + '%',
     transform: `translate(-50%, -50%) translate(${a.dx}px, ${a.dy}px) rotate(${(it.rotate || 0) + a.rotate}deg) scale(${a.scale})`,
-    opacity: Math.max(0.15, a.opacity)
+    opacity: playing.value ? a.opacity : Math.max(0.15, a.opacity)
   }
 }
 
 function syncTime() {
   if (video.value) {
     time.value = video.value.currentTime
+    if (playing.value && !windowStale.value) {
+      const cut = removedLocal.value.find(q => time.value >= q.start && time.value < q.end)
+      if (cut) { video.value.currentTime = cut.end; time.value = cut.end }
+    }
     if (auditionEnd !== null && time.value >= auditionEnd) {
       video.value.pause()
       auditionEnd = null
     }
+    syncBgm()
   }
 }
 function tick() {
@@ -780,7 +829,7 @@ async function refreshSpeech() {
 function togglePlay() {
   const v = video.value
   if (!v) return
-  if (v.paused) v.play()
+  if (v.paused) v.play().catch(error => { if (error.name !== 'AbortError') ElMessage.info('请点击播放按钮重试') })
   else v.pause()
 }
 function seekFromEvent(e) {
@@ -961,11 +1010,78 @@ async function addNetSticker(url, i) {
 }
 
 // ---------------------------------------------------------------- 加载 / 保存 / 渲染
+async function refreshPlan() {
+  clearTimeout(planTimer)
+  if (!loaded) return
+  const request = ++planRequest, sent = snapshot(), key = fingerprint(sent)
+  try {
+    const result = await api.editPlan(name.value, rank.value, sent.edit, sent.styleId)
+    if (request !== planRequest || key !== fingerprint(snapshot())) return
+    if (!Array.isArray(result?.removed) || !Array.isArray(result?.items) || !Array.isArray(result?.subtitles?.events) || !Number.isFinite(result?.duration)) throw new Error('预览结果格式不完整')
+    previewPlan.value = result
+    planKey.value = key
+    planError.value = ''
+  } catch (error) {
+    if (request === planRequest) planError.value = error.response?.data?.error || '预览同步失败，保存并重试同步'
+  }
+}
+let bgmStarting = false
+function syncBgm() {
+  const audio = bgmAudio.value, m = edit.music
+  if (!audio || !m) return
+  if (!playing.value || !planCurrent.value || windowStale.value || outsideTrim.value || bgmError.value) { audio.pause(); return }
+  const offset = Math.round(((m.start || 0) + edit.trim.start) * 30) / 30
+  let target = Math.max(0, offset + outputTime.value)
+  if (audio.readyState >= 1) {
+    // Remotion loops the range after startFrom, rounded down to whole frames.
+    const loopDuration = Math.floor((audio.duration - offset) * 30) / 30
+    if (Number.isFinite(loopDuration)) {
+      if (loopDuration <= 0) { audio.pause(); bgmError.value = true; return }
+      target = offset + Math.max(0, outputTime.value) % loopDuration
+    }
+    if (Math.abs(audio.currentTime - target) > 0.15) audio.currentTime = target
+  }
+  audio.volume = clamp(bgmVolume(m, previewPlan.value.subtitles.events, outputTime.value, previewPlan.value.duration), 0, 1)
+  if (audio.paused && !bgmStarting) {
+    bgmStarting = true
+    audio.play().catch(error => { if (error.name !== 'AbortError') bgmError.value = true }).finally(() => { bgmStarting = false })
+  }
+}
+watch(playing, () => syncBgm())
+watch(() => edit.music?.track, () => { bgmError.value = false })
+async function restoreRecovery(state) {
+  if (!state?.edit?.trim || !state.edit.subtitles || !Array.isArray(state.edit.items)) return ElMessage.warning('这份恢复记录格式不完整')
+  recordHistory()
+  apply(state.edit)
+  styleId.value = state.styleId || null
+  restoredAi = !!state.restoredAi
+  selected.value = null
+  pickVideo()
+  refreshSpeech()
+  await nextTick()
+  recordHistory()
+  refreshPlan()
+  ElMessage.info('已载入，检查内容后保存；可用撤销回到刚才的编辑')
+}
+async function loadLatest() {
+  if (!(await recoveryPanel.value?.preserve())) return
+  await load()
+  await recoveryPanel.value?.refresh()
+}
+async function renderPartial() {
+  if (!planCurrent.value) return ElMessage.info('请等待预览时间同步')
+  const cb = edit.callback?.enabled !== false && edit.callback?.mode === 'clip' ? Math.max(0, edit.callback.end - edit.callback.start) : 0
+  const duration = previewPlan.value.duration + cb
+  const start = clamp(outputTime.value + cb - 2, 0, Math.max(0, duration - 1))
+  await render(480, {previewStart: round(start), previewEnd: round(Math.min(duration, start + 10))})
+}
 function apply(e) {
   Object.assign(edit.window, e.window || { start: info.sourceCandidateStart, end: info.sourceCandidateEnd })
   info.clipLen = edit.window.end - edit.window.start
   edit.trim.start = e.trim.start
   edit.trim.end = e.trim.end
+  edit.cuts = clone(e.cuts || [])
+  edit.remove_business = e.remove_business !== false
   edit.subtitles.enabled = e.subtitles ? e.subtitles.enabled !== false : true
   edit.subtitles.sentence_overrides = clone(e.subtitles?.sentence_overrides || [])
   styleId.value = (e.subtitles && e.subtitles.style_id) || null
@@ -980,10 +1096,17 @@ function apply(e) {
 async function load() {
   loading.value = true
   loaded = false
+  editorReady.value = false
+  planRequest++
+  previewPlan.value = null
+  planKey.value = ''
   clearTimeout(historyTimer)
   speechRequest++
   try {
     const r = await api.getEdit(name.value, rank.value)
+    revision.value = r.revision || 'none'
+    saveConflict.value = false
+    info.renderPreviews = r.renderPreviews || []
     Object.assign(info, { clipLen: r.clipLen, clip: r.clip, preview: r.preview || null, t: r.t, finals: r.finals || [],
       llm: r.llm || null, exists: !!r.exists, aiDraft: r.aiDraft || null, variants: r.variants || [], chosenVariant: r.chosenVariant || null, quality: r.quality || null, candidate: r.candidate || { start: 0, end: r.clipLen },
       sourceCandidateStart: r.sourceCandidateStart ?? r.clipStart ?? 0,
@@ -1008,11 +1131,13 @@ async function load() {
     historyVersion.value++
     speechLoading.value = false
     loaded = true
+    editorReady.value = true
+    refreshPlan()
     measure()
   }
   // 没有预览画面（审核片段没剪 / 素材范围改过）就自动剪一段 480p，不用再手点；每个片段只自动试一次，失败了回到手动按钮
   const key = `${name.value}#${rank.value}`
-  if (!videoSrc.value && !cutting.value && !autoCut.has(key)) {
+  if ((!videoSrc.value || !cleanVideo.value) && !cutting.value && !autoCut.has(key)) {
     autoCut.add(key)
     makePreview()
   }
@@ -1025,6 +1150,8 @@ const canRedo = computed(() => { historyVersion.value; return history.canRedo })
 let historyTimer = null, savedSnapshot = '', historyRestoring = false
 function stateFromEdit(source, style, restored = false) {
   const body = { version: 1, window: clone(source.window), trim: clone(source.trim), subtitles: { enabled: source.subtitles.enabled }, items: clone(source.items) }
+  if (source.cuts?.length) body.cuts = clone(source.cuts)
+  if (source.remove_business === false) body.remove_business = false
   if (source.subtitles.sentence_overrides?.length) body.subtitles.sentence_overrides = clone(source.subtitles.sentence_overrides)
   if (source.music?.track) body.music = clone(source.music)
   if (source.callback) body.callback = clone(source.callback)
@@ -1044,6 +1171,8 @@ watch([edit, styleId, generatedBy, aiNote], () => {
   dirty.value = fingerprint(snapshot()) !== savedSnapshot
   clearTimeout(historyTimer)
   historyTimer = setTimeout(recordHistory, 300)
+  clearTimeout(planTimer)
+  planTimer = setTimeout(refreshPlan, 450)
 }, { deep: true })
 async function stepHistory(direction) {
   if (saving.value || drafting.value || cutting.value) return
@@ -1063,6 +1192,7 @@ async function stepHistory(direction) {
   dirty.value = fingerprint(snapshot()) !== savedSnapshot
   historyRestoring = false
   historyVersion.value++
+  refreshPlan()
   if (previousWindow !== JSON.stringify(edit.window)) refreshSpeech()
 }
 
@@ -1076,7 +1206,9 @@ async function save(quiet) {
   try {
     const sent = snapshot()
     const sentStyle = edit.subtitles.enabled ? sent.styleId : null
-    const r = await api.saveEdit(name.value, rank.value, sent.edit, sentStyle, sent.restoredAi)
+    const r = await api.saveEdit(name.value, rank.value, sent.edit, sentStyle, sent.restoredAi, revision.value)
+    revision.value = r.revision || revision.value
+    saveConflict.value = false
     warnings.value = r.warnings || []
     info.exists = true
     if (fingerprint(snapshot()) === fingerprint(sent)) {
@@ -1096,8 +1228,15 @@ async function save(quiet) {
       ElMessage.info('已保存提交时的版本，之后的修改仍保留在编辑器中，请再次保存')
     }
     recordHistory()
+    await nextTick()
+    recoveryPanel.value?.persist()
+    recoveryPanel.value?.refresh()
+    refreshPlan()
     if (!quiet && !dirty.value) ElMessage[warnings.value.length ? 'warning' : 'success'](warnings.value.length ? `已保存，有 ${warnings.value.length} 条提醒` : '已保存')
     return !dirty.value
+  } catch (error) {
+    if (error.response?.status === 409) saveConflict.value = true
+    return false
   } finally {
     saving.value = false
   }
@@ -1113,12 +1252,13 @@ async function restoreAi() {
   dirty.value = true
 }
 
-async function render(height) {
-  if (dirty.value || height >= 1080) { if (!(await save(true))) return }
-  const j = await api.submitJob('RENDER', name.value, { rank: rank.value, height })
+async function render(height, range = null) {
+  if (rendering.value) return
+  if (dirty.value || !info.exists || height >= 1080) { if (!(await save(true))) return }
+  const j = await api.submitJob('RENDER', name.value, { rank: rank.value, height, ...(range || {}) })
   renderJob.value = j.id
   rendering.value = true
-  ElMessage.success(`已提交渲染（${height}p），完成后会出现在右下“成片”里`)
+  ElMessage.success(range ? '已提交局部试渲染，完成后自动打开' : `已提交渲染（${height}p），完成后会出现在右下“成片”里`)
   try {
     for (;;) {
       await new Promise((r) => setTimeout(r, 4000))
@@ -1127,6 +1267,8 @@ async function render(height) {
         const r = await api.getEdit(name.value, rank.value)
         info.finals = r.finals || []
         info.quality = r.quality || null
+        info.renderPreviews = r.renderPreviews || []
+        if (range && info.renderPreviews.length) partialFile.value = info.renderPreviews[0].file
         ElMessage.success('渲染完成')
         break
       }
@@ -1272,6 +1414,7 @@ async function submitBili(dryRun) {
       if (!dryRun) {
         const d = await api.biliInfo(name.value, rank.value)
         bili.last = d.last || null
+        if (!d.last?.bound) bili.result = `已提交到 B站${d.last?.bvid ? '（' + d.last.bvid + '）' : ''}，本地 BV 尚未绑定。${d.last?.bind_error || '请在创作中心核对后手动绑定'}。无需重新上传。`
         loadPublish()                    // 脚本已自动绑定 BV 号，刷新下面的绑定状态
         pack.value = { ...pack.value, bili_last: d.last ? `${d.last.at_text} ${d.last.mode_text}${d.last.bvid ? ' ' + d.last.bvid : ''}` : '' }
       }
@@ -1343,7 +1486,10 @@ async function runDraft() {
 // 选画面：素材范围 = 审核片段时用审核片段，否则用按素材范围剪好的预览；都没有就保留当前画面（提示需要重新剪）
 function pickVideo() {
   const w = { start: edit.window.start, end: edit.window.end }
-  if (sameAsCandidate.value && info.clip) {
+  if (info.preview === previewName(w).replace('.mp4', '_clean.mp4')) {
+    videoSrc.value = api.editPreviewUrl(name.value, info.preview)
+    info.videoWindow = w
+  } else if (sameAsCandidate.value && info.clip) {
     videoSrc.value = api.clipUrl(name.value, info.clip)
     info.videoWindow = w
   } else if (info.preview && info.preview === previewName(w)) {
@@ -1363,6 +1509,7 @@ function setWindow(start, end) {
   const len = end - start
   if (len < 5 || len > 500) return ElMessage.warning('素材范围要在 5 秒到 500 秒之间')
   const d = Math.round((edit.window.start - start) * 10) / 10
+  edit.cuts = edit.cuts.map(q => ({start: clamp(round(q.start + d), 0, len), end: clamp(round(q.end + d), 0, len)})).filter(q => q.end > q.start)
   const outside = []
   for (const it of edit.items) it.start = round(it.start + d)
   edit.items.splice(0, edit.items.length, ...edit.items.filter((it) => (it.start >= 0 && it.start < len) || !outside.push(it)))
@@ -1388,15 +1535,13 @@ async function makePreview() {
   cutting.value = true
   try {
     if (dirty.value || !info.exists) { if (!(await save(true))) return }
-    if (sameAsCandidate.value) {
-      await load()
-      if (!info.clip) await cutClip()
-      return
-    }
-    const j = await api.submitJob('EDIT_PREVIEW', name.value, { rank: rank.value, start: edit.window.start, end: edit.window.end })
+    const j = await api.submitJob('EDIT_PREVIEW', name.value, { rank: rank.value, start: edit.window.start, end: edit.window.end, clean: true })
     const s = await waitJob(j.id, 3000)
     if (s.status !== 'SUCCESS') return ElMessage.error(`预览没剪出来：${s.summary || s.status}（详情见任务页）`)
-    await load()
+    const result = await api.getEdit(name.value, rank.value)
+    info.preview = result.preview || null
+    pickVideo()
+    refreshPlan()
   } finally {
     cutting.value = false
   }
@@ -1423,7 +1568,7 @@ function back() {
 }
 
 function onKey(e) {
-  if (finalFile.value || gallery.value || draftDlg.show || saving.value || drafting.value || cutting.value) return
+  if (finalFile.value || partialFile.value || gallery.value || draftDlg.show || saving.value || drafting.value || cutting.value) return
   if (e.target?.closest?.('[role="dialog"]')) return
   const textTarget = e.target?.closest?.('input, textarea, select, [contenteditable="true"], [role="textbox"]')
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); return }
@@ -1461,6 +1606,9 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   clearTimeout(historyTimer)
+  clearTimeout(planTimer)
+  planRequest++
+  bgmAudio.value?.pause()
   speechRequest++
   cancelAnimationFrame(raf)
   window.removeEventListener('keydown', onKey)
@@ -1491,6 +1639,7 @@ onBeforeUnmount(() => {
 .stage { position: relative; width: 100%; max-width: max(480px, calc((100vh - 420px) * 16 / 9)); margin: 0 auto; aspect-ratio: 16 / 9; background: #000; overflow: hidden; border-radius: 6px; user-select: none; }
 .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .overlay { position: absolute; inset: 0; }
+.subtitle-layer { pointer-events: none; }
 .ov { position: absolute; cursor: move; white-space: pre; line-height: 1.15; font-weight: 900; text-align: center; }
 .ov.sel { outline: 2px dashed rgba(64, 158, 255, 0.9); outline-offset: 4px; }
 .cross { position: absolute; width: 28px; height: 28px; margin: -14px 0 0 -14px; border: 2px solid #409eff; border-radius: 50%; cursor: move; box-shadow: 0 0 0 2px rgba(255,255,255,0.8); }

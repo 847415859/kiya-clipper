@@ -384,6 +384,7 @@ public class JobService {
         }
         String cand = paths.sessionDir(session).resolve("candidates.json").toString();
         List<String> a = new ArrayList<>(List.of(cand, "--rank", String.valueOf(rank)));
+        if (Boolean.TRUE.equals(p.get("clean"))) a.add("--clean");
         if (p.get("start") != null && p.get("end") != null) {
             double s0 = numParam(p, "start");
             double e0 = numParam(p, "end");
@@ -418,7 +419,15 @@ public class JobService {
             throw ApiException.badRequest("分辨率只能是 360 / 480 / 720 / 1080");
         }
         String cand = paths.sessionDir(session).resolve("candidates.json").toString();
-        return runner.command("render.py", List.of(cand, "--rank", String.valueOf(rank), "--height", String.valueOf(height)));
+        List<String> args = new ArrayList<>(List.of(cand, "--rank", String.valueOf(rank), "--height", String.valueOf(height)));
+        if (p.containsKey("previewStart") || p.containsKey("previewEnd")) {
+            double start = numParam(p, "previewStart"), end = numParam(p, "previewEnd");
+            if (!Double.isFinite(start) || !Double.isFinite(end) || start < 0 || end <= start || end - start > 30) {
+                throw ApiException.badRequest("局部试渲染须为 0–30 秒内的有效范围");
+            }
+            args.addAll(List.of("--range-start", String.valueOf(start), "--range-end", String.valueOf(end)));
+        }
+        return runner.command("render.py", args);
     }
 
     /** 一键发布到 B站：mode = hold（先放着，默认）/ now / timed（要 at）/ private；dryRun 只预演不上传。 */

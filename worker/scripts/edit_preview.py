@@ -42,6 +42,7 @@ def main() -> int:
     ap.add_argument("--start", type=float, help="素材范围起点（整场秒数）")
     ap.add_argument("--end", type=float)
     ap.add_argument("--height", type=int, default=480)
+    ap.add_argument("--clean", action="store_true", help="生成不烧录字幕的编辑素材")
     ap.add_argument("--config", default=None, help="主播配置；不填时按 candidates.json 所在目录推导主播")
     args = ap.parse_args()
 
@@ -74,6 +75,8 @@ def main() -> int:
     out_dir = sess / "edit_preview"
     out_dir.mkdir(exist_ok=True)
     dst = out_dir / preview_name(args.rank, a, b)
+    if args.clean:
+        dst = dst.with_name(dst.stem + "_clean.mp4")
     print(f"#{args.rank} 素材范围 {hhmmss(a)}–{hhmmss(b)}（{b - a:.0f} 秒；候选片段 {hhmmss(cand['clip_start'])}–{hhmmss(cand['clip_end'])}）")
     if dst.exists():
         print(f"预览已存在：{dst.name}")
@@ -83,11 +86,14 @@ def main() -> int:
         print("找不到对应的录像文件（可能已同步到 OSS 并从本地删除，先拉回来）", file=sys.stderr)
         return 1
     covered = sum(p[2] - p[1] for p in parts)
+    if args.clean and abs(covered - (b - a)) > 0.1:
+        print(f"素材缺失：录像只覆盖 {covered:.2f}/{b - a:.2f} 秒，无法生成时间准确的编辑预览", file=sys.stderr)
+        return 1
     if covered < (b - a) - 1:
         print(f"注意：录像只覆盖了 {covered:.0f}/{b - a:.0f} 秒（可能断流或分段缺失），预览会比素材范围短，时间会对不上")
     ass = None
     tr = load_transcript(sess / "transcript.json")
-    if tr:
+    if tr and not args.clean:
         try:
             sub_cfg = load_config()
             _, style = get_style(None, sub_cfg)
@@ -105,7 +111,7 @@ def main() -> int:
     cut_one(parts, tmp, False, args.height, ass)
     tmp.replace(dst)
     for old in out_dir.glob(f"{args.rank:02d}_*"):          # 同一序号只留最新的预览
-        if old.stem != dst.stem and old.suffix in (".mp4", ".ass"):
+        if old.stem != dst.stem and old.suffix in (".mp4", ".ass") and old.stem.endswith("_clean") == args.clean:
             old.unlink(missing_ok=True)
     print(f"预览已生成：{dst.name}（{time.time() - t0:.0f} 秒）")
     return 0

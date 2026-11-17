@@ -199,3 +199,17 @@ sudo podman run -d --name brec --restart=always -p 127.0.0.1:2356:2356 \
 ```
 
 Podman 的 `--restart=always` 在服务器重启后不一定生效，需要用 `podman generate systemd` 生成 systemd 服务。另外 `ffmpeg-free` 和 `rclone` 是否在默认软件源里，以 `dnf` 实际结果为准。这些都比 Ubuntu 麻烦，所以更推荐第 1 步换系统。
+
+
+## 投稿成功后本地 BV 绑定失败的恢复
+
+若任务日志在 `bind_bvid` 处出现 `decisions_path() takes 0 positional arguments but 1 was given`，这是发布脚本导入了错误的同名路径函数。出现该调用说明 biliup 已返回成功且识别到 BV 号；先在创作中心核对稿件，不要点“重新投稿”。修复后的发布脚本直接使用按主播取路径的 `clipper.streamer.decisions_path`，并在本地绑定前原子保存投稿结果；绑定失败会提示手动补记，仍保留成功记录防止重复上传。
+
+同步修复后的 `worker/scripts/publish_bili.py` 后，从创作中心复制这条稿件的真实 BV 号，仅补记本地结果和精排记忆：
+
+```bash
+cd /opt/kiya-clipper/worker
+.venv/bin/python scripts/publish_bili.py output/20261111-2126/candidates.json --rank 6 --bind-bvid BVxxxxxxxxxx
+```
+
+`BVxxxxxxxxxx` 必须替换为已核对的真实 BV 号；若采用新目录结构，候选路径改为 `output/<主播>/20261111-2126/candidates.json`。此命令不运行 biliup，不重新上传；若已有另一条成功投稿记录则拒绝覆盖。脚本每次任务重新加载，更新该 Python 文件不需要重启录播姬。

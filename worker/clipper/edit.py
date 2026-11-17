@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+import math
 import uuid
 from .speech_edit import validate_overrides
 
@@ -218,6 +219,25 @@ def validate_edit(raw: dict, clip_len: float) -> dict:
     out_items.sort(key=lambda i: i["start"])
     out = {"version": 1, "trim": {"start": start, "end": end},
            "subtitles": {"enabled": bool(subs.get("enabled", True))}, "items": out_items}
+    from .timeline import merge_cuts
+    cuts = raw.get("cuts", [])
+    if not isinstance(cuts, list) or len(cuts) > 100:
+        raise EditError("片中删除最多 100 段")
+    for q in cuts:
+        if not isinstance(q, dict):
+            raise EditError("片中删除格式不对")
+        a, b = q.get("start"), q.get("end")
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in (a, b)) or not 0 <= a < b <= clip_len:
+            raise EditError("片中删除须在素材范围内，终点大于起点")
+    cuts = merge_cuts(cuts, 0, clip_len)
+    if end - start - sum(max(0, min(end, q["end"]) - max(start, q["start"])) for q in cuts) < 1:
+        raise EditError("片中删除后至少保留 1 秒")
+    if cuts:
+        out["cuts"] = cuts
+    if "remove_business" in raw:
+        if not isinstance(raw["remove_business"], bool):
+            raise EditError("自动删除营业话须为布尔值")
+        out["remove_business"] = raw["remove_business"]
     if "sentence_overrides" in subs:
         try:
             corrections = validate_overrides(subs["sentence_overrides"])

@@ -89,4 +89,22 @@ class EditSpeechTests {
         assertEquals("修订", saved.path("subtitles").path("sentence_overrides").get(0).path("text").asText());
         assertTrue(saved.has("human_saved_at"));
     }
+
+    @Test void savingRejectsAStaleRevisionAndKeepsPriorVersions() throws Exception {
+        when(runner.run(eq("edit_check.py"), anyList(), any())).thenAnswer(invocation -> {
+            List<String> args = invocation.getArgument(1);
+            var edit = om.readValue(Path.of(args.get(0)).toFile(), new TypeReference<Map<String, Object>>() {});
+            return new ProcessRunner.Result(0, om.writeValueAsString(Map.of("edit", edit)));
+        });
+        var edit = Map.<String, Object>of("window", Map.of("start", 100, "end", 160), "trim", Map.of("start", 0, "end", 60),
+                "subtitles", Map.of("enabled", true), "items", List.of(), "cuts", List.of(Map.of("start", 3, "end", 5)));
+        var first = service.save("20261117-1200", 1, edit, null, false, "none");
+        String revision = (String) first.get("revision");
+        assertEquals(revision, service.get("20261117-1200", 1).get("revision"));
+        var second = service.save("20261117-1200", 1, edit, null, false, revision);
+        var rejected = assertThrows(ApiException.class, () -> service.save("20261117-1200", 1, edit, null, false, revision));
+        assertEquals(org.springframework.http.HttpStatus.CONFLICT, rejected.getStatus());
+        assertEquals(second.get("revision"), service.get("20261117-1200", 1).get("revision"));
+        assertEquals(2, ((List<?>) service.recovery("20261117-1200", 1).get("versions")).size());
+    }
 }

@@ -45,6 +45,7 @@ const Bgm = ({ music, events, duration, assetBase }) => {
       src={url(assetBase, music.file)}
       startFrom={Math.round((music.start || 0) * fps)}
       volume={(f) => bgmVolume(music, events, f / fps, duration)}
+      loopVolumeCurveBehavior="extend"
       loop
     />
   );

@@ -23,7 +23,7 @@ echo "uploading..."; printf "\\033[32m INFO\\033[0m 投稿成功 BV1ab411c7de\\n
 ALL_FLAGS = "--copyright --source --tid --title --desc --tag --limit --submit --line --cover --dtime"
 
 
-def setup(tmp_path, taboo=(), final=True, extra_cfg=""):
+def setup_case(tmp_path, taboo=(), final=True, extra_cfg=""):
     sess = tmp_path / "output" / "20261109-2014"
     (sess / "publish").mkdir(parents=True)
     (sess / "candidates.json").write_text(json.dumps({"segments": [], "candidates": [{"rank": 1, "t": 60}]}), encoding="utf-8")
@@ -39,7 +39,23 @@ def setup(tmp_path, taboo=(), final=True, extra_cfg=""):
     cfg = tmp_path / "k.yaml"
     cfg.write_text("streamer: {name: kiya}\npublish:\n  bili:\n    min_interval_sec: 600\n    submit: web\n" + extra_cfg, encoding="utf-8")
     fake = tmp_path / "biliup"
-    fake.write_text(FAKE, encoding="utf-8")
+    if os.name == "nt":
+        script = tmp_path / "fake_biliup.py"
+        script.write_text("""import os, sys
+args = sys.argv[1:]
+with open(os.environ['FAKE_LOG'], 'a', encoding='utf-8') as f:
+    f.write(' '.join(args) + '\\n')
+if args[:1] == ['-u']: args = args[2:]
+if args[1:2] == ['--help']:
+    print(os.environ['FAKE_FLAGS']); sys.exit(0)
+print('uploading...')
+print('\\x1b[32m INFO\\x1b[0m 投稿成功 BV1ab411c7de')
+sys.exit(int(os.environ.get('FAKE_EXIT', '0')))
+""", encoding="utf-8")
+        fake = fake.with_suffix(".cmd")
+        fake.write_text(f'@"{sys.executable}" "{script}" %*\n', encoding="utf-8")
+    else:
+        fake.write_text(FAKE, encoding="utf-8")
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
     cookie = tmp_path / "cookies.json"
     cookie.write_text('{"cookie_info": {}}', encoding="utf-8")
@@ -77,7 +93,7 @@ def test_resolve_dtime():
 
 
 def test_hold_uploads_with_timer_and_records_result(tmp_path):
-    sess, cfg, env = setup(tmp_path)
+    sess, cfg, env = setup_case(tmp_path)
     r = run(sess, cfg, env)
     assert r.returncode == 0, r.stdout + r.stderr
     res = last(r)
@@ -95,7 +111,7 @@ def test_hold_uploads_with_timer_and_records_result(tmp_path):
 
 
 def test_now_has_no_timer(tmp_path):
-    sess, cfg, env = setup(tmp_path)
+    sess, cfg, env = setup_case(tmp_path)
     r = run(sess, cfg, env, "--mode", "now")
     assert r.returncode == 0 and last(r)["dtime"] is None
     cmd = next(x for x in (tmp_path / "log.txt").read_text(encoding="utf-8").splitlines() if " upload " in x and "--help" not in x)
@@ -103,7 +119,7 @@ def test_now_has_no_timer(tmp_path):
 
 
 def test_refuses_taboo_duplicate_and_rate(tmp_path):
-    sess, cfg, env = setup(tmp_path, taboo=["律师函"])
+    sess, cfg, env = setup_case(tmp_path, taboo=["律师函"])
     r = run(sess, cfg, env)
     assert r.returncode == 2 and "律师函" in r.stderr and not (tmp_path / "log.txt").exists()
     r = run(sess, cfg, env, "--allow-taboo")
@@ -118,13 +134,13 @@ def test_refuses_taboo_duplicate_and_rate(tmp_path):
 
 
 def test_no_final_video_refused(tmp_path):
-    sess, cfg, env = setup(tmp_path, final=False)
+    sess, cfg, env = setup_case(tmp_path, final=False)
     r = run(sess, cfg, env)
     assert r.returncode == 2 and "渲染" in r.stderr
 
 
 def test_unknown_flag_stops_before_upload(tmp_path):
-    sess, cfg, env = setup(tmp_path)
+    sess, cfg, env = setup_case(tmp_path)
     env["FAKE_FLAGS"] = "--title --desc"
     r = run(sess, cfg, env)
     assert r.returncode == 2 and "不认识" in r.stderr
@@ -132,10 +148,10 @@ def test_unknown_flag_stops_before_upload(tmp_path):
 
 
 def test_private_needs_verified_args(tmp_path):
-    sess, cfg, env = setup(tmp_path)
+    sess, cfg, env = setup_case(tmp_path)
     r = run(sess, cfg, env, "--mode", "private")
     assert r.returncode == 2 and "private_args" in r.stderr
-    sess, cfg, env = setup(tmp_path / "b", extra_cfg="    private_args: ['--is-only-self']\n")
+    sess, cfg, env = setup_case(tmp_path / "b", extra_cfg="    private_args: ['--is-only-self']\n")
     env["FAKE_FLAGS"] = ALL_FLAGS + " --is-only-self"
     r = run(sess, cfg, env, "--mode", "private")
     assert r.returncode == 0, r.stderr
@@ -143,7 +159,7 @@ def test_private_needs_verified_args(tmp_path):
 
 
 def test_upload_failure_recorded_and_not_blocking_retry_record(tmp_path):
-    sess, cfg, env = setup(tmp_path)
+    sess, cfg, env = setup_case(tmp_path)
     env["FAKE_EXIT"] = "1"
     r = run(sess, cfg, env)
     assert r.returncode == 1 and last(r)["status"] == "failed"
@@ -151,7 +167,7 @@ def test_upload_failure_recorded_and_not_blocking_retry_record(tmp_path):
 
 
 def test_dry_run_and_status(tmp_path):
-    sess, cfg, env = setup(tmp_path)
+    sess, cfg, env = setup_case(tmp_path)
     r = run(sess, cfg, env, "--dry-run")
     assert r.returncode == 0 and last(r)["status"] == "dry_run" and "<cookie>" in last(r)["command"]
     assert str(tmp_path / "cookies.json") not in r.stdout and not (sess / "publish" / "01.bili.json").exists()
@@ -181,10 +197,58 @@ def test_bind_replaces_old_binding_and_keeps_stats(tmp_path):
 
 
 def test_find_video_by_height(tmp_path):
-    sess, cfg, env = setup(tmp_path)
+    sess, cfg, env = setup_case(tmp_path)
     assert pb.find_video(sess, 1, 720).name.endswith("_720p.mp4")        # 默认 720：不为了清晰度多传一倍的体积
     assert pb.find_video(sess, 1, 1080).name.endswith("_1080p.mp4")
     assert pb.find_video(sess, 1, 500).name.endswith("_480p.mp4")
     (sess / "final" / "01_00-01-00_480p.mp4").unlink()
     (sess / "final" / "01_00-01-00_720p.mp4").unlink()
     assert pb.find_video(sess, 1, 720).name.endswith("_1080p.mp4")       # 没有不超过的，用最接近的更高一份
+
+
+def test_default_binding_path_uses_session_streamer_without_env_override(tmp_path, monkeypatch):
+    from clipper import streamer
+    monkeypatch.setattr(streamer, "REPO", tmp_path)
+    monkeypatch.delenv("KIYA_MEMORY_DECISIONS", raising=False)
+    monkeypatch.setenv("KIYA_STREAMER", "wrong")
+    sess = tmp_path / "worker/output/miko/20261117-1200"
+    sess.mkdir(parents=True)
+    pb.bind_bvid(sess, 1, "BV1ab411c7de")
+    path = sess.parent / "memory_decisions.json"
+    assert json.loads(path.read_text(encoding="utf-8"))["published"]["BV1ab411c7de"]["rank"] == 1
+    assert not (tmp_path / "worker/output/wrong/memory_decisions.json").exists()
+
+
+def test_binding_type_error_does_not_lose_successful_submission(tmp_path, monkeypatch):
+    import argparse
+    sess, cfg, env = setup_case(tmp_path)
+    for key, value in env.items():
+        if key.startswith("KIYA_"):
+            monkeypatch.setenv(key, value)
+    monkeypatch.setattr(pb, "check_flags", lambda *a: None)
+    monkeypatch.setattr(pb, "run_biliup", lambda *a: ("投稿成功 BV1ab411c7de", 0))
+    receipt = sess / "publish/01.bili.json"
+    def broken(*a):
+        assert json.loads(receipt.read_text(encoding="utf-8"))["bvid"] == "BV1ab411c7de"
+        raise TypeError("binding interface mismatch")
+    monkeypatch.setattr(pb, "bind_bvid", broken)
+    args = argparse.Namespace(candidates=str(sess / "candidates.json"), rank=1, config=str(cfg), mode="now", at=None,
+                              again=False, dry_run=False, allow_taboo=False)
+    result = pb.run(args)
+    assert result["status"] == "ok" and result["bound"] is False
+    assert result["bind_error"] == "binding interface mismatch"
+    stored = json.loads(receipt.read_text(encoding="utf-8"))
+    assert stored["status"] == "ok" and stored["bvid"] == "BV1ab411c7de"
+    import pytest
+    with pytest.raises(pb.Refuse, match="已经"):
+        pb.run(args)
+
+
+def test_repair_binding_records_receipt_and_never_uploads(tmp_path, monkeypatch):
+    sess, cfg, env = setup_case(tmp_path)
+    monkeypatch.setenv("KIYA_MEMORY_DECISIONS", env["KIYA_MEMORY_DECISIONS"])
+    monkeypatch.setattr(pb, "run_biliup", lambda *a: (_ for _ in ()).throw(AssertionError("must not upload")))
+    result = pb.repair_binding(sess / "candidates.json", 1, "BV1ab411c7de")
+    assert result["status"] == "ok" and result["bound"] and result["recovered"]
+    assert json.loads((sess / "publish/01.bili.json").read_text(encoding="utf-8"))["bvid"] == "BV1ab411c7de"
+    assert json.loads(Path(env["KIYA_MEMORY_DECISIONS"]).read_text(encoding="utf-8"))["published"]["BV1ab411c7de"]["rank"] == 1

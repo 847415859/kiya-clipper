@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .boiler import business_cuts
+from .timeline import edit_cuts
 from .edit import density_problems, missing_assets, validate_edit
 from .editdiff import diff_edit
 from .speech_edit import apply_overrides
@@ -182,14 +183,15 @@ def _black_frames(report: QualityReport, media: Path) -> None:
 def _expected_window(session_dir: Path, rank: int, candidate: dict[str, Any] | None, edit: dict[str, Any] | None) -> tuple[float, float, float | None]:
     windows = _load(session_dir / "clips" / "windows.json") or {}
     w = windows.get(f"{rank:02d}") or windows.get(str(rank)) or {}
-    if edit and isinstance(edit.get("window"), dict):
-        a, b = float(edit["window"]["start"]), float(edit["window"]["end"])
+    if edit and (edit.get("window") or candidate):
+        window = edit.get("window") or {"start": candidate["clip_start"], "end": candidate["clip_end"]}
+        a, b = float(window["start"]), float(window["end"])
         trim = edit.get("trim") or {}
         start = a + float(trim.get("start", 0))
         end = a + float(trim.get("end", b - a))
         expected = max(0.0, end - start)
         transcript = _load(session_dir / "transcript.json") or {}
-        removed = business_cuts(transcript.get("sentences") or [], start, end)
+        removed = edit_cuts(edit, transcript.get("sentences") or [], a, start, end)
         expected -= sum(float(q["end"]) - float(q["start"]) for q in removed)
         return start, end, max(0.0, expected)
     if w:
@@ -215,6 +217,9 @@ def _subtitle_check(report: QualityReport, session_dir: Path, rank: int, edit: d
         report.check("subtitles", status, events=len(events), invalid=len(bad), props=str(props))
         if bad:
             report.issue("subtitle_time_invalid", "error", "字幕时间超出成片范围或无效", count=len(bad))
+        crossing = [e for e in events if e.get("manual") and e.get("cut_adjusted")]
+        if crossing:
+            report.issue("manual_caption_splice", "warning", "校对字幕跨越删除接缝，请核对文字与剩余语音", count=len(crossing))
         _subtitle_readability(report, events, data["subtitles"].get("style") or {}, data.get("width"), data.get("height"))
         return
     trans = _load(session_dir / "transcript.json")

@@ -40,7 +40,7 @@ public class EditController {
         return edits.get(name, rank);
     }
 
-    public record SaveReq(Map<String, Object> edit, Long styleId, Boolean restoredAi) {}
+    public record SaveReq(Map<String, Object> edit, Long styleId, Boolean restoredAi, String expectedRevision) {}
 
     @GetMapping("/api/sessions/{name}/edits/{rank}/speech")
     public Map<String, Object> speech(@PathVariable String name, @PathVariable int rank,
@@ -50,7 +50,32 @@ public class EditController {
 
     @PutMapping("/api/sessions/{name}/edits/{rank}")
     public Map<String, Object> save(@PathVariable String name, @PathVariable int rank, @RequestBody SaveReq req) {
-        return edits.save(name, rank, req.edit(), req.styleId(), Boolean.TRUE.equals(req.restoredAi()));
+        return edits.save(name, rank, req.edit(), req.styleId(), Boolean.TRUE.equals(req.restoredAi()), req.expectedRevision());
+    }
+
+    @PostMapping("/api/sessions/{name}/edits/{rank}/preview-plan")
+    public Map<String, Object> plan(@PathVariable String name, @PathVariable int rank, @RequestBody SaveReq req) {
+        if (req.edit() == null) throw ApiException.badRequest("缺少剪辑脚本");
+        return edits.previewPlan(name, rank, req.edit(), req.styleId());
+    }
+
+    @GetMapping("/api/sessions/{name}/edits/{rank}/recovery")
+    public Map<String, Object> recovery(@PathVariable String name, @PathVariable int rank) {
+        return edits.recovery(name, rank);
+    }
+
+    @PutMapping("/api/sessions/{name}/edits/{rank}/drafts/{client}")
+    public Map<String, Object> draft(@PathVariable String name, @PathVariable int rank, @PathVariable String client,
+                                     @RequestBody Map<String, Object> value) {
+        return edits.draft(name, rank, client, value);
+    }
+
+    @GetMapping("/api/sessions/{name}/render-previews/{file}")
+    public ResponseEntity<Resource> renderPreview(@PathVariable String name, @PathVariable String file) {
+        Path p = edits.renderPreviewFile(name, file);
+        if (!Files.isRegularFile(p)) throw ApiException.notFound("试渲染不存在");
+        return ResponseEntity.ok().contentType(MediaType.parseMediaType("video/mp4"))
+                .cacheControl(CacheControl.noCache()).body(new FileSystemResource(p));
     }
 
     public record VariantReq(String key) {}

@@ -1,6 +1,20 @@
 export const clone = value => JSON.parse(JSON.stringify(value))
 export const sentenceKey = s => `${Number(s.t0).toFixed(2)}:${Number(s.t1).toFixed(2)}`
 
+export function mergeCuts(cuts, start, end) {
+  const out = []
+  for (const q of [...cuts].sort((a, b) => a.start - b.start)) {
+    const a = Math.max(start, q.start), b = Math.min(end, q.end)
+    if (b <= a) continue
+    if (out.length && a <= out.at(-1).end) out.at(-1).end = Math.max(b, out.at(-1).end)
+    else out.push({start: a, end: b})
+  }
+  return out
+}
+export function compactTime(t, cuts) {
+  return t - cuts.reduce((n, q) => n + Math.max(0, Math.min(t, q.end) - q.start), 0)
+}
+
 export function sentencePosition(s, window) {
   return { start: s.t0 - window.start, end: s.t1 - window.start,
     complete: s.t0 >= window.start && s.t1 <= window.end }
@@ -56,6 +70,8 @@ export function compareEdits(ai, current, candidateStart = 0) {
     if (JSON.stringify(ai[key] || null) !== JSON.stringify(current[key] || null)) settings.push(name)
   }
   if (ai.subtitles?.enabled !== current.subtitles?.enabled) settings.push('字幕开关')
+  if (JSON.stringify(ai.cuts || []) !== JSON.stringify(current.cuts || [])) settings.push('片中删除')
+  if ((ai.remove_business !== false) !== (current.remove_business !== false)) settings.push('自动删除营业话')
   return { changes, settings, trim: {
     before: [origin(ai) + ai.trim.start, origin(ai) + ai.trim.end],
     after: [origin(current) + current.trim.start, origin(current) + current.trim.end]

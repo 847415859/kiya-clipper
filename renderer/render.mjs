@@ -69,6 +69,14 @@ async function getBundle() {
 
 async function main() {
   const [assetDir, propsFile, output] = process.argv.slice(2);
+  const frameIndex = process.argv.indexOf('--frames');
+  let frameRange;
+  if (frameIndex >= 0) {
+    const value = process.argv[frameIndex + 1] || '';
+    if (!/^\d+:\d+$/.test(value)) throw new Error('Invalid --frames range');
+    frameRange = value.split(':').map(Number);
+    if (frameRange[1] < frameRange[0]) throw new Error('Invalid --frames order');
+  }
   if (!assetDir || !propsFile || !output) {
     console.error('用法：node render.mjs <素材目录> <props.json> <输出.mp4>');
     process.exit(2);
@@ -81,11 +89,12 @@ async function main() {
     if (!browserExecutable) await ensureBrowser();
     const serveUrl = await getBundle();
     const composition = await selectComposition({ serveUrl, id: 'Clip', inputProps: props, browserExecutable });
-    const total = composition.durationInFrames;
+    const total = frameRange ? frameRange[1] - frameRange[0] + 1 : composition.durationInFrames;
     console.log(`开始渲染：${composition.width}x${composition.height}，${total} 帧（${(total / composition.fps).toFixed(1)} 秒）`);
     let last = -1;
     const t0 = Date.now();
     await renderMedia({
+      ...(frameRange ? {frameRange} : {}),
       composition, serveUrl, inputProps: props, codec: 'h264', outputLocation: output,
       browserExecutable,
       concurrency: Number(process.env.REMOTION_CONCURRENCY || 1),

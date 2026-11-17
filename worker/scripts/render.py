@@ -15,6 +15,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import math
 import json
 import os
 import re
@@ -33,6 +35,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from clipper import music as music_lib  # noqa: E402
 from clipper.boiler import business_cuts, compact_time, keep_ranges  # noqa: E402
+from clipper.timeline import edit_cuts, compact_events as map_events  # noqa: E402
+from clipper.render_plan import plan  # noqa: E402
 from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.speech_edit import apply_overrides  # noqa: E402
@@ -119,23 +123,7 @@ def subtitle_events(sentences, start, end, style, corrections, sentence_override
 
 
 def compact_events(events: list[dict], origin: float, removed: list[dict]) -> list[dict]:
-    """营业话从源视频删除后，把字幕事件和逐字时间映射到压缩后的时间轴。"""
-    out = []
-    for event in events:
-        ea, eb = origin + float(event["t0"]), origin + float(event["t1"])
-        if any(ea < float(q["end"]) and eb > float(q["start"]) for q in removed):
-            continue
-        e = dict(event)
-        e["t0"] = round(compact_time(ea, removed) - compact_time(origin, removed), 3)
-        e["t1"] = round(compact_time(eb, removed) - compact_time(origin, removed), 3)
-        e["words"] = [[round(compact_time(origin + float(a), removed) - compact_time(origin, removed), 3),
-                        round(compact_time(origin + float(b), removed) - compact_time(origin, removed), 3), w]
-                       for a, b, w in event.get("words", [])
-                       if not any(origin + float(a) < float(q["end"]) and origin + float(b) > float(q["start"])
-                                  for q in removed)]
-        if e["t1"] > e["t0"] and e.get("words"):
-            out.append(e)
-    return out
+    return map_events(events, origin, removed)
 
 
 def main() -> int:
@@ -145,7 +133,14 @@ def main() -> int:
     ap.add_argument("--height", type=int, default=720, choices=[360, 480, 720, 1080])
     ap.add_argument("--edit", help="剪辑脚本，默认 output/<场次>/edits/<序号>.json")
     ap.add_argument("--config", default=None, help="主播配置；不填时按 candidates.json 所在目录推导主播")
+    ap.add_argument("--range-start", type=float, help="局部试渲染起点（成片秒数，含前情呼应）")
+    ap.add_argument("--range-end", type=float)
     args = ap.parse_args()
+    partial = args.range_start is not None or args.range_end is not None
+    if partial and (args.range_start is None or args.range_end is None or
+                    not all(math.isfinite(v) for v in (args.range_start, args.range_end)) or
+                    not 0 <= args.range_start < args.range_end or args.range_end - args.range_start > 30):
+        ap.error("局部试渲染须提供起止时间，长度不超过 30 秒")
     load_env()
 
     cpath = Path(args.candidates)
@@ -167,15 +162,18 @@ def main() -> int:
     t_start = ws + edit["trim"]["start"]
     t_end = ws + edit["trim"]["end"]
     tr = load_transcript(sess_dir / "transcript.json")
-    removed = business_cuts(tr["sentences"], t_start, t_end) if tr else []
+    removed = edit_cuts(edit, tr["sentences"] if tr else [], ws, t_start, t_end)
     kept = keep_ranges(t_start, t_end, removed)
     dur = sum(b - a for a, b in kept)
+    if dur < 1:
+        print("删除后不足 1 秒，请减少片中删除或关闭自动删除营业话", file=sys.stderr)
+        return 1
     print(f"#{args.rank} {hhmmss(t_start)}–{hhmmss(t_end)}（原始 {t_end - t_start:.1f} 秒，成片 {dur:.1f} 秒），"
-          f"效果 {len(edit['items'])} 个，{args.height}p" + (f"，移除 {len(removed)} 段营业话" if removed else ""))
+          f"效果 {len(edit['items'])} 个，{args.height}p" + (f"，移除 {len(removed)} 段内容" if removed else ""))
 
     # 1. 干净的源视频（按裁剪范围和分辨率缓存）
     work = sess_dir / "render"
-    rm_tag = "_rm" + str(int(round(sum(q["end"] - q["start"] for q in removed) * 100))) if removed else ""
+    rm_tag = "_v2_" + hashlib.sha256(json.dumps([t_start, t_end, removed], sort_keys=True).encode()).hexdigest()[:16]
     src = work / f"src_{args.rank:02d}_{t_start:.1f}_{t_end:.1f}{rm_tag}_{args.height}.mp4"
     if not src.exists():
         parts = [part for a, b in kept for part in pieces(data["segments"], a, b)]
@@ -206,17 +204,17 @@ def main() -> int:
         _, unmatched = apply_overrides(tr["sentences"], overrides)
         if unmatched:
             print(f"提醒：{len(unmatched)} 条字幕修订的原文或时间已变化，未套用；请回编辑器重新校对")
-        events = subtitle_events(tr["sentences"], t_start, t_end, style, corrections, overrides)
-        if removed:
-            events = compact_events(events, t_start, removed)
-        subs = {"enabled": True, "style": style, "events": events, "keywords": keywords}
+        subs = plan(edit, tr["sentences"], ws, style, corrections, keywords)["subtitles"]
+        events = subs["events"]
         print(f"字幕 {len(events)} 条（字体 {style['font']}）")
     elif edit["subtitles"]["enabled"]:
         print("这场还没有转写，成片没有字幕")
 
     # 3. 素材目录 + props
-    job = work / f"job_{args.rank:02d}"
+    job = work / (f"job_{args.rank:02d}" + ("_preview" if partial else ""))
     if job.exists():
+        if job.resolve().parent != work.resolve():
+            raise ValueError("渲染目录超出工作目录")
         shutil.rmtree(job)
     job.mkdir(parents=True)
     link(src, job / "source.mp4")
@@ -224,8 +222,10 @@ def main() -> int:
     source_origin = compact_time(t_start, removed)
     items = []
     for it in edit["items"]:
-        old_start = t_start + float(it["start"] - shift)
-        old_end = old_start + float(it["duration"])
+        old_start = max(t_start, ws + float(it["start"]))
+        old_end = min(t_end, ws + float(it["start"]) + float(it["duration"]))
+        if old_end <= old_start:
+            continue
         new_start = max(0.0, compact_time(old_start, removed) - source_origin)
         new_end = min(dur, compact_time(old_end, removed) - source_origin)
         it = dict(it, start=round(new_start, 3), duration=round(new_end - new_start, 3))
@@ -291,17 +291,32 @@ def main() -> int:
              "subtitles": subs, "items": items, "fonts": fonts, "music": bgm, "callback": callback}
     (job / "props.json").write_text(json.dumps(props, ensure_ascii=False, indent=1), encoding="utf-8")
 
-    final_dir = sess_dir / "final"
+    frame_args = []
+    if partial:
+        first = int(math.floor(args.range_start * FPS + 1e-6))
+        last = min(int(math.ceil(args.range_end * FPS - 1e-6)), max(1, int(math.floor(props["duration"] * FPS + 0.5)))) - 1
+        if first > last:
+            print("试渲染起点超出成片时长", file=sys.stderr)
+            return 1
+        frame_args = ["--frames", f"{first}:{last}"]
+    final_dir = sess_dir / ("render_previews" if partial else "final")
     final_dir.mkdir(exist_ok=True)
     out = final_dir / f"{args.rank:02d}_{hhmmss(cand['t']).replace(':', '-')}_{args.height}p.mp4"
+    if partial:
+        out = final_dir / f"{args.rank:02d}_{first}_{last}_{args.height}p.mp4"
     tmp = out.with_suffix(".part.mp4")
     t0 = time.time()
-    r = subprocess.run(render_cmd() + [str(job), str(job / "props.json"), str(tmp)])
+    r = subprocess.run(render_cmd() + [str(job), str(job / "props.json"), str(tmp)] + frame_args)
     if r.returncode != 0 or not tmp.exists():
         print("渲染失败（看上面 Remotion 的输出）", file=sys.stderr)
         return 1
     tmp.replace(out)
     out.with_suffix(".edit.json").write_text(json.dumps(edit, ensure_ascii=False, indent=1), encoding="utf-8")
+    if partial:
+        out.with_suffix(".range.json").write_text(json.dumps({"start": first / FPS, "end": (last + 1) / FPS,
+                                                            "duration": (last - first + 1) / FPS}), encoding="utf-8")
+        print(f"局部试渲染：{out}（{(last - first + 1) / FPS:.2f} 秒）")
+        return 0
     quality = quality_report(sess_dir, args.rank, final=out, candidate=cand, edit=edit)
     quality_path = sess_dir / "quality" / f"{args.rank:02d}.json"
     write_report(quality, quality_path)
