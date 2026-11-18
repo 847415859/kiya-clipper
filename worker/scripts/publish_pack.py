@@ -37,7 +37,7 @@ from clipper.clipwin import clip_origin, read_windows  # noqa: E402
 from clipper.edit import edit_window  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
 from clipper.publish import (COVER_THEMES, DEFAULT_TAGS, build_description, build_tags, clean_title,
-                             cover_concept, normalize_title_options, render_cover, render_theme_cover)  # noqa: E402
+                             cover_concept, normalize_title_options, render_theme_cover)  # noqa: E402
 from clipper.cover_prompt import seedream_options, seedream_prompt  # noqa: E402
 from clipper.seedream import SeedreamError, generate as generate_seedream  # noqa: E402
 from cut import pieces  # noqa: E402
@@ -291,10 +291,11 @@ def main() -> int:
                     with Image.open(raw) as generated:
                         normalized = generated.convert("RGB")
                     normalized.save(raw, "JPEG", quality=95)
-                    render_cover(raw, composed, text, pc.get("cover_font") or "Noto Sans CJK SC:bold")
+                    # Seedream supplies the finished typography and composition. Preserve it unchanged.
+                    shutil.copyfile(raw, composed)
                     preserve_legacy_seedream(out_dir, args.rank, pack)
                     history = list(pack.get("cover_history") or [])
-                    meta.update(reference=options["reference"], supplement=options["supplement"])
+                    meta.update(reference=options["reference"], supplement=options["supplement"], composition="seedream-integrated-v1")
                     saved = archive_seedream(out_dir, args.rank, composed, raw, dict(meta, file=f"{args.rank:02d}_cover_seedream.jpg"), history, text)
                     pack["cover_history"] = [saved, *history]
                     pack["cover_history_selected"] = saved["id"]

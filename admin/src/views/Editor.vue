@@ -372,7 +372,7 @@
           </div>
           <div v-if="pack.cover_history?.length" class="cover-history">
             <b>已生成版本 · {{ pack.cover_history.length }}</b>
-            <p class="muted">点击版本设为封面，不重新生图。选好后可选择该底图继续补充完善。</p>
+            <p class="muted">点击版本设为封面，不重新生图。选好后可选择该版本继续补充完善。</p>
             <div class="cover-history-grid">
               <button v-for="v in pack.cover_history" :key="v.id" class="cover-variant"
                       :class="{ selected: v.id === pack.cover_history_selected }" :disabled="covering"
@@ -385,7 +385,7 @@
           </div>
           <el-form label-width="64px" size="small" class="pack">
             <el-form-item label="封面字">
-              <el-input v-model="coverText" maxlength="30" placeholder="留空不叠加大字" />
+              <el-input v-model="coverText" maxlength="30" placeholder="由 Seedream 一体化排版，留空生成无字封面" />
             </el-form-item>
             <el-form-item label="画面">
               <span class="muted">{{ pack.cover_t != null ? hms(pack.cover_t) + '（' + (pack.cover_source || '') + '）' : '默认笑点' }}</span>
@@ -395,21 +395,20 @@
               <div style="width:100%">
                 <el-input v-model="seedreamSupplement" type="textarea" :rows="3" :maxlength="1500" show-word-limit
                           aria-label="Seedream 补充要求" placeholder="例如：人物靠右，背景简洁，增加一只夸张的猫爪；保留发型和服装，整体改为柔和粉紫色。" />
-                <span class="muted">追加到自动封面方案；需要显示的文字填在上方“封面字”。保存只保留设置，图片需重新生成后更新。</span>
+                <span class="muted">Seedream 同时设计画面与文字，可补充字体、配色和排版要求；需显示的文案填上方“封面字”。保存设置不生成图片，AI 文字请在发布前核对。</span>
               </div>
             </el-form-item>
             <el-form-item label="生图参考">
               <el-radio-group v-model="seedreamReference" aria-label="Seedream 参考来源">
                 <el-radio value="frame">直播画面</el-radio>
-                <el-radio value="seedream" :disabled="!hasSeedreamCover">所选 / 上次生图底图</el-radio>
+                <el-radio value="seedream" :disabled="!hasSeedreamCover">所选 / 上次生成封面</el-radio>
               </el-radio-group>
-              <span class="muted">选择上次底图，可保留已有设计继续完善。</span>
-              <span v-if="seedreamReference === 'seedream' && selectedCoverHistory?.has_raw === false" class="muted">这个旧版本没有独立底图，将以成品图为参考；已有文字可能影响生成结果。</span>
+              <span class="muted">可延续所选版本的设计；参考图中的旧文案会要求替换为本次文案。</span>
               <el-button link :loading="promptLoading" @click="previewCoverPrompt">预览生图提示词</el-button>
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" plain :loading="covering" @click="makeCover()">{{ pack.cover ? '重画封面' : '生成封面' }}</el-button>
-              <el-button type="warning" plain :loading="covering" @click="makeCover(null, 'seedream')">Seedream 生图</el-button>
+              <el-button type="primary" plain :loading="covering" @click="makeCover()">{{ pack.cover ? 'Seedream 重新生成' : 'Seedream 生成封面' }}</el-button>
+              <span class="muted">生成会产生生图费用，成功后保留为新版本。</span>
               <a v-if="pack.cover" :href="api.coverUrl(name, rank, pack.cover_version)" :download="`${name}_${rank}_cover.jpg`"><el-button>下载</el-button></a>
             </el-form-item>
             <el-form-item label="标题">
@@ -660,7 +659,6 @@ const coverText = ref('')
 const seedreamSupplement = ref(''), seedreamReference = ref('frame')
 const coverPromptShow = ref(false), coverPromptText = ref(''), promptLoading = ref(false)
 const hasSeedreamCover = computed(() => (pack.value.cover_variants || []).some(v => v.variant === 'seedream') || pack.value.cover_variant === 'seedream')
-const selectedCoverHistory = computed(() => (pack.value.cover_history || []).find(v => v.id === pack.value.cover_history_selected))
 let coverT = null
 const warnings = ref([])
 const generatedBy = ref('')
@@ -1450,10 +1448,11 @@ async function loadPack() {
 
 function coverAtCurrent() {
   coverT = Math.round((edit.window.start + time.value) * 100) / 100
+  seedreamReference.value = 'frame'
   makeCover()
 }
 
-async function makeCover(variant = null, mode = null) {
+async function makeCover(variant = null, mode = 'seedream') {
   if (covering.value) return
   covering.value = true
   try {

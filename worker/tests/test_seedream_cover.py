@@ -19,12 +19,38 @@ def test_supplement_extends_automatic_plan_and_clearing_is_explicit():
     saved = {"supplement": "人物靠右", "reference": "seedream"}
     prompt = seedream_prompt(concept, saved, "封面大字")
     assert "反差现场" in prompt and "人物靠右" in prompt and "上次生成" in prompt
-    assert "不要生成文字" in prompt and "后期将叠加" in prompt
+    assert "封面大字" in prompt and "完整、准确地绘制" in prompt
+    assert "后期将叠加" not in prompt and "黄字" not in prompt and "粉色描边" not in prompt
+    assert "按本次封面文案替换" in prompt
+    blank = seedream_prompt(concept, saved, "")
+    assert "生成纯画面封面" in blank and "去除参考图中的旧文案" in blank
     assert seedream_options(saved) == saved
     assert seedream_options(saved, "", "frame") == {"supplement": "", "reference": "frame"}
     for bad in ("x" * 1501, "a\0b", 123):
         with pytest.raises(ValueError): seedream_options(supplement=bad)
     with pytest.raises(ValueError): seedream_options(reference="../elsewhere")
+
+
+def test_event_turn_and_emotion_reach_model_beyond_legacy_short_subtitle():
+    event = '主播认真解释自己的计划，' * 8 + '最后发现观众一直把她说的话理解成了吃夜宵。'
+    concept = publish.cover_concept({'type':'温柔日常', 'what_happened':event,
+                                     'emotion':'轻松、意外', 'punch_line':'原来你们想的是夜宵！'})
+    assert len(concept['subline']) == 26
+    prompt = seedream_prompt(concept, seedream_options(), '你们想的是夜宵？')
+    assert event in prompt and '核心情绪：轻松、意外' in prompt
+    assert '关键转折或原话：原来你们想的是夜宵！' in prompt
+    assert '不要将所有内容统一处理成夸张漫画' in prompt
+    assert '字号层级' in prompt and '聊天记录、人物台词、游戏战绩或关系结论' in prompt
+
+
+def test_reference_redesign_and_unknown_emotion_have_explicit_boundaries():
+    concept = publish.cover_concept({}, speech='主播在聊明天的安排')
+    prompt = seedream_prompt(concept, {'reference':'seedream','supplement':'重新设计为柔和海报'}, '明天见')
+    assert '事件：主播在聊明天的安排' in prompt and '核心情绪：' not in prompt
+    assert '允许重构对应部分' in prompt and '用户本次设计要求：\n重新设计为柔和海报' in prompt
+    assert '人物身份与指定文案准确性优先' in prompt
+    assert '自动分类与风格建议仅作参考' in prompt
+    assert publish.cover_concept({'what_happened':'a'*800,'emotion':42})['event'] == 'a'*600
 
 
 @pytest.fixture
@@ -69,9 +95,20 @@ def test_prompt_preview_is_read_only_and_uses_current_additions(cover_session, c
     assert not calls and not (folder / 'publish').exists()
 
 
+def test_preview_and_generation_use_identical_context_and_prompt(cover_session, capsys):
+    _, run, calls, _ = cover_session
+    args = ['--cover-supplement=柔和海报，文字靠右', '--cover-text=明天见']
+    assert run('--cover-prompt-only', *args) == 0
+    preview = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert run('--cover-mode=seedream', *args) == 0
+    capsys.readouterr()
+    assert calls[0]['prompt'] == preview['prompt']
+
+
 def test_seedream_supplement_caption_and_raw_reference_roundtrip(cover_session, capsys, monkeypatch):
-    folder, run, calls, font = cover_session
-    if not font: pytest.skip('requires a local TrueType font for actual caption drawing')
+    folder, run, calls, _ = cover_session
+    monkeypatch.setattr(packer, 'render_theme_cover', lambda *a: pytest.fail('Seedream must supply the complete cover'))
+    monkeypatch.setattr(publish, 'render_cover', lambda *a: pytest.fail('must not overlay fixed typography'))
     assert run('--cover-mode=seedream', '--cover-supplement=人物靠右', '--cover-text=MY COVER') == 0
     result = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert result['cover_seedream_options'] == {'supplement': '人物靠右', 'reference': 'frame'}
@@ -79,12 +116,14 @@ def test_seedream_supplement_caption_and_raw_reference_roundtrip(cover_session, 
     main = folder / 'publish/01_cover.jpg'
     raw = folder / 'publish/01_cover_seedream_raw.jpg'
     with Image.open(main) as img:
-        assert img.size == (publish.W, publish.H)
+        assert img.size == (640, 400)
         yellow = sum(1 for r, g, b in img.convert('RGB').getdata() if r > 180 and g > 150 and b < 140)
-        assert yellow > 500
+        assert yellow == 0
     with Image.open(raw) as img:
         assert img.format == 'JPEG' and img.size == (640, 400)
     old_raw = raw.read_bytes()
+    assert main.read_bytes() == old_raw
+    assert result['cover_history'][0]['meta']['composition'] == 'seedream-integrated-v1'
     monkeypatch.setattr(packer, 'grab_frame', lambda *a: pytest.fail('iterating the raw image must not need source video'))
     assert run('--cover-mode=seedream', '--cover-reference=seedream', '--cover-supplement=保留构图，只改背景', '--cover-text=') == 0
     result = json.loads(capsys.readouterr().out.splitlines()[-1])
@@ -221,16 +260,9 @@ def test_programmatic_cover_and_all_mode_fallback_keep_seedream_history(cover_se
 
 
 def test_thirty_character_seedream_caption_is_not_silently_truncated(cover_session, monkeypatch):
-    folder, run, _, font = cover_session
-    if not font: pytest.skip('requires a local font')
-    wrapped = []
-    original = publish.wrap
-    def record(text, count, *args):
-        lines = original(text, count, *args)
-        wrapped.extend(lines)
-        return lines
-    monkeypatch.setattr(publish, 'wrap', record)
+    folder, run, calls, _ = cover_session
+    monkeypatch.setattr(publish, 'wrap', lambda *a: pytest.fail('Seedream owns typography and wrapping'))
     caption = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ1234'
     assert len(caption) == 30
     assert run('--cover-mode=seedream', '--cover-text=' + caption) == 0
-    assert ''.join(wrapped) == caption
+    assert '「'+caption+'」' in calls[0]['prompt']

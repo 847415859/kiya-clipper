@@ -51,7 +51,7 @@ class PublishCoverOptionsTests {
         service.cover("20261117-1200", 1, 5.0, "text", null, null, "seedream", "粉紫色", "frame");
         verify(runner).run(eq("publish_pack.py"), argThat(args -> args.contains("--cover-supplement=粉紫色")), eq(Duration.ofSeconds(300)));
         service.cover("20261117-1200", 1, null, "text", null, null, null);
-        verify(runner).run(eq("publish_pack.py"), argThat(args -> !args.stream().anyMatch(a -> a.startsWith("--cover-supplement"))), eq(Duration.ofSeconds(120)));
+        verify(runner).run(eq("publish_pack.py"), argThat(args -> args.contains("seedream") && !args.stream().anyMatch(a -> a.startsWith("--cover-supplement"))), eq(Duration.ofSeconds(300)));
     }
 
     @Test void settingsSaveAndCanBeClearedWithoutChangingTheCurrentImage() throws Exception {

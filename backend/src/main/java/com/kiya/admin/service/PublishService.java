@@ -82,6 +82,7 @@ public class PublishService {
 
     public Map<String, Object> cover(String session, int rank, Double t, String text, String variant, String theme, String mode,
                                       String supplement, String reference) {
+        if (mode == null || mode.isBlank()) mode = "seedream";
         List<String> extra = new ArrayList<>();
         if (t != null) {
             if (!Double.isFinite(t) || t < 0 || t > 24 * 3600) {

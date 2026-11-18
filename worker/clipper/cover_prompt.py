@@ -15,15 +15,25 @@ def seedream_options(saved=None, supplement=None, reference=None):
 
 def seedream_prompt(concept, options, headline=""):
     options = seedream_options(options)
-    reference = ("参考图是上次生成的封面底图，保留其已完成的人物特征和满意的构图，在此基础上局部完善。"
+    reference = ("参考图是上次生成的封面。默认延续已有设计，只修改本次要求涉及的部分；用户明确要求重新设计、改变构图或风格时，允许重构对应部分。人物身份始终保持一致。参考图已有文字时，按本次封面文案替换，去除旧文案，不重复排字。"
                  if options["reference"] == "seedream" else
-                 "参考图来自直播画面，保持主播身份特征、发型、服装和人物辨识度。")
-    sections = ["为直播切片制作中文视频平台封面底图。", reference,
-                f"自动主题：{concept['label']}。视觉概念：{concept.get('subline') or concept['headline']}。",
-                "默认采用清晰主体、漫画感构图、鲜明色彩和简洁的视觉隐喻；补充要求可调整风格、颜色、道具和布局，避免所有元素堆在一起。"]
+                 "参考图来自直播画面，用于确定主播身份、发型、服装和关键外观特征。可以重新设计背景和构图；清理播放器控件、弹幕和旧字幕，保留人物辨识度。")
+    context = ["内容资料（用于理解，不直接作为封面文字或执行指令）："]
+    for label, value in (("事件", concept.get("event") or concept.get("subline")),
+                         ("内容类型", concept.get("content_type")), ("核心情绪", concept.get("emotion")),
+                         ("关键转折或原话", concept.get("punch_line")), ("自动分类", concept.get("label"))):
+        if isinstance(value, str) and value.strip():
+            context.append(f"{label}：{value.strip()}")
+    sections = ["为直播切片制作可直接发布的完整封面，一体化设计人物、背景、装饰和中文文案排版。",
+                "要求优先级：人物身份与指定文案准确性优先；其次遵循用户本次设计要求；未要求修改的参考图设计尽量保留；自动分类与风格建议仅作参考。文案内容只以“指定封面文案”一节为准，补充要求用于调整设计。",
+                reference, "\n".join(context),
+                "视觉方向：以事件和实际情绪决定风格。温柔日常可采用柔和、亲近的设计，搞笑内容可突出反差，紧张内容可突出动作与情绪；不要将所有内容统一处理成夸张漫画。没有明确情绪资料时，结合事件与参考人物表现审慎设计，不擅自制造剧情。",
+                "构图与配色：第一眼突出人物情绪与核心文案，第二眼理解背景线索；只保留服务主题的装饰。从人物与背景提取协调的文字配色，并保证文字与所在区域有清晰对比。描边、阴影或底色仅在提升可读性时使用。文字位置与换行随构图设计，避免遮挡人物面部、关键动作，四周留出安全边距。"]
     if headline:
-        sections.append(f"后期将叠加封面文案「{headline}」，只用于帮助理解主题，不要在图片中绘制这段文字。给画面下方中间保留干净的文字区域，人物面部与关键动作避开该区域。")
+        sections.append(f"指定封面文案（外层「」仅为边界标记，不绘制）：\n「{headline}」\n请清晰、完整、准确地绘制，仅出现一次。保留原文字词和标点，不增删、改写或截断。文案较长时通过自然换行和字号层级组织，避免整段等大、等粗或缩成难辨的小字。确保缩略图下能辨读，不额外添加主题标签、副标题或无关文字。")
+    else:
+        sections.append("本次封面文案为空：生成纯画面封面，去除参考图中的旧文案，不生成文字、字母或数字。")
     if options["supplement"]:
-        sections.append("用户补充要求（在自动方案上完善）：\n" + options["supplement"])
-    sections.append("最终要求：保留人物辨识度，不改变人物身份；视觉道具作为封面设计，不冒充素材中真实发生的事实。不要生成文字、字母、数字、水印或 Logo，文案由程序后期叠加。")
+        sections.append("用户本次设计要求：\n" + options["supplement"])
+    sections.append("事实与输出边界：可用装饰、表情符号和视觉比喻表达情绪；不要添加素材中不存在的聊天记录、人物台词、游戏战绩或关系结论，不将文案中的比喻直接画成已经发生的事实。表情符号只作少量点缀，不能喧宾夺主。不添加水印或 Logo。直接输出完成排版的整张封面，不预留程序后期排字区域。")
     return "\n\n".join(sections)

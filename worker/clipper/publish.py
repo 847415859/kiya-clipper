@@ -187,8 +187,16 @@ def cover_concept(llm: dict | None, title: str = "", speech: str = "") -> dict:
     if len(headline) > 10 and any(x in headline for x in ("！", "？", "？！", "!?")):
         headline = headline[:10] + "？"
     sub = str(llm.get("what_happened") or llm.get("reason") or preset["label"]).strip()[:26]
+    # Image generation needs the event and its turn, beyond the short legacy card subtitle.
+    event = llm.get("what_happened") or speech
+    emotion = llm.get("emotion")
+    punch = llm.get("punch_line")
     return {"theme": theme, "label": preset["label"], "headline": headline or preset["label"],
-            "subline": sub, "accent": preset["accent"], "second": preset["second"], "symbol": preset["symbol"]}
+            "subline": sub, "accent": preset["accent"], "second": preset["second"], "symbol": preset["symbol"],
+            "event": event.strip()[:600] if isinstance(event, str) else "",
+            "content_type": str(llm.get("type") or "")[:80],
+            "emotion": emotion.strip()[:120] if isinstance(emotion, str) else "",
+            "punch_line": punch.strip()[:200] if isinstance(punch, str) else ""}
 
 
 def _hex(c: str) -> tuple[int, int, int]:
