@@ -121,11 +121,18 @@ def test_descriptions_and_stale_render_guard(tmp_path):
     assert snapshot(tmp_path,AT)['fingerprint']==snap['fingerprint']
 
 
-def test_more_than_eight_uses_full_description(tmp_path):
+def test_fourteen_entries_share_one_card_and_full_description(tmp_path):
     confirm(tmp_path,[row(title=f'节目{i}') for i in range(14)])
     snap=snapshot(tmp_path,AT)
-    assert len(snap['entries'])==14 and snap['more_count']==6 and snap['duration']==28
+    assert len(snap['entries'])==14 and snap['more_count']==0 and snap['duration']==7
+    assert snap['style']=='lavender-journal-v2'
     assert '节目13' in snap['description_block']
+
+
+def test_six_entries_no_longer_extend_outro_to_three_pages(tmp_path):
+    confirm(tmp_path,[row(title=f'节目{i}') for i in range(6)])
+    snap=snapshot(tmp_path,AT)
+    assert len(snap['entries'])==6 and snap['duration']==7
 
 
 def test_calendar_keeps_confirmed_and_draft_separate_and_scoped(tmp_path):
@@ -175,6 +182,12 @@ def test_publish_uses_actual_time_and_keeps_base_pack(tmp_path,monkeypatch):
     sys.path.insert(0,str(ROOT/'scripts'))
     import publish_bili as pb
     sess,cfg,env=setup_case(tmp_path)
+    for key in ('KIYA_BILIUP','KIYA_BILIUP_COOKIE','KIYA_MEMORY_DECISIONS','FAKE_LOG','FAKE_FLAGS'):
+        monkeypatch.setenv(key,env[key])
+    pack_path=sess/'publish/01.json'
+    pack=json.loads(pack_path.read_text(encoding='utf-8'))
+    pack['include_schedule']=True
+    pack_path.write_text(json.dumps(pack,ensure_ascii=False),encoding='utf-8')
     now=parse_at(AT).timestamp()
     monkeypatch.setattr(pb.time,'time',lambda:now)
     confirm(sess.parent,[row('2026-11-17','18:00','19:00'),row()])

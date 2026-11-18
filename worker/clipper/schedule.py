@@ -170,14 +170,14 @@ def snapshot(root: Path, at=None, enabled=True, streamer_name="主播", live_url
     heading = f"{streamer_name or '主播'}本周后续日程（北京时间）"
     block = "【" + heading + "】\n" + "\n".join(f"{r['date_label']} {r['time_label']}｜{r['title']}" for r in rows)
     block += "\n安排如有调整，以主播最新公告为准。"
-    content = {"style": "lavender-journal-v1", "heading": heading, "portrait_id": plan["portrait_id"],
+    content = {"style": "lavender-journal-v2", "heading": heading, "portrait_id": plan["portrait_id"],
                "entries": [{k:v for k,v in r.items() if k not in ("id", "note", "category")} for r in rows]}
     fingerprint = hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     return {**empty, "enabled": True, "reason": "", "entries": rows, "description_block": block,
             "heading": heading, "live_url": live_url, "fingerprint": fingerprint,
-            "streamer_name": streamer_name or "主播", "portrait_id": plan["portrait_id"], "style": "lavender-journal-v1",
-            "version": published.get("version", ""), "duration": 7 * ((min(len(rows), 8) + 1) // 2),
-            "more_count": max(0, len(rows) - 8)}
+            "streamer_name": streamer_name or "主播", "portrait_id": plan["portrait_id"], "style": "lavender-journal-v2",
+            "version": published.get("version", ""), "duration": 7,
+            "more_count": 0}
 
 
 def append_description(base: str, schedule: dict) -> str:

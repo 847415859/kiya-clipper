@@ -15,7 +15,8 @@ from clipper.schedule import snapshot, check_rendered_schedule, validate_plan
 pytestmark=pytest.mark.skipif(not shutil.which('ffmpeg'),reason='需要 ffmpeg')
 
 
-def test_render_and_outro_preview_share_plan_and_correct_frames(tmp_path):
+@pytest.mark.parametrize('entry_count',[1,6,14])
+def test_render_and_outro_preview_share_plan_and_correct_frames(tmp_path,entry_count):
     source=tmp_path/'source.mp4'
     subprocess.run(['ffmpeg','-nostdin','-loglevel','error','-y','-f','lavfi','-i','testsrc2=s=320x180:r=30:d=6','-f','lavfi','-i','sine=d=6','-shortest','-c:v','libx264','-preset','ultrafast','-c:a','aac',str(source)],check=True)
     sess=tmp_path/'output/20261117-1600'
@@ -27,7 +28,7 @@ def test_render_and_outro_preview_share_plan_and_correct_frames(tmp_path):
     pack={'title':'测试','description':'基础简介','include_schedule':True,'schedule_publish_at':'2026-11-17T12:00'}
     (sess/'publish/01.json').write_text(json.dumps(pack),encoding='utf-8')
     schedule=sess.parent/'_schedule/2026-11-16.json';schedule.parent.mkdir()
-    plan=validate_plan({'entries':[{'date':'2026-11-18','start_time':'20:00','title':'联动'}]},'2026-11-16')
+    plan=validate_plan({'entries':[{'date':'2026-11-18','start_time':'20:00','title':'联动' if i==0 else f'日程{i}'} for i in range(entry_count)]},'2026-11-16')
     schedule.write_text(json.dumps({'active':True,'published':plan}),encoding='utf-8')
     cfg=tmp_path/'config.yaml';cfg.write_text('streamer: {name: 测试主播}',encoding='utf-8')
     fake=tmp_path/'fake-render.py'

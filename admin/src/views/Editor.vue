@@ -134,6 +134,12 @@
           </el-button-group>
           <span class="muted">审核片段 {{ hms(info.candidate.start) }}–{{ hms(info.candidate.end) }}</span>
           <el-button v-if="!sameAsCandidate" link size="small" @click="resetWindow">还原成审核片段</el-button>
+          <el-button v-if="evidenceRows.length" link size="small" @click="seekEvidence(evidenceRows[0])">跳到证据位置</el-button>
+        </div>
+        <div v-if="suggestedBoundary" class="trim boundary-suggestion">
+          <span class="muted">精排建议 {{ hms(suggestedBoundary.start) }}–{{ hms(suggestedBoundary.end) }}</span>
+          <el-button size="small" @click="compareSuggestedBoundary">对比建议边界</el-button>
+          <el-button size="small" type="primary" plain @click="adoptSuggestedBoundary">采用建议边界</el-button>
         </div>
         <div class="trim">
           <span class="muted">成片范围</span>
@@ -401,10 +407,11 @@
               <a v-if="pack.cover" :href="api.coverUrl(name, rank, pack.cover_version)" :download="`${name}_${rank}_cover.jpg`"><el-button>下载</el-button></a>
             </el-form-item>
             <el-form-item label="标题">
-              <el-select v-model="pack.title" filterable allow-create default-first-option style="width: 100%">
-                <el-option v-for="t in ((pack.title_candidates?.length ? pack.title_candidates : null) || (pack.title_options || []).map(x => typeof x === 'string' ? x : x.title).filter(Boolean))" :key="t" :label="t" :value="t" />
+              <el-select :model-value="pack.title" filterable allow-create default-first-option style="width: 100%" @change="previewTitleAdoption">
+                <el-option v-for="t in titleOptions" :key="t.title" :label="t.title" :value="t.title" />
               </el-select>
               <span class="muted">{{ (pack.title || '').length }}/80</span>
+              <el-button v-if="titleUndo" link size="small" @click="undoTitleAdoption">撤销标题</el-button>
               <el-button link size="small" @click="copy(pack.title)">复制</el-button>
             </el-form-item>
             <el-form-item label="简介">
@@ -581,7 +588,7 @@ import { subtitleView } from '../../../renderer/src/subtitle-view.js'
 import { narrationView, fakeUiView } from '../../../renderer/src/fakeui.js'
 import FxView from '../components/FxView.vue'
 import ViewerReview from '../components/ViewerReview.vue'
-import { makeCaption } from '../viewer-review'
+import { evidenceTime, makeCaption } from '../viewer-review'
 import TranscriptEditor from '../components/TranscriptEditor.vue'
 import EditComparison from '../components/EditComparison.vue'
 import InteriorCuts from '../components/InteriorCuts.vue'
@@ -618,6 +625,17 @@ const pub = reactive({ bvid: '', completion: '', followers: '', saved: '' })
 const bili = reactive({ show: false, env: null, last: null, mode: 'hold', at: '', allowTaboo: false, again: false,
   running: false, result: '', resultOk: false, log: '' })
 const pack = ref({})
+const titleUndo = ref('')
+const titleOptions = computed(() => {
+  const raw = pack.value.title_options?.length ? pack.value.title_options : pack.value.title_candidates || []
+  return raw.map(x => typeof x === 'string' ? { title: x } : x).filter(x => x?.title)
+})
+const evidenceRows = computed(() => (info.llm?.evidence || []).filter(x => evidenceTime(info.llm, x, edit.window) != null))
+const suggestedBoundary = computed(() => {
+  const r = info.refined || info.llm?.refined || info.candidate?.refined
+  if (!r || !Number.isFinite(Number(r.start)) || !Number.isFinite(Number(r.end)) || Number(r.end) <= Number(r.start)) return null
+  return { start: Number(r.start), end: Number(r.end) }
+})
 const biliScheduleText = ref('')
 let biliScheduleRequest = 0
 watch(()=>[bili.show,bili.mode,bili.at,bili.env?.hold_days,pack.value.include_schedule],async()=>{
@@ -859,6 +877,52 @@ function setBoundary({ edge, time: value }) {
   if (edge === 'start' && edit.trim.end - t >= 1) edit.trim.start = t
   else if (edge === 'end' && t - edit.trim.start >= 1) edit.trim.end = t
   else return ElMessage.warning('成片起止之间至少保留 1 秒；请先调整另一端')
+}
+function seekEvidence(row) {
+  const local = evidenceTime(info.llm, row, edit.window)
+  if (local == null) return ElMessage.warning('该证据点不在当前预览范围内')
+  seek(local)
+}
+function boundaryText(r) { return `${hms(r.start)}–${hms(r.end)}（${fmt(r.end - r.start)}）` }
+async function compareSuggestedBoundary() {
+  const next = suggestedBoundary.value
+  if (!next) return
+  seek(next.start - edit.window.start)
+  try {
+    await ElMessageBox.confirm(`当前成片：${boundaryText({ start: edit.window.start + edit.trim.start, end: edit.window.start + edit.trim.end })}\n建议边界：${boundaryText(next)}\n已跳到建议起点，可播放检查两端。`, '对比建议边界', { confirmButtonText: '采用建议边界', cancelButtonText: '只试听，不采用', distinguishCancelAndClose: true, type: 'info' })
+    adoptSuggestedBoundary(false)
+  } catch (e) {}
+}
+async function adoptSuggestedBoundary(confirm = true) {
+  const next = suggestedBoundary.value
+  if (!next) return
+  const local = { start: round(next.start - edit.window.start), end: round(next.end - edit.window.start) }
+  if (local.start < 0 || local.end > info.clipLen || local.end - local.start < 1) return ElMessage.warning('建议边界不在当前预览范围内，无法直接采用')
+  try {
+    if (confirm) await ElMessageBox.confirm(`当前成片：${boundaryText({ start: edit.window.start + edit.trim.start, end: edit.window.start + edit.trim.end })}\n采用后：${boundaryText(next)}`, '确认采用建议边界', { confirmButtonText: '采用', cancelButtonText: '取消', type: 'warning' })
+    edit.trim = local
+    ElMessage.success('已采用建议边界，可用“撤销”恢复')
+  } catch (e) {}
+}
+async function previewTitleAdoption(next) {
+  if (!next || next === pack.value.title) return
+  const option = titleOptions.value.find(x => x.title === next) || { title: next }
+  const before = pack.value.title || '（未设置）'
+  const reason = option.why ? `\n理由：${option.why}` : ''
+  const evidence = option.evidence_refs?.length ? `\n证据：${option.evidence_refs.join('、')}` : ''
+  try {
+    await ElMessageBox.confirm(`当前标题：${before}\n采用后：${next}${reason}${evidence}`, '确认采用标题', { confirmButtonText: '采用标题', cancelButtonText: '取消', type: 'info' })
+    titleUndo.value = pack.value.title
+    pack.value.title = next
+    ElMessage.success('标题已采用，可撤销')
+  } catch (e) {}
+}
+function undoTitleAdoption() {
+  if (!titleUndo.value) return
+  const current = pack.value.title
+  pack.value.title = titleUndo.value
+  titleUndo.value = current
+  ElMessage.info('已撤销最近一次标题采用')
 }
 function correctSentence({ sentence, text }) {
   edit.subtitles.sentence_overrides = updateSentenceOverride(edit.subtitles.sentence_overrides || [], sentence, text)
