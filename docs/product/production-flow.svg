@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="620" viewBox="0 0 1440 620">
+<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#f1edff"/><stop offset="1" stop-color="#e4f6f1"/></linearGradient><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L9 5L0 10" fill="none" stroke="#8b80ab" stroke-width="2"/></marker></defs>
+<rect width="1440" height="620" rx="28" fill="url(#bg)"/>
+<g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" fill="#29243d">
+<text x="66" y="78" font-size="19" fill="#78658f" letter-spacing="3">KIYA CLIPPER · 产品流程示意</text>
+<text x="66" y="133" font-size="38" font-weight="700">把一场直播，整理成值得观看的作品</text>
+<text x="66" y="174" font-size="20" fill="#686078">AI 提供候选和初稿，创作者决定内容、风格与发布。</text>
+<g fill="#ffffff" stroke="#ddd6ed" stroke-width="2">
+<rect x="66" y="222" width="240" height="174" rx="18"/><rect x="416" y="222" width="240" height="174" rx="18"/><rect x="766" y="222" width="240" height="174" rx="18"/><rect x="1116" y="222" width="258" height="174" rx="18"/>
+</g>
+<g fill="#7662a3" font-size="17" font-weight="700"><text x="90" y="258">01 · 找内容</text><text x="440" y="258">02 · 做判断</text><text x="790" y="258">03 · 做作品</text><text x="1140" y="258">04 · 发布与积累</text></g>
+<g font-size="26" font-weight="700"><text x="90" y="302">场次与候选</text><text x="440" y="302">精排与审核</text><text x="790" y="302">剪辑与渲染</text><text x="1140" y="302">封面与投稿</text></g>
+<g font-size="18" fill="#686078"><text x="90" y="343">录像 / 弹幕 / 转写</text><text x="90" y="373">粗筛定位 · 减少翻找</text><text x="440" y="343">看原话 · 核前情</text><text x="440" y="373">人工标注 · 确认可切</text><text x="790" y="343">字幕 / 运镜 / 贴图</text><text x="790" y="373">局部试渲染 · 手机复看</text><text x="1140" y="343">Seedream · 账号管理</text><text x="1140" y="373">日程预告 · 数据复盘</text></g>
+<g stroke="#8b80ab" stroke-width="3" fill="none" marker-end="url(#a)"><path d="M320 306H396"/><path d="M670 306H746"/><path d="M1020 306H1096"/><path d="M1240 415V463H536V416"/></g>
+<text x="700" y="452" font-size="18" fill="#78658f">审核、人工修改与作品表现，积累为后续判断的参考</text>
+<rect x="66" y="505" width="1308" height="65" rx="14" fill="#ffffff" fill-opacity=".75"/>
+<text x="90" y="546" font-size="19">已有基础：可编辑制作流程　｜　下一阶段：可洛主参考的剪切手法、编排技艺与素材配方接入</text>
+</g></svg>

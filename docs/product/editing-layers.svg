@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="670" viewBox="0 0 1440 670">
+<rect width="1440" height="670" rx="28" fill="#211f30"/>
+<g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" fill="#faf8ff">
+<text x="58" y="66" font-size="18" fill="#bbb0d6">内容与制作关系示意 · 非真实编辑器截图 / 非现有多轨 UI 承诺</text>
+<text x="58" y="118" font-size="34" font-weight="700">让每个制作动作，都有内容上的理由</text>
+<text x="58" y="157" font-size="19" fill="#c3bdcf">以下为解释性案例；不是已经验证的可洛风格规则。</text>
+<g font-size="19" fill="#c3bdcf"><text x="58" y="230">内容节点</text><text x="58" y="325">注意力</text><text x="58" y="420">画面 / 字幕</text><text x="58" y="515">声音 / 节奏</text></g>
+<g fill="#393448"><rect x="230" y="191" width="1148" height="70" rx="12"/><rect x="230" y="286" width="1148" height="70" rx="12"/><rect x="230" y="381" width="1148" height="70" rx="12"/><rect x="230" y="476" width="1148" height="70" rx="12"/></g>
+<g fill="#c6b4ed"><rect x="240" y="201" width="250" height="50" rx="8"/><rect x="500" y="201" width="270" height="50" rx="8"/><rect x="780" y="201" width="330" height="50" rx="8"/><rect x="1120" y="201" width="248" height="50" rx="8"/></g>
+<g fill="#a7d8cf"><rect x="240" y="296" width="250" height="50" rx="8"/><rect x="500" y="296" width="350" height="50" rx="8"/><rect x="860" y="296" width="250" height="50" rx="8"/><rect x="1120" y="296" width="248" height="50" rx="8"/></g>
+<g fill="#e9c4d3"><rect x="240" y="391" width="530" height="50" rx="8"/><rect x="780" y="391" width="330" height="50" rx="8"/><rect x="1120" y="391" width="248" height="50" rx="8"/></g>
+<g fill="#e5d5ac"><rect x="240" y="486" width="530" height="50" rx="8"/><rect x="780" y="486" width="330" height="50" rx="8"/><rect x="1120" y="486" width="248" height="50" rx="8"/></g>
+<g fill="#29243b" font-size="20"><text x="262" y="234">看懂问题与前情</text><text x="522" y="234">主播回答与表达</text><text x="802" y="234">转折 / 反应 / 补充</text><text x="1142" y="234">事件完成与收束</text><text x="262" y="329">实际问题或对象</text><text x="522" y="329">人物与表情</text><text x="882" y="329">关键对象 / 反应</text><text x="1142" y="329">回到人物与主线</text><text x="262" y="424">清楚呈现原话，保留阅读时间</text><text x="802" y="424">有理由的强调或插入</text><text x="1142" y="424">减少多余包装</text><text x="262" y="519">保护原声，保留必要等待</text><text x="802" y="519">按作用选择声音提示</text><text x="1142" y="519">自然结束或淡出</text></g>
+<text x="58" y="613" font-size="20" fill="#c3bdcf">当前已有字幕、运镜、贴图和音乐等基础；完整的条件化编排、独立音效轨与素材配方仍需扩展验证。</text>
+</g></svg>
