@@ -54,6 +54,7 @@ export const api = {
   publishAccount: () => http.get('/api/publish-account'),
   publishLoginStart: () => http.post('/api/publish-account/qr'),
   publishLoginPoll: (id) => http.post(`/api/publish-account/qr/${encodeURIComponent(id)}/poll`, null, { quiet: true }),
+  publishLoginMethod: (method, body, id = null) => http.post(`/api/publish-account/login/${id ? encodeURIComponent(id) + '/' : ''}${encodeURIComponent(method)}`, body, { quiet: true }),
   publishLoginConfirm: (id, uid) => http.post(`/api/publish-account/qr/${encodeURIComponent(id)}/confirm`, { uid }),
   publishLoginCancel: (id) => http.post(`/api/publish-account/qr/${encodeURIComponent(id)}/cancel`, null, { quiet: true }),
   publishAccountLogout: () => http.post('/api/publish-account/logout'),

@@ -31,6 +31,7 @@ from clipper.kcfg import find_taboo, load_cfg  # noqa: E402
 from clipper.streamer import decisions_path, resolve_config  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.boundary import refine_bounds  # noqa: E402
+from clipper.event import generate_boundary_options, normalize_event  # noqa: E402
 from clipper.peaks import emotion_matcher  # noqa: E402
 from clipper.context import danmaku_lines, extract_frames, load_events, profile, speech_lines  # noqa: E402
 from clipper.llm import LLMClient, fill, image_part, load_prompt, text_part  # noqa: E402
@@ -476,8 +477,13 @@ def main() -> int:
                     absolute_time("start_time"), absolute_time("end_time"), float(rc["min_len"]), float(rc["max_len"]),
                     material_end=data.get("duration_seconds") or data.get("covered_seconds"))
                 rec["value_refined"]["removed"] = []  # Value review never automatically discards context as mere SC/business.
+        material_end = data.get("duration_seconds") or data.get("covered_seconds")
         rec["refined"] = refine_bounds(sents, c["t"], punch, start, end, float(rc["min_len"]), float(rc["max_len"]),
-                                        material_end=data.get("duration_seconds") or data.get("covered_seconds"))
+                                        material_end=material_end)
+        event = normalize_event({**c, "llm": rec["llm"], "refined": rec["refined"]})
+        rec["event"] = event
+        rec["boundary_options"] = generate_boundary_options(
+            {**c, "llm": rec["llm"], "refined": rec["refined"]}, event, rec["refined"], material_end=material_end)
         return rec
 
     t0 = time.time()

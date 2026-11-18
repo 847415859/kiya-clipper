@@ -75,10 +75,18 @@ public class SecurityConfig {
                 .logoutSuccessHandler((req, res, a) -> json(om, res, HttpStatus.OK, Map.of("ok", true))))
             .exceptionHandling(ex -> ex.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
             .headers(h -> h
-                .frameOptions(f -> f.deny())
-                .contentSecurityPolicy(csp -> csp.policyDirectives(
-                    "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; "
-                    + "style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; frame-ancestors 'none'")));
+                .frameOptions(f -> f.disable())
+                .addHeaderWriter((req, res) -> {
+                    // Only the credential-free captcha document has a separate, nonce-based policy.
+                    // All application pages keep their original framing and script restrictions.
+                    if ((req.getContextPath() + "/publish-captcha").equals(req.getRequestURI())) {
+                        res.setHeader("X-Frame-Options", "SAMEORIGIN");
+                    } else {
+                        res.setHeader("X-Frame-Options", "DENY");
+                        res.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; "
+                            + "style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; frame-ancestors 'none'");
+                    }
+                }));
         return http.build();
     }
 

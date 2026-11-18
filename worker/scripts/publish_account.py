@@ -14,7 +14,7 @@ from clipper.streamer import resolve_config, streamer_from_args
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("action", choices=["status", "start", "poll", "activate", "cancel", "logout"])
+    ap.add_argument("action", choices=["status", "start", "poll", "activate", "cancel", "logout", "password", "sms-send", "sms-code", "cookie", "browser"])
     ap.add_argument("--streamer", required=True)
     ap.add_argument("--login-id")
     ap.add_argument("--uid")
@@ -22,7 +22,18 @@ def main():
     try:
         load_env()
         sid = streamer_from_args(args.streamer)
-        if args.action == "status":
+        if args.action in ("password", "sms-send", "sms-code", "cookie", "browser"):
+            from clipper import publish_login_methods as methods
+            raw = sys.stdin.buffer.read(131073)
+            if len(raw) > 131072: raise auth.LoginError("登录输入过长")
+            body = json.loads(raw.decode("utf-8") or "{}")
+            if not isinstance(body, dict): raise auth.LoginError("登录输入格式不正确")
+            if args.action == "password": result = methods.password_login(body,sid,args.login_id)
+            elif args.action == "sms-send": result = methods.sms_send(body,sid,args.login_id)
+            elif args.action == "sms-code": result = methods.sms_login(body,sid,args.login_id)
+            elif args.action == "cookie": result = methods.cookie_login(body,sid)
+            else: result = auth.start(sid,method="browser")
+        elif args.action == "status":
             cfg = load_cfg(resolve_config(None, streamer=sid))
             result = auth.status((cfg.get("publish") or {}).get("bili") or {}, sid)
         elif args.action == "start": result = auth.start(sid)

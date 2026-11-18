@@ -136,7 +136,7 @@ def ticket_path(login_id: str, streamer=None) -> Path:
     return managed_cookie(streamer).parent / "pending" / (login_id + ".json")
 
 
-def start(streamer=None) -> dict:
+def start(streamer=None, method="qr") -> dict:
     import qrcode
     root = managed_cookie(streamer).parent / "pending"
     root.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -156,12 +156,14 @@ def start(streamer=None) -> dict:
     login_id = uuid.uuid4().hex
     expires = int(time.time()) + 180
     private_write(ticket_path(login_id, streamer), {"auth_code": data["auth_code"], "expires_at": expires,
-                                                  "state": "waiting", "base_revision": revision(streamer)})
+                                                  "state": "waiting", "method": method, "base_revision": revision(streamer)})
     image = qrcode.make(url)
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
-    return {"login_id": login_id, "expires_at": expires, "state": "waiting",
-            "qr_image": "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()}
+    result = {"login_id": login_id, "expires_at": expires, "state": "waiting", "method": method,
+              "qr_image": "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()}
+    if method == "browser": result["login_url"] = url
+    return result
 
 
 def pending(login_id, streamer=None):
@@ -179,6 +181,9 @@ def poll(login_id, streamer=None) -> dict:
         return {"state": "ready", "account": state["account"], "expires_at": state["expires_at"]}
     if state.get("state") == "verifying":
         return verify_pending(path, state)
+    if state.get("state") in ("captcha_required", "sms_sent", "action_required"):
+        from .publish_login_methods import public_state
+        return public_state(path, state)
     result = request_qr("poll", state["auth_code"])
     code = result.get("code")
     if code in (86039, 86090):
@@ -197,8 +202,8 @@ def poll(login_id, streamer=None) -> dict:
         raise LoginError("登录凭证不完整，请重新扫码")
     credentials = {"cookie_info": credentials["cookie_info"], "token_info": token,
                    "sso": credentials.get("sso") or [], "platform": "BiliTV"}
-    state = {"state": "verifying", "credentials": credentials, "base_revision": state["base_revision"],
-             "expires_at": int(time.time()) + 300}
+    state = {**state, "state": "verifying", "credentials": credentials, "expires_at": int(time.time()) + 300}
+    state.pop("auth_code", None)
     private_write(path, state)
     return verify_pending(path, state)
 
@@ -217,6 +222,8 @@ def verify_pending(path, state):
         draft.unlink(missing_ok=True)
     if who["uid"] != str(credentials["token_info"]["mid"]):
         raise LoginError("登录账号校验不一致，请重新扫码")
+    if state.get("expected_uid") and who["uid"] != state["expected_uid"]:
+        raise LoginError("登录账号与导入的 Cookie 不一致，请重新登录")
     private_write(path, {**state, "state": "ready", "account": who, "expires_at": int(time.time()) + 300})
     return {"state": "ready", "account": who, "expires_at": int(time.time()) + 300}
 

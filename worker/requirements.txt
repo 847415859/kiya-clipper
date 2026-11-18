@@ -5,5 +5,6 @@ PyYAML>=6.0
 pydantic>=2.5
 Pillow>=10.0
 qrcode[pil]>=7.4,<9   # 设置页面的发布账号扫码登录
+cryptography>=41.0   # 发布账号密码登录的 B站 RSA 加密
 pytest>=8.0
 PyMySQL>=1.1          # 跨场次呼应的全文索引（可选：没装就退回直接读 transcript.json）

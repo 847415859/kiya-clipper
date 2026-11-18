@@ -141,6 +141,12 @@
           <el-button size="small" @click="compareSuggestedBoundary">对比建议边界</el-button>
           <el-button size="small" type="primary" plain @click="adoptSuggestedBoundary">采用建议边界</el-button>
         </div>
+        <div v-for="option in boundaryOptions" :key="option.key" class="trim boundary-suggestion">
+          <span class="muted">{{ option.label }} {{ hms(option.start) }}–{{ hms(option.end) }}（{{ fmt(option.duration) }}）</span>
+          <span class="muted">{{ option.reason }}</span>
+          <el-button size="small" @click="compareBoundaryOption(option)">对比</el-button>
+          <el-button size="small" type="primary" plain @click="adoptBoundaryOption(option)">采用</el-button>
+        </div>
         <div class="trim">
           <span class="muted">成片范围</span>
           <el-slider v-model="trimRange" range :min="0" :max="info.clipLen || 60" :step="0.1" :format-tooltip="fmt" />
@@ -636,6 +642,7 @@ const suggestedBoundary = computed(() => {
   if (!r || !Number.isFinite(Number(r.start)) || !Number.isFinite(Number(r.end)) || Number(r.end) <= Number(r.start)) return null
   return { start: Number(r.start), end: Number(r.end) }
 })
+const boundaryOptions = computed(() => (info.boundary_options || info.llm?.boundary_options || []).filter(x => Number(x?.end) > Number(x?.start) && !x?.issues?.length))
 const biliScheduleText = ref('')
 let biliScheduleRequest = 0
 watch(()=>[bili.show,bili.mode,bili.at,bili.env?.hold_days,pack.value.include_schedule],async()=>{
@@ -896,12 +903,24 @@ async function compareSuggestedBoundary() {
 async function adoptSuggestedBoundary(confirm = true) {
   const next = suggestedBoundary.value
   if (!next) return
-  const local = { start: round(next.start - edit.window.start), end: round(next.end - edit.window.start) }
-  if (local.start < 0 || local.end > info.clipLen || local.end - local.start < 1) return ElMessage.warning('建议边界不在当前预览范围内，无法直接采用')
+  await adoptBoundaryOption({ ...next, key: 'refined', label: '精排建议' }, confirm)
+}
+async function compareBoundaryOption(option) {
+  seek(option.start - edit.window.start)
   try {
-    if (confirm) await ElMessageBox.confirm(`当前成片：${boundaryText({ start: edit.window.start + edit.trim.start, end: edit.window.start + edit.trim.end })}\n采用后：${boundaryText(next)}`, '确认采用建议边界', { confirmButtonText: '采用', cancelButtonText: '取消', type: 'warning' })
+    await ElMessageBox.confirm(`当前成片：${boundaryText({ start: edit.window.start + edit.trim.start, end: edit.window.start + edit.trim.end })}\n${option.label}：${boundaryText(option)}\n${option.reason || ''}`, `对比${option.label}`, { confirmButtonText: `采用${option.label}`, cancelButtonText: '只试听，不采用', distinguishCancelAndClose: true, type: 'info' })
+    await adoptBoundaryOption(option, false)
+  } catch (e) {}
+}
+async function adoptBoundaryOption(option, confirm = true) {
+  const start = Number(option?.start)
+  const end = Number(option?.end)
+  const local = { start: round(start - edit.window.start), end: round(end - edit.window.start) }
+  if (!Number.isFinite(start) || !Number.isFinite(end) || local.start < 0 || local.end > info.clipLen || local.end - local.start < 1) return ElMessage.warning('边界方案不在当前预览范围内，无法直接采用')
+  try {
+    if (confirm) await ElMessageBox.confirm(`当前成片：${boundaryText({ start: edit.window.start + edit.trim.start, end: edit.window.start + edit.trim.end })}\n采用后：${boundaryText(option)}`, `确认采用${option.label || '边界方案'}`, { confirmButtonText: '采用', cancelButtonText: '取消', type: 'warning' })
     edit.trim = local
-    ElMessage.success('已采用建议边界，可用“撤销”恢复')
+    ElMessage.success('已采用边界方案，可用“撤销”恢复')
   } catch (e) {}
 }
 async function previewTitleAdoption(next) {

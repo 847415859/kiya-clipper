@@ -90,6 +90,49 @@ class PublishAccountTests {
         assertThrows(ApiException.class, () -> service.activate(session,id,"123"));
     }
 
+    @Test void passwordTravelsOnlyThroughStdinAndPublicResultIsFiltered() throws Exception {
+        when(runner.runInput(anyString(),anyList(),anyString(),any())).thenAnswer(call -> {
+            assertFalse(call.<List<String>>getArgument(1).toString().contains("private-password"));
+            assertEquals("private-password", om.readTree(call.<String>getArgument(2)).path("password").asText());
+            return new ProcessRunner.Result(0,om.writeValueAsString(Map.of("login_id",id,"state","ready",
+                "expires_at",System.currentTimeMillis()/1000+300,"account",Map.of("uid","123","name","用户","cookie","secret"),
+                "credentials","secret","login_url","https://passport.bilibili.com/?access_token=secret")));
+        });
+        Map<String,Object> result=service.login(session,"password",null,Map.of("username","user","password","private-password"));
+        assertFalse(om.writeValueAsString(result).contains("secret"));
+        assertThrows(ApiException.class,()->service.login(new MockHttpSession(),"password",id,Map.of()));
+        assertThrows(ApiException.class,()->service.login(session,"sms-code",id,Map.of("code","001234")));
+        verify(runner,never()).run(anyString(),anyList(),any());
+        assertEquals("logged_in",service.activate(session,id,"123").get("state"));
+    }
+
+    @Test void smsCanContinueOnlyWithinOwnedTicketAndSendIsThrottled() throws Exception {
+        when(runner.runInput(anyString(),anyList(),anyString(),any())).thenReturn(new ProcessRunner.Result(0,
+            om.writeValueAsString(Map.of("login_id",id,"state","sms_sent","expires_at",System.currentTimeMillis()/1000+600))));
+        service.login(session,"sms-send",null,Map.of("country","86","phone","13800000000"));
+        assertThrows(ApiException.class,()->service.login(session,"sms-send",id,Map.of("country","86","phone","13800000000")));
+        service.login(session,"sms-code",id,Map.of("code","001234"));
+        verify(runner,times(2)).runInput(anyString(),anyList(),anyString(),any());
+        StreamerContext.set("miko");
+        assertThrows(ApiException.class,()->service.login(session,"sms-code",id,Map.of("code","001234")));
+    }
+
+    @Test void stdinInputReachesChildWithoutBeingACommandArgument(@TempDir Path tmp) throws Exception {
+        java.nio.file.Files.createDirectories(tmp.resolve("worker"));
+        Path source=tmp.resolve("StdinCheck.java");
+        java.nio.file.Files.writeString(source,"class StdinCheck { public static void main(String[] args) throws Exception { "
+            + "byte[] data=System.in.readAllBytes(); System.out.print(data.length); } }");
+        KiyaProperties props=new KiyaProperties(); props.setRepoDir(tmp.toString()); props.setStreamer("kiya");
+        String java=Path.of(System.getProperty("java.home"),"bin",System.getProperty("os.name").startsWith("Windows")?"java.exe":"java").toString();
+        ProcessRunner process=new ProcessRunner(new WorkerPaths(props)) {
+            @Override public List<String> command(String script,List<String> args) { return List.of(java,source.toString()); }
+        };
+        String input="{\"password\":\"private-秘密\"}";
+        var result=process.runInput("ignored.py",List.of(),input,Duration.ofSeconds(20));
+        assertEquals(0,result.exitCode());
+        assertEquals(String.valueOf(input.getBytes("UTF-8").length),result.output());
+    }
+
     @Test void queuedTaskRestoresSubmittedStreamerBeforeBuildingWorkerCommand(@TempDir Path tmp) throws Exception {
         KiyaProperties props = new KiyaProperties(); props.setStreamer("kiya"); props.setRepoDir(tmp.toString());
         WorkerPaths paths = new WorkerPaths(props);

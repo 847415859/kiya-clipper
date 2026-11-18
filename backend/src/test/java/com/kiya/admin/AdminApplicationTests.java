@@ -127,6 +127,23 @@ class AdminApplicationTests {
     void publishAccountMutationRequiresCsrf() throws Exception {
         mvc.perform(post("/api/publish-account/qr")).andExpect(status().isForbidden());
         mvc.perform(post("/api/publish-account/logout")).andExpect(status().isForbidden());
+        for (String method : java.util.List.of("password","sms-send","sms-code","cookie","browser")) {
+            mvc.perform(post("/api/publish-account/login/"+method).contentType("application/json").content("{}"))
+                .andExpect(status().isForbidden());
+        }
+    }
+
+    @Test void captchaFrameHasIsolatedPolicyWithoutRelaxingMainPage() throws Exception {
+        var response=mvc.perform(get("/publish-captcha")).andExpect(status().isOk()).andReturn().getResponse();
+        org.junit.jupiter.api.Assertions.assertEquals("SAMEORIGIN",response.getHeader("X-Frame-Options"));
+        String csp=response.getHeader("Content-Security-Policy");
+        org.junit.jupiter.api.Assertions.assertEquals(1,response.getHeaders("Content-Security-Policy").size());
+        org.junit.jupiter.api.Assertions.assertTrue(csp.contains("frame-ancestors 'self'"));
+        org.junit.jupiter.api.Assertions.assertTrue(csp.contains("script-src 'nonce-"));
+        org.junit.jupiter.api.Assertions.assertFalse(response.getContentAsString().contains("{{nonce}}"));
+        org.junit.jupiter.api.Assertions.assertTrue(response.getHeader("Cache-Control").contains("no-store"));
+        var normal=mvc.perform(get("/api/auth/me")).andReturn().getResponse();
+        org.junit.jupiter.api.Assertions.assertTrue(normal.getHeader("Content-Security-Policy").contains("script-src 'self';"));
     }
 
 }

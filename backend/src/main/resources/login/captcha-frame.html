@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{margin:0;padding:10px;font:14px sans-serif;color:#555}#captcha{min-height:80px}#message{line-height:1.6}</style>
+<script nonce="{{nonce}}" src="https://static.geetest.com/static/js/gt.0.5.0.js"></script>
+</head>
+<body><div id="message">请手动完成人机验证。</div><div id="captcha"></div>
+<script nonce="{{nonce}}">
+let widget = null;
+let configured = '';
+const send = message => window.parent.postMessage(message, '*');
+window.addEventListener('message', event => {
+  if (event.source !== window.parent || event.data?.type !== 'publish-captcha-config') return;
+  const {gt, challenge} = event.data;
+  if (![gt,challenge].every(x => typeof x === 'string' && /^[A-Za-z0-9_-]{8,512}$/.test(x))) return;
+  const key = gt + ':' + challenge;
+  if (key === configured) return;
+  if (widget?.destroy) widget.destroy();
+  if (typeof window.initGeetest !== 'function') { send({type:'publish-captcha-error'}); return; }
+  configured = key;
+  window.initGeetest({gt,challenge,offline:false,new_captcha:true,product:'embed',width:'100%',https:true,lang:'zh-cn'}, instance => {
+    widget = instance;
+    instance.appendTo('#captcha');
+    instance.onSuccess(() => {
+      const value = instance.getValidate();
+      if (value) send({type:'publish-captcha-result',proof:{challenge:value.geetest_challenge,validate:value.geetest_validate,seccode:value.geetest_seccode}});
+    });
+    instance.onError(() => send({type:'publish-captcha-error'}));
+  });
+});
+send({type:'publish-captcha-ready'});
+</script></body></html>

@@ -26,10 +26,12 @@ public class PublishAccountService {
 
     static final class Ticket {
         final String id;
-        final long deadline = System.currentTimeMillis() + 600_000;
+        long deadline = System.currentTimeMillis() + 600_000;
+        final String method;
         long checkedAt;
         Map<String, Object> result = Map.of("state", "waiting");
-        Ticket(String id) { this.id = id; }
+        Ticket(String id) { this(id, "qr"); }
+        Ticket(String id, String method) { this.id = id; this.method = method; }
     }
 
     public PublishAccountService(WorkerPaths paths, ProcessRunner runner, ObjectMapper om, JobMapper jobs) {
@@ -42,6 +44,37 @@ public class PublishAccountService {
         List<String> args = new ArrayList<>(List.of(action, "--streamer", paths.streamer()));
         args.addAll(extra);
         ProcessRunner.Result response = runner.run("publish_account.py", args, Duration.ofSeconds(45));
+        return publicResult(response);
+    }
+
+    private Map<String, Object> callInput(String action, String id, Map<String,Object> body) {
+        Map<String,Object> safeInput = new LinkedHashMap<>();
+        for (String name : List.of("username", "password", "country", "phone", "code", "cookie")) {
+            if (body.containsKey(name)) {
+                Object value = body.get(name);
+                int limit = name.equals("cookie") ? 65536 : 256;
+                if (!(value instanceof String text) || text.length() > limit) throw ApiException.badRequest("登录输入格式或长度不正确");
+                safeInput.put(name, value);
+            }
+        }
+        if (body.get("proof") instanceof Map<?,?> proof) {
+            Map<String,Object> clean = new LinkedHashMap<>();
+            for (String name : List.of("challenge", "validate", "seccode")) {
+                Object value = proof.get(name);
+                if (!(value instanceof String text) || text.length() > 512) throw ApiException.badRequest("人机验证结果无效");
+                clean.put(name, value);
+            }
+            safeInput.put("proof", clean);
+        }
+        String input;
+        try { input = om.writeValueAsString(safeInput); } catch (Exception e) { throw ApiException.badRequest("登录输入无法读取"); }
+        if (input.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 131072) throw ApiException.badRequest("登录输入过长");
+        List<String> args = new ArrayList<>(List.of(action, "--streamer", paths.streamer()));
+        if (id != null) args.addAll(List.of("--login-id", id));
+        return publicResult(runner.runInput("publish_account.py", args, input, Duration.ofSeconds(75)));
+    }
+
+    private Map<String, Object> publicResult(ProcessRunner.Result response) {
         Map<String, Object> result;
         try {
             result = om.readValue(response.output().trim(), new TypeReference<LinkedHashMap<String, Object>>() {});
@@ -53,11 +86,24 @@ public class PublishAccountService {
         }
         // Only explicit public fields may cross the HTTP boundary.
         Map<String, Object> safe = new LinkedHashMap<>();
-        for (String name : List.of("state", "source", "account", "message", "login_id", "qr_image", "expires_at")) {
+        for (String name : List.of("state", "source", "account", "message", "login_id", "qr_image", "expires_at", "method", "login_url", "captcha", "retry_after", "masked_phone")) {
             if (result.containsKey(name)) safe.put(name, result.get(name));
         }
         if (safe.get("account") instanceof Map<?, ?> account) {
             safe.put("account", Map.of("uid", String.valueOf(account.get("uid")), "name", String.valueOf(account.get("name"))));
+        }
+        if (safe.get("captcha") instanceof Map<?,?> captcha) {
+            safe.put("captcha", Map.of("gt", String.valueOf(captcha.get("gt")), "challenge", String.valueOf(captcha.get("challenge"))));
+        }
+        if (safe.containsKey("login_url")) {
+            try {
+                var url = java.net.URI.create(String.valueOf(safe.get("login_url")));
+                if (!"https".equals(url.getScheme()) || !List.of("passport.bilibili.com", "www.bilibili.com").contains(url.getHost())
+                        || url.getUserInfo() != null || url.getPort() != -1 && url.getPort() != 443
+                        || java.util.Arrays.stream((url.getRawQuery() == null ? "" : url.getRawQuery()).split("&"))
+                           .map(part -> java.net.URLDecoder.decode(part.split("=",2)[0], java.nio.charset.StandardCharsets.UTF_8).toLowerCase(java.util.Locale.ROOT))
+                           .anyMatch(List.of("sessdata","bili_jct","access_token","refresh_token")::contains)) safe.remove("login_url");
+            } catch (Exception e) { safe.remove("login_url"); }
         }
         return safe;
     }
@@ -84,10 +130,58 @@ public class PublishAccountService {
         }
     }
 
+    private String family(String method) { return method.startsWith("sms-") ? "sms" : method; }
+
+    private void limitInput(HttpSession session, String method) {
+        long now = System.currentTimeMillis();
+        if (method.equals("sms-send") && session.getAttribute(key()+":sms") instanceof Long at && now-at < 60000) {
+            throw ApiException.badRequest("短信已发送，请等待 60 秒后再试");
+        }
+        if (method.equals("password")) {
+            @SuppressWarnings("unchecked")
+            List<Long> times = session.getAttribute(key()+":password") instanceof List<?> list ? new ArrayList<>((List<Long>) list) : new ArrayList<>();
+            times.removeIf(at -> now-at >= 60000);
+            if (times.size() >= 5) throw ApiException.badRequest("密码登录尝试过于频繁，请一分钟后再试");
+            times.add(now); session.setAttribute(key()+":password", times);
+        }
+    }
+
+    private void updateTicket(HttpSession session, Ticket t, Map<String,Object> result, String method) {
+        t.result = result; t.checkedAt = System.currentTimeMillis();
+        if (result.get("expires_at") instanceof Number expiry) t.deadline = Math.min(expiry.longValue()*1000+30000, System.currentTimeMillis()+600000);
+        if (method.equals("sms-send") && "sms_sent".equals(result.get("state"))) session.setAttribute(key()+":sms",System.currentTimeMillis());
+    }
+
+    public Map<String,Object> login(HttpSession session, String method, String id, Map<String,Object> body) {
+        if (!List.of("password", "sms-send", "sms-code", "cookie", "browser").contains(method)) throw ApiException.badRequest("不支持的登录方式");
+        synchronized(session) {
+            Ticket old = session.getAttribute(key()) instanceof Ticket t ? t : null;
+            if (id != null) {
+                old = ticket(session,id);
+                if (!old.method.equals(family(method)) || !List.of("password","sms-send","sms-code").contains(method)) throw ApiException.badRequest("登录方式或会话不一致");
+            } else {
+                if (method.equals("sms-code")) throw ApiException.badRequest("请先发送短信验证码");
+                if (session.getAttribute(key()+":started") instanceof Long at && System.currentTimeMillis()-at < 3000) throw ApiException.badRequest("请稍后再开始新的登录请求");
+            }
+            limitInput(session,method);
+            Map<String,Object> result = callInput(method,id,body);
+            String resultId = String.valueOf(result.get("login_id"));
+            if (!resultId.matches("[a-f0-9]{32}") || id != null && !id.equals(resultId)) throw ApiException.badRequest("登录请求结果无效");
+            Ticket t = id == null ? new Ticket(resultId,family(method)) : old;
+            updateTicket(session,t,result,method);
+            session.setAttribute(key(),t);
+            if (id == null) {
+                session.setAttribute(key()+":started",System.currentTimeMillis());
+                if (old != null) { try { call("cancel",List.of("--login-id",old.id)); } catch (ApiException ignored) {} }
+            }
+            return result;
+        }
+    }
+
     private Ticket ticket(HttpSession session, String id) {
         if (!(session.getAttribute(key()) instanceof Ticket t) || !t.id.equals(id)
                 || !id.matches("[a-f0-9]{32}") || t.deadline < System.currentTimeMillis()) {
-            throw ApiException.badRequest("登录请求已过期或不属于当前会话，请重新获取二维码");
+            throw ApiException.badRequest("登录请求已过期或不属于当前会话，请重新开始登录");
         }
         return t;
     }
@@ -96,8 +190,7 @@ public class PublishAccountService {
         synchronized (session) {
             Ticket t = ticket(session, id);
             if ("ready".equals(t.result.get("state")) || System.currentTimeMillis() - t.checkedAt < 3000) return t.result;
-            t.result = call("poll", List.of("--login-id", id));
-            t.checkedAt = System.currentTimeMillis();
+            updateTicket(session,t,call("poll", List.of("--login-id", id)),t.method);
             return t.result;
         }
     }

@@ -58,6 +58,15 @@ public class ProcessRunner {
     }
 
     public Result run(String script, List<String> args, Duration timeout) {
+        return execute(script, args, null, timeout);
+    }
+
+    /** Sensitive login inputs travel through stdin, never command arguments or environment variables. */
+    public Result runInput(String script, List<String> args, String input, Duration timeout) {
+        return execute(script, args, input, timeout);
+    }
+
+    private Result execute(String script, List<String> args, String input, Duration timeout) {
         Process p;
         try {
             p = builder(command(script, args)).start();
@@ -74,6 +83,13 @@ public class ProcessRunner {
                 return "";
             }
         });
+        try (var stdin = p.getOutputStream()) {
+            if (input != null) stdin.write(input.getBytes(StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            p.descendants().forEach(ProcessHandle::destroyForcibly);
+            p.destroyForcibly();
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "登录请求传递失败，请重试");
+        }
         try {
             if (!p.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
                 p.destroyForcibly();

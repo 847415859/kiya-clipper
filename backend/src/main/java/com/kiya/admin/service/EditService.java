@@ -287,6 +287,10 @@ public class EditService {
         out.put("renderPreviews", renderPreviews(session, rank));
         out.put("finals", finals(session, rank));
         out.put("llm", llm);
+        if (llm != null) {
+            out.put("event", llm.get("event"));
+            out.put("boundary_options", llm.get("boundary_options"));
+        }
         Path quality = paths.sessionDir(session).resolve("quality").resolve(String.format("%02d.json", rank));
         try {
             out.put("quality", Files.exists(quality) ? om.readValue(quality.toFile(), new TypeReference<Map<String, Object>>() {}) : null);
