@@ -27,6 +27,7 @@ class AdminApplicationTests {
     @Test
     void apiRequiresLogin() throws Exception {
         mvc.perform(get("/api/sessions")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/publish-account")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/schedules")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/schedules/images/" + "a".repeat(32))).andExpect(status().isUnauthorized());
     }
@@ -119,6 +120,13 @@ class AdminApplicationTests {
         mvc.perform(post("/api/memory/actions").with(csrf()).contentType("application/json")
             .content("{\"action\":\"valueOutcome\",\"bvid\":\"BV1ab411c7de\",\"target\":\"streamer\",\"window\":\"24h\",\"count\":2,\"view\":1000,\"source\":\"test export\",\"verified\":false}"))
             .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @WithMockUser
+    void publishAccountMutationRequiresCsrf() throws Exception {
+        mvc.perform(post("/api/publish-account/qr")).andExpect(status().isForbidden());
+        mvc.perform(post("/api/publish-account/logout")).andExpect(status().isForbidden());
     }
 
 }

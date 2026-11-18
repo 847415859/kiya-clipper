@@ -46,8 +46,12 @@ def cookie_path(path: str | Path | None = None) -> Path:
                 "/root/bili_cookies.txt").expanduser()
 
 
-def memory_cookie_file(cfg: dict) -> str | None:
-    """Explicit query credentials take priority; otherwise reuse the configured upload login."""
+def memory_cookie_file(cfg: dict, streamer=None) -> str | None:
+    """Website-managed credentials are scoped to this streamer; legacy precedence is retained otherwise."""
+    from .publish_account import managed_cookie
+    managed = managed_cookie(streamer)
+    if managed.exists():
+        return str(managed)
     return (os.environ.get("KIYA_COOKIE_FILE") or (cfg.get("memory") or {}).get("cookie_file") or
             os.environ.get("KIYA_BILIUP_COOKIE") or ((cfg.get("publish") or {}).get("bili") or {}).get("cookie"))
 

@@ -147,7 +147,8 @@ mkdir -p ~/.config/biliup && cd ~/.config/biliup && biliup login      # 按提�
 chmod 600 ~/.config/biliup/cookies.json
 ```
 
-- 登录文件就是你的账号凭证，不要提交到 git、不要发给别人；后台和脚本都不会接触你的密码。`config/kiya.yaml` 的 `publish.bili.cookie` 指向它（后端以哪个用户运行，就要用那个用户登录，或者改成绝对路径）。
+- 也可在网站 **设置 → B站发布账号** 中扫码、核对 UID 后确认使用，无需在服务器交互登录；需先更新前后端及 worker，并安装更新后的 `worker/requirements.txt`。网站账号按主播隔离保存，优先于旧发布配置；详见 [发布账号网页登录](../docs/发布账号网页登录.md)。
+- 登录文件就是你的账号凭证，不要提交到 git、不要发给别人；后台和脚本都不会接触你的密码。未使用网站托管时，`config/kiya.yaml` 的 `publish.bili.cookie` 指向它（后端以哪个用户运行，就要用那个用户登录，或者改成绝对路径）。
 - 验证：后台发布弹窗顶部没有红 / 黄提示即可；命令行 `python scripts/publish_bili.py --status` 能看到 `biliup` 和 `logged_in` 都是 true。
 - 第一次：先点“先预演”看命令，再用“先放着”真投一条，到 B站创作中心确认标题 / 分区 / 来源 / 定时时间，没问题再用别的方式。
 - 分区 id 在 `publish.bili.tid`，默认 21（生活·日常），按你的习惯改。

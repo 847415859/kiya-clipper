@@ -44,6 +44,7 @@ public class ProcessRunner {
         ProcessBuilder pb = new ProcessBuilder(cmd).directory(paths.worker().toFile()).redirectErrorStream(true);
         pb.environment().put("PYTHONUNBUFFERED", "1");
         pb.environment().put("PYTHONIOENCODING", "utf-8");
+        pb.environment().put("KIYA_STREAMER", paths.streamer());
         if (databaseUrl.startsWith("jdbc:mysql://")) {
             var uri=java.net.URI.create(databaseUrl.substring(5));
             pb.environment().put("KIYA_SCHEDULE_STORAGE","mysql");

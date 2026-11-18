@@ -22,7 +22,7 @@ def main():
     args = ap.parse_args()
     load_env()
     cfg = load_cfg(resolve_config(args.config, streamer=args.streamer))
-    b = Bili(cookie_file=args.cookie_file or memory_cookie_file(cfg))
+    b = Bili(cookie_file=args.cookie_file or memory_cookie_file(cfg, args.streamer))
     print(f"查询 Cookie 文件：{b.cookie_file.resolve()}")
     print("文件状态：" + ("存在" if b.cookie_file.is_file() else "不存在"))
     names = {pair.split("=", 1)[0] for pair in b.cookie.split("; ") if pair}

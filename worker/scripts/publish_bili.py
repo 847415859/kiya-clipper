@@ -15,7 +15,7 @@
   private  仅自己可见：biliup 没有这个参数，只有在 config 的 publish.bili.private_args 里填了验证过的参数才可用
 
 安全闸：违禁词命中默认拒绝（--allow-taboo 放行）、已成功投过默认拒绝（--again 重投）、两次上传之间有最短间隔、
-必须有渲染好的成片、biliup 的参数不认识就停下不猜。登录由你在服务器上自己 `biliup login`，这里不碰密码。
+必须有渲染好的成片、biliup 的参数不认识就停下不猜。登录可在网站“设置 → B站发布账号”扫码并确认，也兼容服务器上的 `biliup login`；不接触账号密码。
 结果写到 output/<场次>/publish/<序号>.bili.json；最后一行输出这份 JSON。
 """
 from __future__ import annotations
@@ -35,6 +35,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from clipper.publish_account import upload_cookie, read as read_credential
+from clipper.env import load_env
 from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.schedule import for_pack, append_description, check_rendered_schedule, parse_at  # noqa: E402
 from clipper.streamer import decisions_path, resolve_config, streamer_from_session_dir  # noqa: E402
@@ -69,14 +71,14 @@ def biliup_bin() -> str | None:
     return shutil.which(p) or (p if Path(p).is_file() and os.access(p, os.X_OK) else None)
 
 
-def cookie_path(bc: dict) -> Path:
-    return Path(os.environ.get("KIYA_BILIUP_COOKIE") or bc.get("cookie") or "~/.config/biliup/cookies.json").expanduser()
+def cookie_path(bc: dict, streamer=None) -> Path:
+    return upload_cookie(bc, streamer)
 
 
-def status(cfg: dict) -> dict:
+def status(cfg: dict, streamer=None) -> dict:
     bc = bili_cfg(cfg)
-    ck = cookie_path(bc)
-    return {"biliup": biliup_bin() is not None, "logged_in": ck.is_file() and ck.stat().st_size > 2,
+    ck = cookie_path(bc, streamer)
+    return {"biliup": biliup_bin() is not None, "logged_in": ck.is_file() and ck.stat().st_size > 2 and not read_credential(ck).get("disabled"),
             "cookie": str(ck), "hold_days": bc["hold_days"], "private": bool(bc.get("private_args")),
             "tid": bc["tid"], "height": int(bc["height"]), "min_interval_sec": bc["min_interval_sec"]}
 
@@ -367,7 +369,7 @@ def run(args: argparse.Namespace) -> dict:
         failed = preflight_result["errors"] + preflight_result["warnings"]
         raise Refuse("发布前检查未通过：" + "；".join(failed))
     bin_ = biliup_bin()
-    ck = cookie_path(bc)
+    ck = cookie_path(bc, streamer_from_session_dir(sess))
     mode_text = {"hold": f"先放着（{parse_at(dtime):%m-%d %H:%M} 定时，可在创作中心改 / 撤回）" if dtime else "",
                  "now": "立即公开发布",
                  "timed": f"定时 {parse_at(dtime):%m-%d %H:%M}" if dtime else "",
@@ -381,7 +383,7 @@ def run(args: argparse.Namespace) -> dict:
 
     if args.dry_run:
         cmd = build_cmd(bin_ or "biliup", ck, video, pack, cover if cover.exists() else None, bc, dtime, extra)
-        base.update(status="dry_run", command=mask(cmd), biliup=bin_ is not None, logged_in=ck.is_file())
+        base.update(status="dry_run", command=mask(cmd), biliup=bin_ is not None, logged_in=ck.is_file() and not read_credential(ck).get("disabled"))
         print("预演（不会上传）：")
         print("最终视频：" + str(video))
         print("最终简介：\n" + pack["description"])
@@ -391,8 +393,8 @@ def run(args: argparse.Namespace) -> dict:
 
     if not bin_:
         raise Refuse("服务器上没有找到 biliup：先安装（见 deploy/README.md 的“一键发布”）")
-    if not ck.is_file():
-        raise Refuse(f"没有找到登录文件 {ck}：先在服务器上执行 `biliup login`（见 deploy/README.md）")
+    if not ck.is_file() or read_credential(ck).get("disabled"):
+        raise Refuse("发布账号尚未登录或已停用，请在网站“设置 → B站发布账号”中扫码登录")
     check_rate(sess, bc, now)
     cmd = build_cmd(bin_, ck, video, pack, cover if cover.exists() else None, bc, dtime, extra)
     check_flags(bin_, cmd)
@@ -443,6 +445,7 @@ def main() -> int:
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--config", default=None)
     args = ap.parse_args()
+    load_env()
     if args.replace_bvid and not args.bind_bvid:
         ap.error("--replace-bvid 必须配合 --bind-bvid，不能用于上传")
     if args.bind_bvid and (args.dry_run or args.again or args.status):
@@ -450,7 +453,7 @@ def main() -> int:
 
     if args.status:
         cfg = load_cfg(resolve_config(args.config, Path(args.candidates).parent if args.candidates else None))
-        print(json.dumps(status(cfg), ensure_ascii=False))
+        print(json.dumps(status(cfg, streamer_from_session_dir(Path(args.candidates).parent) if args.candidates else None), ensure_ascii=False))
         return 0
     if not args.candidates or not args.rank:
         ap.error("需要 candidates.json 和 --rank")

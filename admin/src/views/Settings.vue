@@ -1,5 +1,6 @@
 <template>
   <div class="page settings">
+    <PublishAccount />
     <el-card shadow="never">
       <template #header><b>额外热词</b> <span class="muted">语音识别优先认这些词；主播资料里的昵称、粉丝名、梗会自动加入，不用重复填</span></template>
       <el-select v-model="hotwords" multiple filterable allow-create default-first-option :reserve-keyword="false"
@@ -45,6 +46,7 @@
 </template>
 
 <script setup>
+import PublishAccount from '../components/PublishAccount.vue'
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'

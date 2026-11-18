@@ -44,7 +44,7 @@ def main():
                      "event_id": link.get("event_id") or f"{link['session']}:{link['rank']}"})
     history = snapshot_store(store, memory.get("value_snapshots"))
     cfg = load_cfg(resolve_config(None, streamer=sid), decisions=dec)
-    client = Bili(cookie_file=memory_cookie_file(cfg))
+    client = Bili(cookie_file=memory_cookie_file(cfg, sid))
     fetched = {}
     def fetch(bv):
         stat = client.stat(bv)

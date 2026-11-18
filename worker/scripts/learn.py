@@ -137,7 +137,7 @@ def main() -> int:
     su, mine = old.get("streamer_uploads") or [], old.get("my_uploads_raw") or []
     mine = [{**row, "stats_stale": True} for row in mine]
     if not args.no_fetch:
-        b = Bili(cookie_file=memory_cookie_file(cfg))
+        b = Bili(cookie_file=memory_cookie_file(cfg, streamer_id))
         uid = (cfg.get("streamer") or {}).get("uid")
         try:
             if uid:

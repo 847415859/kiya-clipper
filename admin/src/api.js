@@ -51,6 +51,12 @@ export const api = {
   login: (username, password) =>
     http.post('/api/auth/login', new URLSearchParams({ username, password }), { quiet: true }),
   logout: () => http.post('/api/auth/logout'),
+  publishAccount: () => http.get('/api/publish-account'),
+  publishLoginStart: () => http.post('/api/publish-account/qr'),
+  publishLoginPoll: (id) => http.post(`/api/publish-account/qr/${encodeURIComponent(id)}/poll`, null, { quiet: true }),
+  publishLoginConfirm: (id, uid) => http.post(`/api/publish-account/qr/${encodeURIComponent(id)}/confirm`, { uid }),
+  publishLoginCancel: (id) => http.post(`/api/publish-account/qr/${encodeURIComponent(id)}/cancel`, null, { quiet: true }),
+  publishAccountLogout: () => http.post('/api/publish-account/logout'),
   changePassword: (oldPassword, newPassword) => http.post('/api/auth/password', { oldPassword, newPassword }),
 
   streamers: () => http.get('/api/streamers'),

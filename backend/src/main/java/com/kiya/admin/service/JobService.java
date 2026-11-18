@@ -121,10 +121,18 @@ public class JobService {
 
     // ------------------------------------------------------------------ 提交 / 查询 / 取消
     public Job submit(String type, String session, Map<String, Object> params, String user) {
+        if ("PUBLISH_BILI".equals(type)) {
+            synchronized (PublishAccountService.CHANGE_LOCK) { return submitInternal(type, session, params, user); }
+        }
+        return submitInternal(type, session, params, user);
+    }
+
+    private Job submitInternal(String type, String session, Map<String, Object> params, String user) {
         if (!TYPES.containsKey(type)) {
             throw ApiException.badRequest("不支持的任务类型");
         }
         Map<String, Object> p = params == null ? new LinkedHashMap<>() : new LinkedHashMap<>(params);
+        p.put("_streamer", paths.streamer()); // Server-controlled scope survives the executor thread and restarts.
         if (needsSession(type)) {
             paths.checkSession(session);
         } else {
@@ -510,6 +518,31 @@ public class JobService {
     }
 
     private void run(long id) {
+        String previous = com.kiya.admin.config.StreamerContext.get();
+        try {
+            Job job = mapper.selectById(id);
+            if (job == null || !"PENDING".equals(job.getStatus())) return;
+            Map<String, Object> params = om.readValue(job.getParams() == null ? "{}" : job.getParams(), new TypeReference<Map<String, Object>>() {});
+            if (params.get("_streamer") != null) {
+                String streamer = String.valueOf(params.get("_streamer"));
+                if (!streamer.matches("^[a-z][a-z0-9_-]{0,31}$")) throw new IllegalArgumentException("invalid streamer");
+                com.kiya.admin.config.StreamerContext.set(streamer);
+            }
+            runScoped(id);
+        } catch (Exception e) {
+            log.warn("任务 {} 的主播上下文或状态无效", id);
+            Job job = mapper.selectById(id);
+            if (job != null && !"CANCELED".equals(job.getStatus())) {
+                job.setStatus("FAILED"); job.setSummary("任务上下文无效，请重新提交"); job.setFinishedAt(LocalDateTime.now());
+                mapper.updateById(job);
+            }
+        } finally {
+            if (previous == null) com.kiya.admin.config.StreamerContext.clear();
+            else com.kiya.admin.config.StreamerContext.set(previous);
+        }
+    }
+
+    private void runScoped(long id) {
         Job j = mapper.selectById(id);
         if (j == null || !"PENDING".equals(j.getStatus())) {
             return;                                               // 已取消
