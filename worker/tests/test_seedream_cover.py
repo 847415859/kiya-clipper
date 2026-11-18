@@ -10,8 +10,25 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 import publish_pack as packer
 from clipper.cover_prompt import seedream_options, seedream_prompt
+from clipper.cover_quality import cover_text_options, inspect_cover_text, inspect_reference_frame
 from clipper.seedream import SeedreamError
 from clipper import publish
+
+
+def test_cover_text_options_keep_three_directions_and_prefer_short_copy():
+    options = cover_text_options({'what_happened': '认真保证后翻车', 'emotion': '意外'})
+    assert [item['kind'] for item in options] == ['emotion', 'suspense', 'contrast']
+    assert all(1 <= len(item['text']) <= 16 for item in options)
+
+
+def test_cover_quality_keeps_image_when_checks_need_manual_review(tmp_path):
+    image = tmp_path / 'cover.jpg'
+    Image.new('RGB', (320, 180), 'white').save(image)
+    reference = inspect_reference_frame(image)
+    ocr = inspect_cover_text(image, '不会被删除')
+    assert reference['status'] == 'review'
+    assert ocr['status'] in {'unavailable', 'failed', 'review'}
+    assert image.exists()
 
 
 def test_supplement_extends_automatic_plan_and_clearing_is_explicit():

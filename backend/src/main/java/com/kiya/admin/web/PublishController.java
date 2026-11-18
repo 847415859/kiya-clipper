@@ -40,12 +40,12 @@ public class PublishController {
     }
 
     public record SaveReq(String title, String description, List<String> tags, Map<String, Object> seedreamOptions, String coverText,
-                          Boolean includeSchedule, String schedulePublishAt) {}
+                          Boolean includeSchedule, String schedulePublishAt, Map<String, Object> coverPreferences) {}
 
     @PutMapping
     public Map<String, Object> save(@PathVariable String name, @PathVariable int rank, @RequestBody SaveReq req) {
         return publish.save(name, rank, req.title(), req.description(), req.tags(), req.seedreamOptions(), req.coverText(),
-                req.includeSchedule(), req.schedulePublishAt());
+                req.includeSchedule(), req.schedulePublishAt(), req.coverPreferences());
     }
 
     /** select = 把已生成的某张候选设为主封面（不重新生成）；不填时按其他字段生成 / 重画。 */

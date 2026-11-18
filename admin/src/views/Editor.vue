@@ -359,10 +359,17 @@
             <b>发布</b> <span class="muted">（投稿时复制粘贴；类型选“转载”，来源填直播间）</span>
             <el-button style="float: right" link size="small" @click="regenPack">按精排重新生成文字</el-button>
           </template>
-          <div class="cover">
-            <img v-if="pack.cover" :src="api.coverUrl(name, rank, pack.cover_version)" alt="封面" @click="openCover" />
-            <div v-else class="muted cover-empty">还没有封面</div>
+          <div class="cover-compare">
+            <div class="cover">
+              <img v-if="pack.cover" :src="api.coverUrl(name, rank, pack.cover_version)" alt="封面大图" @click="openCover" />
+              <div v-else class="muted cover-empty">还没有封面</div>
+            </div>
+            <div v-if="pack.cover" class="cover-mobile-preview">
+              <img :src="api.coverUrl(name, rank, pack.cover_version)" alt="手机信息流缩略图" @click="openCover" />
+              <span class="muted">手机信息流预览</span>
+            </div>
           </div>
+          <div v-if="pack.cover_variants?.length > 1" class="muted cover-cost">本次已生成 {{ pack.cover_variants.length }} 个设计方向；Seedream 版本按实际生成次数计费，选择已有版本不重复计费。</div>
           <div v-if="pack.cover_variants && pack.cover_variants.length" class="cover-variants">
             <button v-for="v in pack.cover_variants" :key="v.variant" class="cover-variant"
                     :class="{ selected: v.variant === pack.cover_variant }" @click="chooseCoverVariant(v.variant)">
@@ -370,6 +377,8 @@
               <span>{{ v.label }}</span>
             </button>
           </div>
+          <el-alert v-if="pack.cover_reference_check?.issues?.length" type="warning" :closable="false" show-icon
+                    :title="pack.cover_reference_check.recommendation || '参考帧需要人工复核'" style="margin-bottom: 10px" />
           <div v-if="pack.cover_history?.length" class="cover-history">
             <b>已生成版本 · {{ pack.cover_history.length }}</b>
             <p class="muted">点击版本设为封面，不重新生图。选好后可选择该版本继续补充完善。</p>
@@ -385,7 +394,16 @@
           </div>
           <el-form label-width="64px" size="small" class="pack">
             <el-form-item label="封面字">
-              <el-input v-model="coverText" maxlength="30" placeholder="由 Seedream 一体化排版，留空生成无字封面" />
+              <div style="width:100%">
+                <el-input v-model="coverText" maxlength="30" placeholder="由 Seedream 一体化排版，留空生成无字封面" />
+                <div v-if="pack.cover_text_options?.length" class="cover-text-options">
+                  <el-button v-for="option in pack.cover_text_options" :key="option.kind" size="small" plain
+                             :type="option.text === coverText ? 'primary' : undefined" @click="coverText = option.text">
+                    {{ option.label }} · {{ option.text }}
+                  </el-button>
+                </div>
+                <span class="muted">已提供情绪型、悬念型、反差型候选；优先控制在 8～16 字，选择后仍可手动修改。</span>
+              </div>
             </el-form-item>
             <el-form-item label="画面">
               <span class="muted">{{ pack.cover_t != null ? hms(pack.cover_t) + '（' + (pack.cover_source || '') + '）' : '默认笑点' }}</span>
@@ -396,6 +414,9 @@
                 <el-input v-model="seedreamSupplement" type="textarea" :rows="3" :maxlength="1500" show-word-limit
                           aria-label="Seedream 补充要求" placeholder="例如：人物靠右，背景简洁，增加一只夸张的猫爪；保留发型和服装，整体改为柔和粉紫色。" />
                 <span class="muted">Seedream 同时设计画面与文字，可补充字体、配色和排版要求；需显示的文案填上方“封面字”。保存设置不生成图片，AI 文字请在发布前核对。</span>
+                <el-alert v-if="pack.cover_history?.[0]?.meta?.ocr_check?.issues?.length" type="warning" :closable="false" show-icon
+                          title="封面文字检查发现问题，请人工核对；图片已保留，不会自动重试。" style="margin-top: 8px" />
+                <span v-if="pack.cover_history?.[0]?.meta?.ocr_check?.status === 'unavailable'" class="muted">当前环境未安装 OCR，已保留图片，请人工检查错字、漏字和重复文字。</span>
               </div>
             </el-form-item>
             <el-form-item label="生图参考">
@@ -1508,13 +1529,19 @@ async function savePack(notify = true) {
     { title: pack.value.title, description: pack.value.description, tags: pack.value.tags || [],
       coverText: coverText.value,
       includeSchedule: pack.value.include_schedule !== false, schedulePublishAt: pack.value.schedule_publish_at || '',
-      seedreamOptions: {supplement: seedreamSupplement.value, reference: seedreamReference.value} }))
+      seedreamOptions: {supplement: seedreamSupplement.value, reference: seedreamReference.value},
+      coverPreferences: { selected_variant: pack.value.cover_variant || '', selected_version: pack.value.cover_history_selected || '',
+        supplement: seedreamSupplement.value, manual_text: coverText.value !== (pack.value.cover_text_options?.find(x => x.kind === 'emotion')?.text || '') } }))
   if (notify) ElMessage.success('已保存')
 }
 
 async function regenPack() {
   await ElMessageBox.confirm('标题、简介、标签按精排结果重新生成，覆盖改过的内容？', '重新生成', { type: 'warning' })
   pack.value = await api.regeneratePublish(name.value, rank.value)
+  coverText.value = pack.value.cover_text ?? pack.value.title_candidates?.[0] ?? ''
+  seedreamSupplement.value = pack.value.cover_seedream_options?.supplement || ''
+  seedreamReference.value = pack.value.cover_seedream_options?.reference || 'frame'
+  coverT = null
 }
 
 function openCover() {
@@ -1874,8 +1901,15 @@ onBeforeUnmount(() => {
 .bili-modes .muted { margin-left: 6px; font-size: 12px; }
 .bili-log { max-height: 160px; overflow: auto; background: var(--el-fill-color-light); padding: 8px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
 .stale { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 5; background: rgba(0, 0, 0, 0.72); color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 13px; display: flex; gap: 8px; align-items: center; }
+.cover-compare { display: grid; grid-template-columns: minmax(0, 1fr) 132px; gap: 10px; align-items: start; }
 .cover img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 6px; cursor: zoom-in; display: block; }
+.cover-mobile-preview { width: 132px; }
+.cover-mobile-preview img { width: 100%; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 6px; cursor: zoom-in; display: block; }
+.cover-mobile-preview span { display: block; padding-top: 4px; font-size: 12px; text-align: center; }
+.cover-cost { margin: 6px 0; }
+.cover-text-options { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .cover-empty { aspect-ratio: 16 / 10; display: flex; align-items: center; justify-content: center; background: var(--el-fill-color-light); border-radius: 6px; }
+@media (max-width: 600px) { .cover-compare { grid-template-columns: 1fr 88px; } .cover-mobile-preview { width: 88px; } }
 .cover-variants { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 10px 0 4px; }
 .cover-variant { border: 2px solid var(--el-border-color-light); background: #fff; padding: 0; border-radius: 6px; overflow: hidden; cursor: pointer; text-align: left; }
 .cover-variant.selected { border-color: var(--el-color-primary); }

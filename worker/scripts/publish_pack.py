@@ -39,6 +39,7 @@ from clipper.peaks import hhmmss  # noqa: E402
 from clipper.publish import (COVER_THEMES, DEFAULT_TAGS, build_description, build_tags, clean_title,
                              cover_concept, normalize_title_options, render_theme_cover)  # noqa: E402
 from clipper.cover_prompt import seedream_options, seedream_prompt  # noqa: E402
+from clipper.cover_quality import cover_text_options, inspect_cover_text, inspect_reference_frame  # noqa: E402
 from clipper.seedream import SeedreamError, generate as generate_seedream  # noqa: E402
 from cut import pieces  # noqa: E402
 
@@ -186,6 +187,7 @@ def main() -> int:
                 prompt_version=rr.get("prompt_version"), packaging_evidence=llm.get("value_evidence") or llm.get("evidence") or [],
                 candidate_id=f"{sess.name}:{args.rank}", hook_caption=llm.get("hook_caption") or "",
                 session=sess.name, rank=args.rank, title_candidates=titles, title_options=title_options,
+                cover_text_options=cover_text_options(llm, titles[0] if titles else ""),
                 source=streamer.get("live_url", ""), copyright="转载",
                 range={"start": round(a, 1), "end": round(b, 1)})
 
@@ -263,6 +265,8 @@ def main() -> int:
         if not src:
             print("找不到可以截图的视频（录像已移走、也还没有成片 / 预览 / 审核片段）", file=sys.stderr)
             return 1
+        reference_check = inspect_reference_frame(reference)
+        pack["cover_reference_check"] = dict(reference_check, time=round(t, 2), source=src)
         selected = args.cover_variant or pack.get("cover_variant") or "hero"
         if args.cover_mode == "programmatic" and selected == "seedream":
             selected = "hero"           # 当前是生图封面时点“重画封面”，重画的是程序化封面
@@ -295,7 +299,9 @@ def main() -> int:
                     shutil.copyfile(raw, composed)
                     preserve_legacy_seedream(out_dir, args.rank, pack)
                     history = list(pack.get("cover_history") or [])
-                    meta.update(reference=options["reference"], supplement=options["supplement"], composition="seedream-integrated-v1")
+                    ocr_check = inspect_cover_text(composed, text)
+                    meta.update(reference=options["reference"], supplement=options["supplement"], composition="seedream-integrated-v1",
+                                reference_check=reference_check, ocr_check=ocr_check)
                     saved = archive_seedream(out_dir, args.rank, composed, raw, dict(meta, file=f"{args.rank:02d}_cover_seedream.jpg"), history, text)
                     pack["cover_history"] = [saved, *history]
                     pack["cover_history_selected"] = saved["id"]

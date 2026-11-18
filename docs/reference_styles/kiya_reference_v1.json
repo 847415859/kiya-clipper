@@ -1,0 +1,474 @@
+{
+  "schema_version": 1,
+  "id": "kiya_reference_v1",
+  "created_date": "2026-11-18",
+  "status": "research_draft_not_runtime_enabled",
+  "runtime_enabled": false,
+  "source_directory": "D:/bilibili/646830928",
+  "reference_count": 24,
+  "duration_seconds": 2334.38,
+  "coverage": {
+    "overview_frames": 264,
+    "dense_frames": 561,
+    "core_visual_review": [
+      "BV1ybpw66E4w",
+      "BV1GJp469Eur"
+    ],
+    "other_visual_review": "sampled_overviews",
+    "original_recording_alignment": false,
+    "audio_listening_and_mix_review": false,
+    "ocr": "machine_draft_requires_verification",
+    "asr": "local_machine_draft_requires_verification",
+    "ocr_frames": 825,
+    "asr_completed": 24,
+    "asr_segments": 906
+  },
+  "samples": [
+    {
+      "bvid": "BV1ZVPSzhEc1",
+      "file": "20260309_【VUP一问一答自我介绍】粉色猫咪怎么养？ [BV1ZVPSzhEc1].mp4",
+      "duration": 84.61,
+      "width": 1920,
+      "height": 1080,
+      "group": "introduction_promotion",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV1pAcQzKEdj",
+      "file": "20260313_顶精一条龙定制展示   档期充足~ [BV1pAcQzKEdj].mp4",
+      "duration": 39.83,
+      "width": 1920,
+      "height": 1080,
+      "group": "introduction_promotion",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV1dyw7zPEkd",
+      "file": "20260316_『自我介绍』粉毛小猫萌萌突击！你好 我叫kiya [BV1dyw7zPEkd].mp4",
+      "duration": 82.85,
+      "width": 1920,
+      "height": 1080,
+      "group": "introduction_promotion",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV1YPXGBXEuA",
+      "file": "20260328_【不怕死挑战】拼啦！反正也没人看！挑战三连➕评论就寄百封有声明信片⚡ [BV1YPXGBXEuA].mp4",
+      "duration": 98.2,
+      "width": 1920,
+      "height": 1080,
+      "group": "introduction_promotion",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV1o1XzBzELo",
+      "file": "20260331_【模型展示】瞳孔对视时 要小心陷得太深噢~ [BV1o1XzBzELo].mp4",
+      "duration": 66.13,
+      "width": 1280,
+      "height": 720,
+      "group": "introduction_promotion",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV1XPSUBmESk",
+      "file": "20260405_⚡⚡不要…停！ [BV1XPSUBmESk].mp4",
+      "duration": 46.9,
+      "width": 1920,
+      "height": 1080,
+      "group": "interaction_comedy",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV18CDDBXEen",
+      "file": "20260412_约粉丝去钓鱼，他们居然想把我扔下去喂鱼？！ [BV18CDDBXEen].mp4",
+      "duration": 132.07,
+      "width": 1920,
+      "height": 1080,
+      "group": "interaction_comedy",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV13cVs6dEHn",
+      "file": "20260528_『夜车』你的城市，末班车是几点 [BV13cVs6dEHn].mp4",
+      "duration": 221.05,
+      "width": 1920,
+      "height": 1080,
+      "group": "music",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV1VP7Y6hEDC",
+      "file": "20260625_舰长寄来律师函：请停止你的报恩行为 [BV1VP7Y6hEDC].mp4",
+      "duration": 129.97,
+      "width": 1920,
+      "height": 1080,
+      "group": "interaction_comedy",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV1k8No62EeR",
+      "file": "20260718_不要对我冷冰冰｜温柔or绿茶？ [BV1k8No62EeR].mp4",
+      "duration": 69.22,
+      "width": 1080,
+      "height": 1920,
+      "group": "portrait",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV1EiK66aE2z",
+      "file": "20260719_早起成功or手抄名字？ [BV1EiK66aE2z].mp4",
+      "duration": 37.11,
+      "width": 1920,
+      "height": 1080,
+      "group": "natural_expression",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV12LK46BEbZ",
+      "file": "20260720_我回避，我养鱼，我忽冷忽热，但我是个缺爱的小女孩 [BV12LK46BEbZ].mp4",
+      "duration": 91.58,
+      "width": 1920,
+      "height": 1080,
+      "group": "natural_expression",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV1bDgQ6xE1g",
+      "file": "20260723_『补档』舰长骚扰指南｜不要轻易尝试！ [BV1bDgQ6xE1g].mp4",
+      "duration": 54.22,
+      "width": 1080,
+      "height": 1920,
+      "group": "portrait",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV11v3w6jEfy",
+      "file": "20260727_求求你们别来V圈打暑假工了！暑V跑路留下的“债”凭什么让我们新主播来填？ [BV11v3w6jEfy].mp4",
+      "duration": 194.82,
+      "width": 1920,
+      "height": 1080,
+      "group": "natural_expression",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV1M6GA6dEbT",
+      "file": "20260731_为了你我失去了大雷！！ [BV1M6GA6dEbT].mp4",
+      "duration": 164.72,
+      "width": 1920,
+      "height": 1080,
+      "group": "interaction_comedy",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV1uxbC6jEPi",
+      "file": "20260817_凑黄毛你别过来啊啊啊啊啊！！ [BV1uxbC6jEPi].mp4",
+      "duration": 70.9,
+      "width": 1920,
+      "height": 1080,
+      "group": "interaction_comedy",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV1tg8X63ERs",
+      "file": "20260826_媚粉像偷情一样刺激！！ [BV1tg8X63ERs].mp4",
+      "duration": 82.25,
+      "width": 1920,
+      "height": 1080,
+      "group": "interaction_comedy",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV1qUtA65Ep4",
+      "file": "20260828_被做局了！人善被人欺，猫善cos人妻！ [BV1qUtA65Ep4].mp4",
+      "duration": 49.78,
+      "width": 1920,
+      "height": 1080,
+      "group": "interaction_comedy",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV1u3bA6eEym",
+      "file": "20260907_⚡⚡因为玩旮旯给木整个房间都看向了我们… [BV1u3bA6eEym].mp4",
+      "duration": 120.49,
+      "width": 1920,
+      "height": 1080,
+      "group": "interaction_comedy",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV1a9hJ6dETr",
+      "file": "20260922_你们都是禁言凶手！！！ [BV1a9hJ6dETr].mp4",
+      "duration": 101.83,
+      "width": 1920,
+      "height": 1080,
+      "group": "interaction_comedy",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV1ybpw66E4w",
+      "file": "20261006_妈妈我D到傻V了 [BV1ybpw66E4w].mp4",
+      "duration": 99.47,
+      "width": 1920,
+      "height": 1080,
+      "group": "interaction_comedy",
+      "primary_visual_reference": true
+    },
+    {
+      "bvid": "BV1GJp469Eur",
+      "file": "20261009_越听越刑！迷失？交出黄色的东西？舰长：啥猫说的最好是电池 [BV1GJp469Eur].mp4",
+      "duration": 94.68,
+      "width": 1920,
+      "height": 1080,
+      "group": "interaction_comedy",
+      "primary_visual_reference": true
+    },
+    {
+      "bvid": "BV1C2pk6nEVQ",
+      "file": "20261014_生产队的驴见了都得递烟：B站最肝舰长的一天 [BV1C2pk6nEVQ].mp4",
+      "duration": 67.2,
+      "width": 1920,
+      "height": 1080,
+      "group": "interaction_comedy",
+      "primary_visual_reference": false
+    },
+    {
+      "bvid": "BV1woWu6bEuj",
+      "file": "20261110_我画地为牢啊！桃！！桃：所以你就扒我衣服？ [BV1woWu6bEuj].mp4",
+      "duration": 134.5,
+      "width": 1920,
+      "height": 1080,
+      "group": "interaction_comedy",
+      "primary_visual_reference": false
+    }
+  ],
+  "styles": [
+    {
+      "id": "kiya_soft_interaction_v1",
+      "name": "柔和互动反应",
+      "fit": "真实提问引出回答、迟疑或自我修正，能保留完整观众反馈的素材",
+      "not_fit": [
+        "歌曲",
+        "模型宣传",
+        "缺少对应提问或必要上下文的孤立反应"
+      ],
+      "required_story_nodes": [
+        "可辨识的提问或触发",
+        "主播回答",
+        "反差或修正",
+        "自然反应与反馈"
+      ],
+      "subtitle_direction": "原话使用协调的粉白描边作为参考；编辑评论与真实弹幕分层标记，不强制所有镜头同一种字号和颜色。",
+      "rules": [
+        {
+          "id": "show_question_before_response",
+          "trigger": "新观众尚不知道问题是什么",
+          "action": "短暂突出真实弹幕，再切回人物作答",
+          "avoid": "虚构弹幕、用长解释卡替代现有证据",
+          "evidence": [
+            {
+              "bvid": "BV1ybpw66E4w",
+              "finished_start": 23,
+              "finished_end": 26,
+              "source_start": null,
+              "source_end": null,
+              "precision": "approximate_one_second_sampling",
+              "observation": "镜头突出提问后回人物"
+            },
+            {
+              "bvid": "BV1ybpw66E4w",
+              "finished_start": 39,
+              "finished_end": 43,
+              "source_start": null,
+              "source_end": null,
+              "precision": "approximate_one_second_sampling",
+              "observation": "弹幕英文词被突出并划线，再回到回答"
+            }
+          ]
+        },
+        {
+          "id": "preserve_meaningful_hesitation",
+          "trigger": "人物处于理解、纠正或尴尬反应中",
+          "action": "保留有叙事价值的停顿；有合适资源时可用加载图形短暂表达迟疑",
+          "avoid": "只因没有台词就全部删除、把加载图形常驻",
+          "evidence": [
+            {
+              "bvid": "BV1ybpw66E4w",
+              "finished_start": 52,
+              "finished_end": 59,
+              "source_start": null,
+              "source_end": null,
+              "precision": "approximate_one_second_sampling",
+              "observation": "人物附近出现加载图形"
+            }
+          ]
+        },
+        {
+          "id": "emphasize_correction",
+          "trigger": "同一问题出现多次纠正或反复确认",
+          "action": "先保留原话对照，再用近景或计数强调；回放必须有明确源时间映射",
+          "avoid": "未核实就伪造重复原话、定时震屏",
+          "evidence": [
+            {
+              "bvid": "BV1ybpw66E4w",
+              "finished_start": 60,
+              "finished_end": 69,
+              "source_start": null,
+              "source_end": null,
+              "precision": "approximate_one_second_sampling",
+              "observation": "近景、重复字幕与 X2/X3 的强调"
+            }
+          ]
+        },
+        {
+          "id": "reaction_insert_after_payoff",
+          "trigger": "观众已理解事件，存在明确的评论性结论",
+          "action": "允许短暂全屏反应画面，之后按需要回原声",
+          "avoid": "用额外素材替代尚未讲清的事件",
+          "evidence": [
+            {
+              "bvid": "BV1ybpw66E4w",
+              "finished_start": 85,
+              "finished_end": 88,
+              "source_start": null,
+              "source_end": null,
+              "precision": "approximate_one_second_sampling",
+              "observation": "黑底领奖台与人物头像后回正常画面"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "kiya_comic_misdirection_v1",
+      "name": "误导—澄清喜剧",
+      "fit": "素材原本有双关、误会或悬念，并能找到真实揭示与澄清",
+      "not_fit": [
+        "只有误导表达没有解释的素材",
+        "不应喜剧化的严肃表达",
+        "需要靠编造台词才能成立的笑点"
+      ],
+      "required_story_nodes": [
+        "悬念引入",
+        "观众接话",
+        "真实揭示或解释",
+        "主播反应或澄清"
+      ],
+      "subtitle_direction": "参考黄字深描边的可读性，语义强调与原话字幕分层；颜色是这一参考方向的可替换偏好。",
+      "rules": [
+        {
+          "id": "semantic_effect_binding",
+          "trigger": "原话出现分析、思考、付出或交换等明确语义",
+          "action": "选择对应的一种短暂强调，内容节点结束后恢复正常画面",
+          "avoid": "同时堆叠全部贴图、没有语义依据就整活",
+          "evidence": [
+            {
+              "bvid": "BV1GJp469Eur",
+              "finished_start": 12,
+              "finished_end": 18,
+              "source_start": null,
+              "source_end": null,
+              "precision": "approximate_one_second_sampling",
+              "observation": "分析表达附近出现冷静分析图"
+            },
+            {
+              "bvid": "BV1GJp469Eur",
+              "finished_start": 25,
+              "finished_end": 27,
+              "source_start": null,
+              "source_end": null,
+              "precision": "approximate_one_second_sampling",
+              "observation": "交换或付出段落有金币类元素"
+            }
+          ]
+        },
+        {
+          "id": "isolate_real_chat",
+          "trigger": "观众的接话是后续反应的必要前提",
+          "action": "以真实弹幕截图为注意力中心，必要时虚化背景，再回人物",
+          "avoid": "把自动吐槽包装成观众原话",
+          "evidence": [
+            {
+              "bvid": "BV1GJp469Eur",
+              "finished_start": 30,
+              "finished_end": 32,
+              "source_start": null,
+              "source_end": null,
+              "precision": "approximate_one_second_sampling",
+              "observation": "模糊背景突出一条弹幕"
+            },
+            {
+              "bvid": "BV1GJp469Eur",
+              "finished_start": 85,
+              "finished_end": 87,
+              "source_start": null,
+              "source_end": null,
+              "precision": "approximate_one_second_sampling",
+              "observation": "再次突出弹幕后回人物"
+            }
+          ]
+        },
+        {
+          "id": "require_reveal",
+          "trigger": "前段表达有误导性或悬念",
+          "action": "选段必须覆盖素材已有的揭示与澄清，否则待复核",
+          "avoid": "只留前面更刺激的表达而删掉真实解释",
+          "evidence": [
+            {
+              "bvid": "BV1GJp469Eur",
+              "finished_start": 58,
+              "finished_end": 66,
+              "source_start": null,
+              "source_end": null,
+              "precision": "approximate_one_second_sampling",
+              "observation": "寻找对象并出现电池相关界面元素"
+            },
+            {
+              "bvid": "BV1GJp469Eur",
+              "finished_start": 74,
+              "finished_end": 81,
+              "source_start": null,
+              "source_end": null,
+              "precision": "approximate_one_second_sampling",
+              "observation": "换电池的解释更明确"
+            },
+            {
+              "bvid": "BV1GJp469Eur",
+              "finished_start": 87,
+              "finished_end": 90,
+              "source_start": null,
+              "source_end": null,
+              "precision": "approximate_one_second_sampling",
+              "observation": "人物进一步澄清"
+            }
+          ]
+        },
+        {
+          "id": "full_frame_reaction",
+          "trigger": "主要表达已完成且有合适反应资源",
+          "action": "短暂插入全屏反应，单独管理资源与音量",
+          "avoid": "把全屏插入降级成任意角落贴图、未经核对复制参考声音",
+          "evidence": [
+            {
+              "bvid": "BV1GJp469Eur",
+              "finished_start": 90,
+              "finished_end": 92,
+              "source_start": null,
+              "source_end": null,
+              "precision": "approximate_one_second_sampling",
+              "observation": "全屏影视反应画面接片尾"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "shared_constraints": [
+    "不得捏造主播台词、观众弹幕或事件结论",
+    "必要停顿不能仅按静音长度删除",
+    "字幕原话、真实弹幕、编辑评论分别标记证据",
+    "无原录播对应关系时不声称已还原源切点或回放",
+    "片尾单独处理，不参与主体节奏统计",
+    "宣传、歌曲、竖屏与日常横屏切片分开建模"
+  ],
+  "next_validation": "在对应原录播上生成同素材对照样片，人工确认选段完整性、节奏、取景和原声保护，再启用生产策略。"
+}

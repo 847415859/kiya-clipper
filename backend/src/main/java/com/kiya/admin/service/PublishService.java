@@ -189,6 +189,13 @@ public class PublishService {
     public synchronized Map<String, Object> save(String session, int rank, String title, String description, List<String> tags,
                                                    Map<String, Object> seedreamOptions, String coverText,
                                                    Boolean includeSchedule, String schedulePublishAt) {
+        return save(session, rank, title, description, tags, seedreamOptions, coverText, includeSchedule, schedulePublishAt, null);
+    }
+
+    public synchronized Map<String, Object> save(String session, int rank, String title, String description, List<String> tags,
+                                                   Map<String, Object> seedreamOptions, String coverText,
+                                                   Boolean includeSchedule, String schedulePublishAt,
+                                                   Map<String, Object> coverPreferences) {
         if (schedulePublishAt != null && !schedulePublishAt.isBlank()) {
             try { java.time.LocalDateTime.parse(schedulePublishAt); }
             catch (java.time.format.DateTimeParseException e) { throw ApiException.badRequest("预计公开时间格式不对，请重新选择（北京时间）"); }
@@ -208,6 +215,9 @@ public class PublishService {
         if (coverText != null) pack.put("cover_text", coverText.strip());
         if (seedreamOptions != null) pack.put("cover_seedream_options", Map.of("supplement", ((String)seedreamOptions.get("supplement")).strip(),
                 "reference", seedreamOptions.get("reference")));
+        if (coverPreferences != null) {
+            pack.put("cover_preferences", new LinkedHashMap<>(coverPreferences));
+        }
         if (title != null) {
             String t = title.strip();
             if (t.isEmpty() || t.length() > 80) {
