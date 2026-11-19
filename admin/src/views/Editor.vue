@@ -16,7 +16,7 @@
         <el-button @click="restoreAi">还原 AI 原稿</el-button>
       </el-tooltip>
       <el-button type="primary" :disabled="!dirty" :loading="saving" @click="save()">保存</el-button>
-      <el-dropdown split-button type="success" :disabled="rendering" @click="render(480)" @command="render">
+      <el-dropdown split-button type="success" :disabled="rendering" @click="render(480)" @command="height => render(height)">
         {{ rendering ? '渲染中…' : '渲染 480p 预览' }}
         <template #dropdown>
           <el-dropdown-menu>
