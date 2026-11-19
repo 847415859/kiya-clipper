@@ -90,7 +90,8 @@ def cover_session(tmp_path, monkeypatch):
         Image.new('RGB', (640, 400), 'navy').save(args[-1], 'JPEG')
         return '测试直播画面'
     def generate(prompt, reference, out, **kwargs):
-        calls.append({"prompt": prompt, "reference": reference, "reference_bytes": reference.read_bytes()})
+        image_bytes = [path.read_bytes() for path in reference] if isinstance(reference, list) else reference.read_bytes()
+        calls.append({"prompt": prompt, "reference": reference, "reference_bytes": image_bytes})
         # Model responses can be PNG despite a .jpg destination.
         Image.new('RGB', (640, 400), 'blue' if len(calls) == 1 else 'green').save(out, 'PNG')
         return {"model": "fake-seedream", "prompt": prompt, "file": out.name}
@@ -110,6 +111,36 @@ def test_prompt_preview_is_read_only_and_uses_current_additions(cover_session, c
     assert '主体靠右\n背景粉紫' in result['prompt'] and 'HELLO' in result['prompt']
     assert result['options']['reference'] == 'frame'
     assert not calls and not (folder / 'publish').exists()
+
+
+def test_streamer_portrait_is_first_for_frame_and_history(cover_session, capsys):
+    import io
+
+    folder, run, calls, _ = cover_session
+    portrait = folder / "portrait.jpg"
+    Image.new("RGB", (200, 100), "pink").save(portrait)
+    cfg = folder.parents[1] / "cfg.json"
+    data = json.loads(cfg.read_text(encoding="utf-8"))
+    data["publish"].update(cover_portrait_file=str(portrait), cover_portrait_crop=[0, 0, .5, 1])
+    cfg.write_text(json.dumps(data), encoding="utf-8")
+    assert run('--cover-prompt-only') == 0
+    preview = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert run('--cover-mode=seedream') == 0
+    first = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert calls[0]["prompt"] == preview["prompt"]
+    assert "唯一视觉主角是Test" in calls[0]["prompt"]
+    assert "图2是直播截图" in calls[0]["prompt"]
+    assert first["cover_history"][0]["meta"]["streamer_portrait_reference"] is True
+    portrait_bytes, scene_bytes = calls[0]["reference_bytes"]
+    with Image.open(io.BytesIO(portrait_bytes)) as cropped:
+        assert cropped.size == (100, 100)
+    assert scene_bytes == (folder / 'publish/01_frame.jpg').read_bytes()
+    old_cover = (folder / 'publish/01_cover_seedream_raw.jpg').read_bytes()
+    assert run('--cover-mode=seedream', '--cover-reference=seedream', '--cover-supplement=让嘉宾担任主角') == 0
+    assert calls[1]["reference_bytes"] == [portrait_bytes, old_cover]
+    assert "用图1的主播替换" in calls[1]["prompt"]
+    assert "优先于构图、题材、历史封面和补充要求" in calls[1]["prompt"]
+    assert not list((folder / 'publish').glob('.seedream-portrait-*'))
 
 
 def test_preview_and_generation_use_identical_context_and_prompt(cover_session, capsys):
@@ -239,6 +270,7 @@ def test_first_new_generation_preserves_existing_legacy_cover(cover_session, cap
 
 def test_adapter_normalizes_reference_bytes_without_changing_request_contract(tmp_path, monkeypatch):
     import base64
+    import io
     from clipper import seedream
     reference = tmp_path / 'legacy.jpg'
     Image.new('RGBA', (32, 20), (255, 0, 0, 255)).save(reference, 'PNG')
@@ -254,6 +286,14 @@ def test_adapter_normalizes_reference_bytes_without_changing_request_contract(tm
     assert base64.b64decode(encoded).startswith(b'\xff\xd8')
     assert requests[0]['prompt'] == 'custom request'
     assert 'fake-api-key' not in json.dumps(meta)
+    scene = tmp_path / 'scene.jpg'
+    Image.new('RGB', (48, 32), 'blue').save(scene)
+    seedream.generate('portrait first', [reference, scene], tmp_path / 'out.jpg', api_key='fake-api-key')
+    images = requests[1]['image']
+    assert isinstance(images, list) and len(images) == 2
+    for item, size in zip(images, [(32, 20), (48, 32)]):
+        with Image.open(io.BytesIO(base64.b64decode(item.split(',', 1)[1]))) as uploaded:
+            assert uploaded.format == 'JPEG' and uploaded.size == size
 
 
 def test_programmatic_cover_and_all_mode_fallback_keep_seedream_history(cover_session, capsys, monkeypatch):

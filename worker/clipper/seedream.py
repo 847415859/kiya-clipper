@@ -85,7 +85,7 @@ def _result_url(obj: dict[str, Any]) -> str | None:
     return None
 
 
-def generate(prompt: str, reference: Path, out: Path, model: str | None = None,
+def generate(prompt: str, reference: Path | list[Path], out: Path, model: str | None = None,
              endpoint: str | None = None, api_key: str | None = None,
              size: str = "1920x1200", timeout: int = 180) -> dict[str, Any]:
     load_env()
@@ -93,21 +93,25 @@ def generate(prompt: str, reference: Path, out: Path, model: str | None = None,
            or os.environ.get("VOLCENGINE_ARK_API_KEY") or "")
     if not key:
         raise SeedreamError("没有 Seedream API Key：填写 SEEDREAM_API_KEY 或 ARK_API_KEY")
-    if not reference.exists():
-        raise SeedreamError(f"参考帧不存在：{reference}")
+    references = [reference] if isinstance(reference, Path) else reference
+    if not references:
+        raise SeedreamError("至少需要一张参考图")
     ep = endpoint or os.environ.get("SEEDREAM_ENDPOINT") or DEFAULT_ENDPOINT
     mdl = model or os.environ.get("SEEDREAM_MODEL") or DEFAULT_MODEL
     from PIL import Image
-    try:
-        with Image.open(reference) as source:
-            image_buffer = io.BytesIO()
-            source.convert("RGB").save(image_buffer, format="JPEG", quality=95)
-        b64 = base64.b64encode(image_buffer.getvalue()).decode()
-    except (OSError, ValueError) as e:
-        raise SeedreamError("参考图无法读取，请重新选择直播画面或其他封面版本") from e
-    image = f"data:image/jpeg;base64,{b64}"
+    images = []
+    for path in references:
+        if not path.is_file():
+            raise SeedreamError(f"参考图不存在：{path}")
+        try:
+            with Image.open(path) as source:
+                image_buffer = io.BytesIO()
+                source.convert("RGB").save(image_buffer, format="JPEG", quality=95)
+            images.append("data:image/jpeg;base64," + base64.b64encode(image_buffer.getvalue()).decode())
+        except (OSError, ValueError) as e:
+            raise SeedreamError(f"参考图无法读取：{path.name}") from e
     # Seedream 5.5 不接受 sequential_image_generation；只发送跨版本通用字段。
-    body = {"model": mdl, "prompt": prompt, "image": image, "size": size,
+    body = {"model": mdl, "prompt": prompt, "image": images[0] if len(images) == 1 else images, "size": size,
             "response_format": "url", "watermark": False}
     first = _json_request(ep, key, body)
     task_id = (first.get("output") or {}).get("task_id") or first.get("task_id")

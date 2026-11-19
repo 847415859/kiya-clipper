@@ -10,6 +10,10 @@ streamer:
   live_url: https://live.bilibili.com/0
   space_url: https://space.bilibili.com/0
 
+# 封面生图优先使用当前主播自己的清晰形象图。路径相对仓库根目录。
+# publish:
+#   cover_portrait_file: assets/streamers/newstreamer/portrait.png
+
 # 弹幕分析参数。一般用默认值即可，等跑过几场再用 evaluate.py --sweep 调分数线
 analysis:
   bucket_seconds: 10

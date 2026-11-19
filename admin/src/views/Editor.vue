@@ -413,7 +413,7 @@
               <div style="width:100%">
                 <el-input v-model="seedreamSupplement" type="textarea" :rows="3" :maxlength="1500" show-word-limit
                           aria-label="Seedream 补充要求" placeholder="例如：人物靠右，背景简洁，增加一只夸张的猫爪；保留发型和服装，整体改为柔和粉紫色。" />
-                <span class="muted">Seedream 同时设计画面与文字，可补充字体、配色和排版要求；需显示的文案填上方“封面字”。保存设置不生成图片，AI 文字请在发布前核对。</span>
+                <span class="muted">封面以当前主播为主角。已配置主播形象图时，直播画面或历史封面用于辅助构图。可补充字体、配色和排版，发布前请核对人物和文字。</span>
                 <el-alert v-if="pack.cover_history?.[0]?.meta?.ocr_check?.issues?.length" type="warning" :closable="false" show-icon
                           title="封面文字检查发现问题，请人工核对；图片已保留，不会自动重试。" style="margin-top: 8px" />
                 <span v-if="pack.cover_history?.[0]?.meta?.ocr_check?.status === 'unavailable'" class="muted">当前环境未安装 OCR，已保留图片，请人工检查错字、漏字和重复文字。</span>

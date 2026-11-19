@@ -44,6 +44,22 @@ from clipper.seedream import SeedreamError, generate as generate_seedream  # noq
 from cut import pieces  # noqa: E402
 
 
+def crop_cover_portrait(source: Path, destination: Path, box: list) -> Path:
+    """Crop a portrait out of a larger reference using normalized coordinates."""
+    from PIL import Image
+
+    if (not isinstance(box, list) or len(box) != 4
+            or any(type(v) not in (int, float) or not 0 <= v <= 1 for v in box)
+            or box[0] >= box[2] or box[1] >= box[3]):
+        raise SeedreamError("publish.cover_portrait_crop 须为有效的 [左, 上, 右, 下]，坐标范围 0–1")
+    with Image.open(source) as image:
+        rect = tuple(round(v * size) for v, size in zip(box, (image.width, image.height) * 2))
+        if rect[2] - rect[0] < 15 or rect[3] - rect[1] < 15:
+            raise SeedreamError("主播形象参考的裁剪区域过小")
+        image.crop(rect).convert("RGB").save(destination, "JPEG", quality=95)
+    return destination
+
+
 def read(p: Path, default=None):
     try:
         return json.loads(p.read_text(encoding="utf-8")) if p.exists() else default
@@ -201,7 +217,10 @@ def main() -> int:
         concept.update({k: COVER_THEMES[args.cover_theme][k] for k in ("label", "accent", "second", "symbol")})
     concept["headline"] = str(text or "").strip()[:30]
     text = concept["headline"]
-    prompt = seedream_prompt(concept, options, text)
+    portrait_setting = pc.get("cover_portrait_file")
+    portrait = REPO / portrait_setting if portrait_setting else None
+    prompt = seedream_prompt(concept, options, text, streamer_name=streamer.get("name") or "",
+                             has_portrait=portrait is not None)
     if args.cover_prompt_only:
         print(json.dumps({"prompt": prompt, "options": options, "concept": concept, "text": text}, ensure_ascii=False))
         return 0
@@ -288,8 +307,18 @@ def main() -> int:
                         raise SeedreamError("还没有 Seedream 底图，请先选择直播画面生成一张")
                 raw = out_dir / f".seedream-{uuid.uuid4().hex}.jpg"
                 composed = out_dir / f".seedream-{uuid.uuid4().hex}.jpg"
+                cropped_portrait = None
                 try:
-                    meta = generate_seedream(prompt, reference, raw, model=pc.get("seedream_model"),
+                    references = reference
+                    if portrait is not None:
+                        if not portrait.is_file():
+                            raise SeedreamError("当前主播的封面形象参考图不存在，请检查 publish.cover_portrait_file")
+                        box = pc.get("cover_portrait_crop")
+                        if box is not None:
+                            cropped_portrait = out_dir / f".seedream-portrait-{uuid.uuid4().hex}.jpg"
+                            crop_cover_portrait(portrait, cropped_portrait, box)
+                        references = [cropped_portrait or portrait, reference]
+                    meta = generate_seedream(prompt, references, raw, model=pc.get("seedream_model"),
                                              endpoint=pc.get("seedream_endpoint"), size=pc.get("seedream_size", "1920x1200"))
                     from PIL import Image
                     with Image.open(raw) as generated:
@@ -301,7 +330,8 @@ def main() -> int:
                     history = list(pack.get("cover_history") or [])
                     ocr_check = inspect_cover_text(composed, text)
                     meta.update(reference=options["reference"], supplement=options["supplement"], composition="seedream-integrated-v1",
-                                reference_check=reference_check, ocr_check=ocr_check)
+                                reference_check=reference_check, ocr_check=ocr_check,
+                                streamer_portrait_reference=portrait is not None)
                     saved = archive_seedream(out_dir, args.rank, composed, raw, dict(meta, file=f"{args.rank:02d}_cover_seedream.jpg"), history, text)
                     pack["cover_history"] = [saved, *history]
                     pack["cover_history_selected"] = saved["id"]
@@ -312,6 +342,8 @@ def main() -> int:
                 finally:
                     raw.unlink(missing_ok=True)
                     composed.unlink(missing_ok=True)
+                    if cropped_portrait is not None:
+                        cropped_portrait.unlink(missing_ok=True)
                 meta.update(file=seed_file.name, reference=options["reference"], supplement=options["supplement"], version_id=saved["id"],
                             raw_file=f"{args.rank:02d}_cover_seedream_raw.jpg")
                 pack["cover_seedream_options"] = options
