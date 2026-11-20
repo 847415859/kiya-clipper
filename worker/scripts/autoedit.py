@@ -35,7 +35,7 @@ from clipper import callbacks as cb_lib  # noqa: E402
 from clipper import music as music_lib  # noqa: E402
 from clipper.transcript_index import open_index  # noqa: E402
 from clipper.edit import (EditError, enforce_density, ensure_caption, finalize_caption, limit_overlays, limit_stickers, snap_to_beats,  # noqa: E402
-                          suggest_window, validate_edit, validate_item)
+                          suggest_window, validate_edit, validate_item, validate_required_reaction, validate_window)
 from clipper.editdiff import edit_taste, taste_text  # noqa: E402
 from clipper.llm import LLMClient, fill, load_prompt  # noqa: E402
 from clipper.variants import DEFAULT, STYLES, load as variants_load, resolve, save as save_variants, variants_cfg, wants_variants  # noqa: E402
@@ -95,7 +95,14 @@ def main() -> int:
     ap.add_argument("--variants", choices=["off", "auto"], default="off",
                     help="auto：AI 评分靠前的前 autoedit.variants.top_n 个候选按克制 / 标准 / 热闹各出一版（其余只出标准版）；off：只出标准版")
     ap.add_argument("--config", default=None, help="主播配置；不填时按 candidates.json 所在目录推导主播")
+    ap.add_argument("--material-start", type=float, help="指定素材起点（整场秒数），需同时指定终点")
+    ap.add_argument("--material-end", type=float, help="指定素材终点（整场秒数）")
+    ap.add_argument("--keep-reaction", type=float, nargs=2, metavar=("START", "END"),
+                    help="指定必须完整保留的回应区间（整场秒数）")
+    ap.add_argument("--preview-material", action="store_true", help="只显示将交给初稿模型的素材范围和原话，不调用接口")
     args = ap.parse_args()
+    if (args.material_start is None) != (args.material_end is None):
+        ap.error("--material-start 和 --material-end 必须同时提供")
 
     cpath = Path(args.candidates)
     sess = cpath.parent
@@ -108,7 +115,7 @@ def main() -> int:
         print(f"没有序号 {args.rank} 的候选", file=sys.stderr)
         return 1
     dst = sess / "edits" / f"{args.rank:02d}.json"
-    if dst.exists() and not args.force:
+    if dst.exists() and not args.force and not args.preview_material:
         print(f"{dst} 已存在（手动编辑过），不覆盖；要重新生成加 --force", file=sys.stderr)
         return 1
     ca = c["clip_start"]
@@ -130,13 +137,37 @@ def main() -> int:
     if args.template == "cute":
         llm = template_llm
     refined = ((rr or {}).get("value_refined") or (rr or {}).get("refined")) if args.template == "cute" else (rr or {}).get("refined")
-    window = suggest_window(c, refined)              # 素材范围：候选片段 ∪ 精排修正后的起止
+    if args.material_start is None:
+        window = suggest_window(c, refined)
+    else:
+        try:
+            window = validate_window({"start": args.material_start, "end": args.material_end})
+        except EditError as e:
+            ap.error(str(e))
+        material_end = data.get("covered_seconds") if data.get("live") else data.get("duration_seconds")
+        if isinstance(material_end, (int, float)) and window["end"] > round(material_end, 1):
+            ap.error("素材终点超出场次已覆盖时长")
     a, b = window["start"], window["end"]
+    reaction = None
+    if args.keep_reaction is not None:
+        start, end = args.keep_reaction
+        try:
+            reaction = validate_required_reaction({"start": start, "end": end}, window)
+        except EditError as e:
+            ap.error(f"必保回应无效：{e}；请确认素材范围覆盖回应")
+        print(f"必须保留的回应（整场秒）：{start:g}–{end:g}")
     clip_len = b - a
-    t_start = max(0.0, refined["start"] - a) if refined else ca - a
-    t_end = min(clip_len, refined["end"] - a) if refined else c["clip_end"] - a
+    t_start = max(0.0, (refined["start"] if refined else ca) - a)
+    t_end = min(clip_len, (refined["end"] if refined else c["clip_end"]) - a)
     if t_end <= t_start:
         t_start, t_end = 0.0, clip_len
+    speech = speech_lines(sents, a, b, a) if sents else "（这场还没有转写）"
+    if args.material_start is not None or args.preview_material:
+        print(f"素材范围（整场秒）：{a:.1f}–{b:.1f}；建议裁剪（整场秒）：{a + t_start:.1f}–{a + t_end:.1f}")
+    if args.preview_material:
+        print("交给初稿模型的原话（时间相对素材起点）：")
+        print(speech)
+        return 0
     story = llm.get("story") or {}
     sdir = sticker_dir()
     offered_st = offered_stickers(sdir)
@@ -227,8 +258,11 @@ def main() -> int:
                     what_happened=llm.get("what_happened") or "（没有精排结论）",
                     punch=(f"{ca + llm['punch_time'] - a:.1f}" if llm.get("punch_time", -1) >= 0 else "（未知）"),
                     setup=story.get("setup") or "—", punchline=story.get("punch") or "—", reaction=story.get("reaction") or "—",
-                    speech=speech_lines(sents, a, b, a) if sents else "（这场还没有转写）",
+                    speech=speech,
                     danmaku=dm, stickers=sticker_offer_text(offered_st), colors=COLORS)
+        if reaction is not None:
+            text += (f"\n必须完整保留素材内 {reaction['start'] - a:g}–{reaction['end'] - a:g} 秒的回应原声。"
+                     "选择裁剪起止时覆盖该区间并保留理解回应所需的前文。")
         print(f"#{args.rank} 生成剪辑脚本初稿{'（' + v['label'] + '版）' if multi or key != DEFAULT else ''}（{client.model}，{version}）…")
         r = client.chat_json([{"role": "system", "content": system}, {"role": "user", "content": text}], EditOut, tag=version)
         if r.data is None:
@@ -249,6 +283,9 @@ def main() -> int:
         keep_explicit = refined and (cute_prompt or refined["end"] - refined["start"] < 5)
         if not keep_explicit and out.trim and 0 <= out.trim.start < out.trim.end <= clip_len and out.trim.end - out.trim.start > 0:
             trim = {"start": round(out.trim.start, 2), "end": round(out.trim.end, 2)}
+        if reaction is not None:
+            trim["start"] = min(trim["start"], reaction["start"] - a)
+            trim["end"] = max(trim["end"], reaction["end"] - a)
         items = [i for i in items if trim["start"] <= i["start"] < trim["end"]]
         items, st_dropped = limit_stickers(items, int(ac.get("max_stickers", 2)))
         items, fx_dropped = limit_overlays(items)         # 吐槽旁白 / 伪 UI 不能泛滥（旁白最多 2 条、伪 UI 最多 2 个）
@@ -257,6 +294,8 @@ def main() -> int:
         edit = {"version": 1, "window": window, "trim": trim, "subtitles": {"enabled": True}, "items": items,
                 "boundary_trace": {"refined": refined, "chosen": dict(trim)},
                 "generated_by": f"{version} / {client.model}" + (f" / {v['label']}" if multi or key != DEFAULT else ""), "note": out.note[:200]}
+        if reaction is not None:
+            edit["required_reaction"] = reaction
         track = music_lib.pick_track(args.rank, str(llm.get("type") or "")) if ac.get("music", True) and not cute_prompt else None
         if track:                                          # 曲库里有可用的曲子：配 BGM，效果吸附到鼓点（没有曲库就跳过）
             beats = music_lib.load_beats(track["id"])["beats"]

@@ -129,6 +129,17 @@ def validate_window(w) -> dict:
     return {"start": round(start, 1), "end": round(end, 1)}      # 一位小数：预览文件名在 Java / Python 两边一致
 
 
+def validate_required_reaction(raw: dict, window: dict | None) -> dict:
+    """校验必须保留的回应，使用整场秒数。"""
+    if not isinstance(raw, dict) or window is None:
+        raise EditError("必保回应须提供整场起止及素材范围")
+    start = _num(raw, "start", window["start"], window["end"])
+    end = _num(raw, "end", window["start"], window["end"])
+    if end <= start:
+        raise EditError("必保回应的终点须大于起点")
+    return {"start": start, "end": end}
+
+
 def edit_window(edit: dict, cand: dict) -> tuple[float, float]:
     """剪辑脚本的素材范围；旧脚本没有 window 就是候选片段本身。"""
     w = edit.get("window")
@@ -247,6 +258,8 @@ def validate_edit(raw: dict, clip_len: float) -> dict:
             out["subtitles"]["sentence_overrides"] = corrections
     if window:
         out["window"] = window
+    if "required_reaction" in raw:
+        out["required_reaction"] = validate_required_reaction(raw["required_reaction"], window)
     music = validate_music(raw.get("music"))
     if music:
         out["music"] = music

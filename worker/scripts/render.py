@@ -182,6 +182,10 @@ def main() -> int:
     tr = load_transcript(sess_dir / "transcript.json")
     removed = edit_cuts(edit, tr["sentences"] if tr else [], ws, t_start, t_end)
     kept = keep_ranges(t_start, t_end, removed)
+    reaction = edit.get("required_reaction")
+    if reaction and not any(start <= reaction["start"] + 1e-6 and end >= reaction["end"] - 1e-6 for start, end in kept):
+        print(f"成片未完整保留回应 {reaction['start']:g}–{reaction['end']:g} 秒，请检查裁剪起止和片中删除", file=sys.stderr)
+        return 1
     dur = sum(b - a for a, b in kept)
     if dur < 1:
         print("删除后不足 1 秒，请减少片中删除或关闭自动删除营业话", file=sys.stderr)

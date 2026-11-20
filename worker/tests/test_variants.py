@@ -56,6 +56,50 @@ def test_autoedit_three_variants(world):
     assert "已生成 3 个版本" in r.stdout and "【克制】初稿" in r.stdout
 
 
+def test_material_override_previews_and_includes_late_reaction(world):
+    (world.sess / "transcript.json").write_text(json.dumps({"sentences": [
+        {"t0": 144.0, "t1": 145.0, "text": "试着换个方法"},
+        {"t0": 209.0, "t1": 213.0, "text": "原来真的可以"},
+    ]}, ensure_ascii=False), encoding="utf-8")
+    args = (world.sess / "candidates.json", "--rank", 1, "--template", "default",
+            "--styles", "standard", "--material-start", 110, "--material-end", 215)
+    preview = world.run("autoedit.py", *args, "--preview-material")
+    assert preview.returncode == 0, preview.stdout + preview.stderr
+    assert "[99.0] 原来真的可以" in preview.stdout
+    assert world.srv.chat == []
+    assert not (world.sess / "edits").exists()
+
+    result = world.run("autoedit.py", *args)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(world.srv.chat) == 1
+    assert "[99.0] 原来真的可以" in json.dumps(world.srv.chat[0], ensure_ascii=False)
+    edit = json.loads((world.sess / "edits/01.json").read_text(encoding="utf-8"))
+    assert edit["window"] == {"start": 110, "end": 215}
+
+
+def test_keep_reaction_extends_draft_and_rejects_removing_reaction(world):
+    args = (world.sess / "candidates.json", "--rank", 1, "--template", "default",
+            "--styles", "standard", "--material-start", 110, "--material-end", 215)
+    outside = world.run("autoedit.py", *args, "--keep-reaction", 209, 216)
+    assert outside.returncode == 2 and "请确认素材范围覆盖回应" in outside.stderr
+    assert world.srv.chat == []
+
+    result = world.run("autoedit.py", *args, "--keep-reaction", 209, 213)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "99–103 秒的回应原声" in json.dumps(world.srv.chat[0], ensure_ascii=False)
+    edit_path = world.sess / "edits/01.json"
+    edit = json.loads(edit_path.read_text(encoding="utf-8"))
+    assert edit["trim"] == {"start": 2, "end": 103}
+    assert edit["required_reaction"] == {"start": 209, "end": 213}
+
+    edit["cuts"] = [{"start": 100, "end": 101}]
+    edit_path.write_text(json.dumps(edit), encoding="utf-8")
+    result = world.run("render.py", world.sess / "candidates.json", "--rank", 1)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "成片未完整保留回应 209–213 秒" in result.stderr
+    assert not (world.sess / "final").exists()
+
+
 def test_only_top_n_get_variants_and_rerun_clears(world):
     world.cfg.write_text(world.cfg.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     r = world.run("autoedit.py", world.sess / "candidates.json", "--rank", 1, "--variants", "auto")
