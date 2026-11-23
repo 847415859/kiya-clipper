@@ -135,7 +135,7 @@ def validate_boundary(option: dict, event: dict, material_start: float = 0.0, ma
 
 
 def generate_boundary_options(candidate: dict, event: dict | None = None, refined: dict | None = None,
-                              material_end: float | None = None) -> list[dict]:
+ 900material_end: float | None = None) -> list[dict]:
     """生成有真实取舍的连续边界方案；无足够信息时返回旧 refined 的单方案。"""
     event = normalize_event(candidate, event)
     refined = refined or candidate.get("refined") or {}

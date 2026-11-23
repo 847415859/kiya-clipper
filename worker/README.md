@@ -596,3 +596,7 @@ python scripts/quality_check.py output/<场次>/candidates.json --all
 ```
 
 报告检查文件和视频音频流、时长、黑帧、音画时长差、字幕时间、营业话残留、效果密度和贴图文件。`--all` 同时汇总 `edits/<序号>.ai.json` 与人工终稿的差异；单条报告在两份脚本都存在且人工终稿带 `human_saved_at` 时也会保存 `edit_diff`。质检只生成报告，不自动阻断渲染或发布。
+
+## Qwen 多模态研究入口
+
+参考视频的真实画面和听音调用已提供独立入口，见 [Qwen 多模态研究接入](../docs/Qwen多模态研究接入.md)。从项目根目录运行 `py -3.11 worker/scripts/qwen_research.py --check` 可只检查配置；`--dry-run --video <文件> --start 30 --duration 20` 仅准备媒体。移除 `--dry-run` 才调用模型；研究模型、缓存与输出不改变现有生产精排。

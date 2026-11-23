@@ -15,12 +15,14 @@ import Weekly from './views/Weekly.vue'
 import Schedule from './views/Schedule.vue'
 import Memes from './views/Memes.vue'
 import Stickers from './views/Stickers.vue'
+import ResearchReview from './views/ResearchReview.vue'
 
 // hash 路由：刷新页面不需要后端做路由回退
 const router = createRouter({
   history: createWebHashHistory(),
   routes: [
     { path: '/login', component: Login, meta: { public: true } },
+    { path: '/research-review', component: ResearchReview, meta: { public: true, title: '本地研究复核' } },
     {
       path: '/',
       component: Layout,
@@ -49,6 +51,7 @@ const router = createRouter({
         { path: 'memory', component: Memory, meta: { title: '精排记忆' } },
         { path: 'memes', component: Memes, meta: { title: '梗库' } },
         { path: 'stickers', component: Stickers, meta: { title: '素材库' } },
+        { path: 'research-review', component: ResearchReview, meta: { title: '研究复核' } },
         { path: 'weekly', component: Weekly, meta: { title: '主播周报' } },
         { path: 'schedule', component: Schedule, meta: { title: '直播日程' } },
         { path: 'settings', component: Settings, meta: { title: '配置' } }
