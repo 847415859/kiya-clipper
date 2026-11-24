@@ -234,6 +234,33 @@ def test_confirm_review_applies_to_one_attempt_and_does_not_override_failed_chec
     assert not (tmp_path / "log.txt").exists()
 
 
+def test_manual_submission_allows_missing_review_but_still_blocks_failed_review(tmp_path):
+    sess, cfg, env = setup_case(tmp_path)
+    pack_path = sess / "publish" / "01.json"
+    pack = json.loads(pack_path.read_text(encoding="utf-8"))
+    for key in pb.REVIEW_CHECKS:
+        pack.pop(key)
+    pack_path.write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
+
+    r = run(sess, cfg, env, "--mode", "now")
+    assert r.returncode == 2 and "字幕尚未确认" in r.stderr
+    r = run(sess, cfg, env, "--dry-run", "--manual-submission")
+    report = last(r)["preflight"]
+    assert report["ok"]
+    assert all(report["checks"][key]["status"] == "warning" for key in pb.REVIEW_CHECKS)
+
+    pack["subtitle_checked"] = False
+    pack_path.write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
+    r = run(sess, cfg, env, "--mode", "now", "--manual-submission")
+    assert r.returncode == 2 and "字幕检查未通过" in r.stderr
+    assert "暂无单独审核记录" not in r.stderr and not (tmp_path / "log.txt").exists()
+
+    pack.pop("subtitle_checked")
+    pack_path.write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
+    r = run(sess, cfg, env, "--mode", "now", "--manual-submission")
+    assert r.returncode == 0 and last(r)["preflight"]["ok"]
+
+
 def test_unknown_flag_stops_before_upload(tmp_path):
     sess, cfg, env = setup_case(tmp_path)
     env["FAKE_FLAGS"] = "--title --desc"

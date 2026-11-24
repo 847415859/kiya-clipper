@@ -234,8 +234,9 @@ def save_result(path: Path, result: dict) -> None:
     tmp.replace(path)
 
 
-def preflight(pack: dict, video: Path, cover: Path, schedule: dict, description: str, confirmed=()) -> dict:
-    """集中检查发布输入；pending 不能被当成通过。"""
+def preflight(pack: dict, video: Path, cover: Path, schedule: dict, description: str, confirmed=(),
+              *, manual_submission: bool = False) -> dict:
+    """未记录的内容检查在手动投稿时仅提示，已发现的问题仍拦截。"""
     checks: dict[str, dict] = {}
     errors: list[str] = []
     warnings: list[str] = []
@@ -266,6 +267,8 @@ def preflight(pack: dict, video: Path, cover: Path, schedule: dict, description:
             check(key, "pass", f"{label}已确认", source="manual_submission")
         elif value is True:
             check(key, "pass", f"{label}已确认")
+        elif manual_submission:
+            check(key, "warning", f"{label}暂无单独审核记录")
         else:
             check(key, "pending", f"{label}尚未确认")
 
@@ -398,9 +401,11 @@ def run(args: argparse.Namespace) -> dict:
     except (ValueError, OSError, TypeError) as e:
         raise Refuse(str(e)) from e
     preflight_result = preflight(pack, video, cover, schedule, final_description,
-                                 getattr(args, "confirm_review", ()))
+                                 getattr(args, "confirm_review", ()),
+                                 manual_submission=getattr(args, "manual_submission", False))
     if not preflight_result["ok"] and not args.dry_run:
-        failed = preflight_result["errors"] + preflight_result["warnings"]
+        failed = [v["message"] for v in preflight_result["checks"].values()
+                  if v["status"] in ("error", "pending")]
         raise Refuse("发布前检查未通过：" + "；".join(failed))
     bin_ = biliup_bin()
     ck = cookie_path(bc, streamer_from_session_dir(sess))
@@ -473,6 +478,8 @@ def main() -> int:
     ap.add_argument("--at", help="定时发布时间 2026-11-20T20:00（北京时间）")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--allow-taboo", action="store_true")
+    ap.add_argument("--manual-submission", action="store_true",
+                    help="手动投稿时，缺少单独内容审核记录只提示，已确认的问题仍拦截")
     ap.add_argument("--confirm-review", action="append", choices=REVIEW_CHECKS, default=[],
                     help="人工已核对的本次投稿检查项，可重复提供")
     ap.add_argument("--again", action="store_true", help="已经投过也再投一次")
