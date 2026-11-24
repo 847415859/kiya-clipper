@@ -56,8 +56,13 @@ def pieces(segments: list[dict], start: float, end: float) -> list[tuple[Path, f
         dur = probe_duration(v) or (nxt - seg_start)
         seg_end = min(seg_start + dur, nxt)
         a, b = max(start, seg_start), min(end, seg_end)
-        if b - a > 0.5:
+        if b - a > 1e-6:
+            if a > start + 1e-6:
+                raise ValueError(f"原片存在时间缺口 {start:.3f}–{a:.3f}s，不能提前拼平")
             out.append((v, a - seg_start, b - seg_start))
+            start = b
+    if start < end - 1e-6:
+        raise ValueError(f"原片存在时间缺口 {start:.3f}–{end:.3f}s，不能提前拼平")
     return out
 
 
@@ -79,9 +84,10 @@ def cut_one(parts: list[tuple[Path, float, float]], dst: Path, fast: bool, heigh
         fast = False
         if not parts:
             raise ValueError("删除营业话后没有剩余画面")
+    if fast and len(parts) > 1:
+        print("    提示：片段跨分段，自动重新编码以完整保留所有来源")
+        fast = False
     if fast:
-        if len(parts) > 1:
-            print(f"    提示：片段跨分段，--fast 模式只剪第一段")
         v, a, b = parts[0]
         cmd = [ff, "-nostdin", "-loglevel", "error", "-y", "-ss", f"{a:.2f}", "-i", str(v), "-t", f"{b - a:.2f}",
                "-c", "copy", str(dst)]
@@ -145,6 +151,7 @@ def main() -> int:
     elif not args.no_subs:
         print("提示：这场还没有转写（transcript.json），剪出来的视频没有字幕。先运行 transcribe.py")
     refined_by_rank: dict[int, dict] = {}
+    rr = {}
     if not args.no_refined:
         try:
             rr = json.loads((path.parent / "rerank.json").read_text(encoding="utf-8"))
@@ -183,12 +190,36 @@ def main() -> int:
     for c in cands:
         refined = refined_by_rank.get(c["rank"])
         cs, ce, by_refined = cut_window(c, refined)
-        removed = (refined or {}).get("removed") or []
-        if not removed and transcript:
-            # 没有精排结果时也过滤候选窗口里的纯营业话；有精排结果则使用其经过边界修正的结果。
-            removed = business_cuts(transcript["sentences"], cs, ce)
+        from clipper.protection import resolve as resolve_required, required, protect_automatic, coverage
+        from clipper.timeline import edit_cuts
+        ranked = next((r for r in rr.get("candidates", []) if r["rank"] == c["rank"]), {})
+        rows, evidence_trace = resolve_required(ranked, c, path.parent.name)
+        edit_path = path.parent / "edits" / f"{c['rank']:02d}.json"
+        if edit_path.exists():
+            from clipper.edit import validate_edit, edit_window
+            edit = validate_edit(json.loads(edit_path.read_text(encoding="utf-8")), c["clip_end"]-c["clip_start"])
+            from clipper.evidence_edit import attach
+            edit = attach(edit, c, path.parent)
+            ws, _ = edit_window(edit, c)
+            cs, ce = ws+edit["trim"]["start"], ws+edit["trim"]["end"]
+            rows = required(edit)
+            removed = edit_cuts(edit, transcript["sentences"] if transcript else [], ws, cs, ce)
+            conflicts = []
+        else:
+            automatic = (refined or {}).get("removed")
+            if automatic is None:
+                automatic = business_cuts(transcript["sentences"], cs, ce) if transcript else []
+            removed, conflicts = protect_automatic(automatic, rows)
         kept = keep_ranges(cs, ce, removed)
-        parts = [part for a, b in kept for part in pieces(data["segments"], a, b)]
+        evidence_coverage = coverage(rows, kept)
+        evidence_coverage["protected_automatic_cuts"] = conflicts
+        evidence_coverage["source_trace"] = evidence_trace
+        try:
+            parts = [part for a, b in kept for part in pieces(data["segments"], a, b)]
+        except ValueError as error:
+            windows[f"{c['rank']:02d}"] = {"status": "source_gap", "start": cs, "end": ce, "reason": str(error), "evidence_coverage": evidence_coverage}
+            print(f"  #{c['rank']} 待复核：{error}")
+            continue
         dst = out_dir / f"{c['rank']:02d}_{hhmmss(c['t']).replace(':', '-')}{'.mp4' if removed else ('.flv' if args.fast else '.mp4')}"
         if not parts:
             print(f"  #{c['rank']:>2} 跳过：找不到对应的录像文件（可能已同步到 OSS 并从本地删除）")
@@ -197,7 +228,8 @@ def main() -> int:
         if subs:
             events = build_events(tr["sentences"], cs, ce, subs["style"], subs["corrections"])
             if removed:
-                events = compact_events(events, cs, removed)
+                from clipper.timeline import compact_events as shared_compact_events
+                events = shared_compact_events(events, cs, removed)
             w, h = probe_size(parts[0][0])
             dst.with_suffix(".srt").write_text(to_srt(events), encoding="utf-8")
             ass = dst.with_suffix(".ass")
@@ -207,8 +239,10 @@ def main() -> int:
         try:
             cut_one(parts, dst, args.fast, args.height, ass, removed)
             ok += 1
+            dst.with_suffix(".evidence.json").write_text(json.dumps(evidence_coverage, ensure_ascii=False, indent=2), encoding="utf-8")
             windows[f"{c['rank']:02d}"] = {"start": round(cs, 2), "end": round(ce, 2), "refined": by_refined,
-                                             "removed": removed, "output_duration": round(sum(b - a for a, b in kept), 2)}
+                                             "removed": removed, "evidence_coverage": evidence_coverage,
+                                             "output_duration": round(sum(b - a for a, b in kept), 2)}
             print(f"  #{c['rank']:>2} {hhmmss(cs)}–{hhmmss(ce)}（{ce - cs:.0f} 秒{'，按精排' if by_refined else ''}）→ {dst.name}"
                   + (f"（跨 {len(parts)} 个分段）" if len(parts) > 1 else ""))
         except subprocess.CalledProcessError as e:

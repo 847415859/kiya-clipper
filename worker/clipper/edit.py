@@ -37,9 +37,9 @@ def _num(d: dict, k: str, lo: float, hi: float, default=None) -> float:
     v = d.get(k, default)
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         raise EditError(f"{k} 应为数字")
-    if not lo <= v <= hi:
+    if not math.isfinite(v) or v < lo - 1e-9 or v > hi + 1e-9:
         raise EditError(f"{k} 超出范围 {lo}–{hi}：{v}")
-    return float(v)
+    return float(max(lo, min(hi, v)))
 
 
 def _color(d: dict, k: str, default: str) -> str:
@@ -260,6 +260,12 @@ def validate_edit(raw: dict, clip_len: float) -> dict:
         out["window"] = window
     if "required_reaction" in raw:
         out["required_reaction"] = validate_required_reaction(raw["required_reaction"], window)
+    if "required_evidence" in raw:
+        from .protection import validate_required
+        try:
+            out["required_evidence"] = validate_required(raw["required_evidence"])
+        except ValueError as e:
+            raise EditError(str(e)) from e
     music = validate_music(raw.get("music"))
     if music:
         out["music"] = music
@@ -269,7 +275,16 @@ def validate_edit(raw: dict, clip_len: float) -> dict:
     if isinstance(subs.get("style"), dict):          # 后台保存时把选中的样式整份写进来
         out["subtitles"]["style"] = subs["style"]
         out["subtitles"]["style_name"] = str(subs.get("style_name") or "")[:64]
-    for k in ("session", "rank", "updated_at", "generated_by", "note", "template", "template_reason", "original_audio", "boundary_trace"):
+    feedback = raw.get("review_feedback")
+    if feedback is not None:
+        allowed = {"context", "response", "mixed_event", "subtitle_reading", "occlusion", "speaker_tone", "rhythm"}
+        if not isinstance(feedback, dict) or not isinstance(feedback.get("reasons", []), list) or any(r not in allowed for r in feedback.get("reasons", [])):
+            raise EditError("修改原因标签不合法")
+        note = feedback.get("note", "")
+        if not isinstance(note, str) or len(note) > 1000:
+            raise EditError("修改说明最多1000字")
+        out["review_feedback"] = {"reasons": list(dict.fromkeys(feedback.get("reasons", []))), "note": note}
+    for k in ("session", "rank", "updated_at", "generated_by", "note", "template", "template_reason", "original_audio", "boundary_trace", "adopted_ai_draft"):
         if k in raw:
             out[k] = raw[k]
     return out

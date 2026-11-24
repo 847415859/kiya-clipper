@@ -145,6 +145,24 @@
             <div v-if="c.llm.refined" class="muted">
               建议切 {{ hms(c.llm.refined.start) }}–{{ hms(c.llm.refined.end) }}（{{ Math.round(c.llm.refined.end - c.llm.refined.start) }} 秒，{{ c.llm.refined.note }}）
             </div>
+            <details v-if="c.llm.videoEvidence" class="muted">
+              <summary>
+                连续音画证据 · {{ c.llm.videoEvidence.windowCount }} 个窗口
+                <template v-if="c.llm.videoEvidence.needsReview"> · 建议区间待复核</template>
+              </summary>
+              <div v-if="c.llm.videoEvidence.open_context?.length">
+                待核对事件边缘 {{ c.llm.videoEvidence.open_context.join('、') }}
+              </div>
+              <div v-for="([a, b], i) in c.llm.videoEvidence.gaps || []" :key="'gap-' + i">
+                整场 {{ a.toFixed(2) }}–{{ b.toFixed(2) }} 秒 · 音画证据缺口
+              </div>
+              <div v-for="o in c.llm.videoEvidence.observations || []" :key="o.id"
+                :class="{ sl: clipOffset(c, o.start) != null }" @click="seekClip(c, o.start)">
+                整场 {{ o.start.toFixed(2) }}–{{ o.end.toFixed(2) }} 秒 · {{ o.kind }}／{{ o.modality }}
+                <b v-if="c.llm.videoEvidence.must_keep_ids?.includes(o.id)">必保</b>
+                {{ o.description }}
+              </div>
+            </details>
             <div v-if="c.llm.titles && c.llm.titles.length">标题候选：{{ c.llm.titles.join(' ／ ') }}</div>
           </template>
         </div>

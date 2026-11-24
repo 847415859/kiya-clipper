@@ -34,6 +34,12 @@ def plan(edit, sentences, window_start, style, corrections, keywords):
         b = min(end, window_start + it["start"] + it["duration"])
         if b > a and mapped(b) > mapped(a):
             items.append(dict(it, start=mapped(a), duration=round(mapped(b) - mapped(a), 3)))
-    return {"duration": round(duration, 3), "removed": removed, "items": items,
+    from .protection import coverage, required, protect_automatic
+    from .boiler import business_cuts
+    rows = required(edit)
+    _, conflicts = protect_automatic(business_cuts(sentences, start, end), rows) if edit.get("remove_business", True) else ([], [])
+    protection = coverage(rows, keep_ranges(start, end, removed))
+    protection["protected_automatic_cuts"] = conflicts
+    return {"duration": round(duration, 3), "removed": removed, "items": items, "evidence_coverage": protection,
             "subtitles": {"enabled": bool(edit["subtitles"]["enabled"] and sentences),
                           "style": style, "events": events, "keywords": keywords}}

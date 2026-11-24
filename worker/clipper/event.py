@@ -160,8 +160,16 @@ def generate_boundary_options(candidate: dict, event: dict | None = None, refine
                   "duration": round(end - start, 2), "reason": "", "issues": [], "event_version": event["version"]}
         option["issues"] = validate_boundary(option, event, material_end=material_end)
         option["reason"] = {"concise": "省略非必要前情，尽快进入核心表达", "context": "保留必要前情，降低新观众理解门槛", "afterglow": "保留核心后的反应、停顿或找补"}[key]
+        from .protection import resolve, coverage
+        rows, trace = resolve(candidate, candidate, str(candidate.get("session", "unknown")))
+        option["evidence_coverage"] = coverage(rows, [(option["start"], option["end"])])
+        option["evidence_trace"] = trace
+        option["status"] = "needs_review" if option["evidence_coverage"]["status"] == "missing" else "candidate"
+        option["context_kept"] = event.get("context", "")
+        option["cut_early_loss"] = "必保证据缺失" if option["status"] == "needs_review" else "声尾与阅读时间需回看"
+        option["cut_late_risk"] = "核对是否混入新触发或新话题"
         signature = (option["start"], option["end"])
-        if signature not in seen and not option["issues"]:
+        if signature not in seen and not any(abs(signature[0]-x[0]) < 0.25 and abs(signature[1]-x[1]) < 0.25 for x in seen) and not option["issues"]:
             options.append(option)
             seen.add(signature)
     return options

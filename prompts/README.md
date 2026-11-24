@@ -23,6 +23,8 @@
 
 kiya 配置使用 `rerank_v6.md`、`rerank_list_v3.md` 和 `edit_v9.md`。精排标出最后有效回应与关键画面，同场比较用证据判断事件归属，初稿保留关键画面、阅读时间与有效回应。三个版本沿用原来的 JSON 输出字段。需要对照时可在主播配置中切回 `rerank_v5`、`rerank_list_v2` 和 `edit_v8`。
 
+`rerank.video_evidence.enabled` 启用 `rerank_video_observe_v1.md`，按 55 秒窗口、5 秒重叠提交带原声的候选素材。窗口观察、补采、源帧候选与失败区间写入 `rerank.json` 的 `video_evidence`。成功观察可按 ID 标记必保范围，AI 初稿会覆盖仍在当前素材内的必保范围。模型给出的事件时间和原片候选帧 PTS 分别记录。此开关设为 `false` 时使用截图链路。音画请求复用本地缓存，用量单独记在 `video_tokens`。
+
 格式：`=== system ===` 和 `=== user ===` 两段；`{{变量}}` 由脚本填入（模板里的 JSON 花括号不用转义）。
 同样的输入会命中 `worker/output/_llm_cache/` 的缓存，重跑不重复花钱；改了提示词版本号自然不命中。
 

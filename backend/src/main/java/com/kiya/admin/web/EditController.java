@@ -59,6 +59,18 @@ public class EditController {
         return edits.previewPlan(name, rank, req.edit(), req.styleId());
     }
 
+    @GetMapping("/api/sessions/{name}/edits/{rank}/ai-drafts")
+    public List<Map<String, Object>> aiDrafts(@PathVariable String name, @PathVariable int rank) {
+        return edits.pendingAi(name, rank);
+    }
+
+    public record AdoptReq(String id, String key, String expectedRevision) {}
+
+    @PostMapping("/api/sessions/{name}/edits/{rank}/ai-drafts/adopt")
+    public Map<String, Object> adoptAi(@PathVariable String name, @PathVariable int rank, @RequestBody AdoptReq req) {
+        return edits.adoptAi(name, rank, req.id(), req.key(), req.expectedRevision());
+    }
+
     @GetMapping("/api/sessions/{name}/edits/{rank}/recovery")
     public Map<String, Object> recovery(@PathVariable String name, @PathVariable int rank) {
         return edits.recovery(name, rank);
@@ -78,12 +90,12 @@ public class EditController {
                 .cacheControl(CacheControl.noCache()).body(new FileSystemResource(p));
     }
 
-    public record VariantReq(String key) {}
+    public record VariantReq(String key, String expectedRevision) {}
 
     /** 多版本初稿：选用某一版（克制 / 标准 / 热闹），替换当前剪辑脚本。 */
     @PostMapping("/api/sessions/{name}/edits/{rank}/variant")
     public Map<String, Object> variant(@PathVariable String name, @PathVariable int rank, @RequestBody VariantReq req) {
-        return edits.chooseVariant(name, rank, req.key());
+        return edits.chooseVariant(name, rank, req.key(), req.expectedRevision());
     }
 
     @GetMapping("/api/sessions/{name}/finals")

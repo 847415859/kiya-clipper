@@ -24,6 +24,8 @@ def main():
     data = json.loads(Path(args.candidates).read_text(encoding="utf-8"))
     candidate = next(c for c in data["candidates"] if c["rank"] == args.rank)
     edit = validate_edit(json.loads(Path(args.edit).read_text(encoding="utf-8")), candidate["clip_end"] - candidate["clip_start"])
+    from clipper.evidence_edit import attach
+    edit = attach(edit, candidate, folder)
     cfg = load_config()
     style = validate_style(edit["subtitles"]["style"]) if "style" in edit["subtitles"] else get_style(None, cfg)[1]
     path = resolve_config(None, folder)

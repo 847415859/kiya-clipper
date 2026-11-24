@@ -90,6 +90,29 @@ class EditSpeechTests {
         assertTrue(saved.has("human_saved_at"));
     }
 
+    @Test void independentAiDraftAdoptsWithRevisionAndRejectsConcurrentSave() throws Exception {
+        when(runner.run(eq("edit_check.py"), anyList(), any())).thenAnswer(invocation -> {
+            List<String> args = invocation.getArgument(1);
+            var edit = om.readValue(Path.of(args.get(0)).toFile(), new TypeReference<Map<String, Object>>() {});
+            return new ProcessRunner.Result(0, om.writeValueAsString(Map.of("edit", edit)));
+        });
+        String id = "c".repeat(32);
+        Path drafts = session.resolve("edits/ai_drafts/01");
+        Files.createDirectories(drafts);
+        var edit = Map.<String,Object>of("window", Map.of("start",100,"end",160), "trim",Map.of("start",0,"end",50),"subtitles",Map.of("enabled",false),"items",List.of());
+        var store = new EditRecoveryStore(om);
+        var payload = Map.<String,Object>of("id",id,"base_revision","none","candidate_revision",store.revision(Files.readAllBytes(session.resolve("candidates.json"))),"rerank_revision","missing","variants",List.of(Map.of("key","standard","edit",edit)));
+        Files.writeString(drafts.resolve(id+".json"),om.writeValueAsString(payload));
+        assertFalse(Files.exists(session.resolve("edits/01.json")));
+        assertEquals(1,service.pendingAi("20261117-1200",1).size());
+        service.adoptAi("20261117-1200",1,id,"standard","none");
+        assertEquals(id,om.readTree(session.resolve("edits/01.json").toFile()).path("adopted_ai_draft").asText());
+        assertEquals(id,om.readTree(session.resolve("edits/01.ai.json").toFile()).path("id").asText());
+        assertTrue(Files.exists(session.resolve("edits/01.variants.json")));
+        assertThrows(ApiException.class,()->service.adoptAi("20261117-1200",1,id,"standard",store.revision(session.resolve("edits/01.json"))));
+        assertThrows(ApiException.class,()->service.adoptAi("20261117-1200",1,id,"standard","none"));
+    }
+
     @Test void savingRejectsAStaleRevisionAndKeepsPriorVersions() throws Exception {
         when(runner.run(eq("edit_check.py"), anyList(), any())).thenAnswer(invocation -> {
             List<String> args = invocation.getArgument(1);

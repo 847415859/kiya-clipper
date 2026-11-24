@@ -61,6 +61,11 @@ rerank:
   frames: 8                  # 每个候选抽几张图（越多越贵）
   width: 640                 # 截图宽度
   frames_mode: peak          # 抽帧方式：uniform = 均匀；peak = 一半集中在粗筛高峰前后（表情多半在那里）、一半均匀看全貌
+  video_evidence:
+    enabled: true            # 连续音画分析。false 恢复截图精排
+    model: qwen3.8-omni-flash
+    window_seconds: 55
+    overlap_seconds: 5
   danmaku_smart: true        # 弹幕超过 danmaku_limit 条时：优先保留情绪词 / 专属梗和离高峰近的，其余均匀抽样；false = 全部均匀抽样
   danmaku_limit: 60
   context_before: 120        # 前情：片段前多少秒的原话（起止最多往前取这么多）

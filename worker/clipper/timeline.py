@@ -21,7 +21,9 @@ def edit_cuts(edit, sentences, window_start, start, end):
     cuts = [{"start": window_start + q["start"], "end": window_start + q["end"]}
             for q in edit.get("cuts", [])]
     if edit.get("remove_business", True):
-        cuts += business_cuts(sentences, start, end)
+        from .protection import required, protect_automatic
+        automatic, _ = protect_automatic(business_cuts(sentences, start, end), required(edit))
+        cuts += automatic
     return merge_cuts(cuts, start, end)
 
 

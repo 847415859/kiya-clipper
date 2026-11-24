@@ -185,6 +185,10 @@
                       :cover-url="pack.cover ? api.coverUrl(name, rank, pack.cover_version) : ''"
                       :final-file="latestFinal"
                       @caption="addContextCaption" @seek="seek" @preview="openViewerPreview" />
+        <el-card shadow="never"><template #header><b>本次修改原因（可选）</b></template><el-select :model-value="edit.review_feedback?.reasons || []" multiple clearable placeholder="选择修改原因" @update:model-value="v => edit.review_feedback = {...(edit.review_feedback || {}), reasons: v}"><el-option v-for="(label, key) in {context:'前情太长或不足', response:'有效回应被截断', mixed_event:'误串互动', subtitle_reading:'字幕读不完', occlusion:'画面被遮挡', speaker_tone:'语气或人物归属误读', rhythm:'主观节奏取舍'}" :key="key" :label="label" :value="key" /></el-select><el-input :model-value="edit.review_feedback?.note || ''" maxlength="1000" placeholder="补充原话、时间或取舍理由" @update:model-value="v => edit.review_feedback = {...(edit.review_feedback || {}), note: v}" /></el-card>
+        <PendingAiDrafts :session="name" :rank="Number(rank)" :revision="revision" :dirty="dirty" :edit="edit" :candidate-start="info.sourceCandidateStart" @adopted="load" />
+        <el-alert v-if="previewPlan?.evidence_coverage?.status === 'missing'" type="error" :closable="false" title="当前编辑缺失必保证据，请核对原片区间后重新渲染。" />
+        <details v-if="previewPlan?.evidence_coverage?.checks?.length"><summary>必保证据覆盖</summary><p v-for="row in previewPlan.evidence_coverage.checks" :key="row.evidence.id">{{ row.evidence.id }} · 原片 {{ row.evidence.start }}–{{ row.evidence.end }} 秒 · {{ row.status === 'missing' ? '缺失：' + JSON.stringify(row.missing_source_ranges) : '时间覆盖，内容待回看' }}</p></details>
         <EditComparison :edit="edit" :ai="info.aiDraft" :candidate-start="info.sourceCandidateStart" @select="selectComparedEffect" />
         <el-card shadow="never" class="card">
           <template #header><b>字幕</b></template>
@@ -579,12 +583,13 @@
         <el-option label="默认综艺模板" value="default" />
         <el-option label="克制萌点：原声、少量效果（需通过证据检查）" value="cute" />
       </el-select>
+      <el-select v-model="draftDlg.boundaryOption" clearable placeholder="剪法：使用当前精排建议" style="width:100%;margin-bottom:12px"><el-option v-for="option in boundaryOptions" :key="option.key" :label="`${option.label}：${hms(option.start)}–${hms(option.end)}`" :value="option.key" /></el-select>
       <el-checkbox-group v-model="draftDlg.styles" class="style-pick">
         <el-checkbox v-for="o in styleOptions" :key="o.key" :value="o.key" border>
           <b>{{ o.label }}</b> <span class="muted">{{ o.hint }}</span>
         </el-checkbox>
       </el-checkbox-group>
-      <p class="muted">默认三个都生成，生成后在编辑器顶部切换比较；每多一个版本多一次大模型调用。只选一个就只出那一版。</p>
+      <p class="muted">剪法决定内容起止，风格决定效果强度。生成后在待采用草稿中比较；每多一个风格版本多一次大模型调用。</p>
       <template #footer>
         <el-button @click="draftDlg.show = false">取消</el-button>
         <el-button type="primary" :disabled="!draftDlg.styles.length" @click="runDraft">生成</el-button>
@@ -617,6 +622,7 @@ import ViewerReview from '../components/ViewerReview.vue'
 import { evidenceTime, makeCaption } from '../viewer-review'
 import TranscriptEditor from '../components/TranscriptEditor.vue'
 import EditComparison from '../components/EditComparison.vue'
+import PendingAiDrafts from '../components/PendingAiDrafts.vue'
 import InteriorCuts from '../components/InteriorCuts.vue'
 import EditRecovery from '../components/EditRecovery.vue'
 import { clone, compactTime, createHistory, sentenceKey, updateSentenceOverride } from '../editor-tools'
@@ -1238,6 +1244,9 @@ async function renderPartial() {
   await render(480, {previewStart: round(start), previewEnd: round(Math.min(duration, start + 10))})
 }
 function apply(e) {
+  for (const key of ['required_evidence', 'required_reaction', 'adopted_ai_draft', 'boundary_trace', 'review_feedback']) {
+    if (e[key] !== undefined) edit[key] = clone(e[key]); else delete edit[key]
+  }
   Object.assign(edit.window, e.window || { start: info.sourceCandidateStart, end: info.sourceCandidateEnd })
   info.clipLen = edit.window.end - edit.window.start
   edit.trim.start = e.trim.start
@@ -1317,6 +1326,9 @@ function stateFromEdit(source, style, restored = false) {
   if (source.subtitles.sentence_overrides?.length) body.subtitles.sentence_overrides = clone(source.subtitles.sentence_overrides)
   if (source.music?.track) body.music = clone(source.music)
   if (source.callback) body.callback = clone(source.callback)
+  for (const key of ['required_evidence', 'required_reaction', 'adopted_ai_draft', 'boundary_trace', 'review_feedback']) {
+    if (source[key] !== undefined) body[key] = clone(source[key])
+  }
   if (source.generated_by) Object.assign(body, { generated_by: source.generated_by, note: source.note || '' })
   return { edit: body, styleId: style, restoredAi: restored }
 }
@@ -1654,13 +1666,14 @@ async function pickVariant(key) {
     await ElMessageBox.confirm('切换版本会替换当前的剪辑脚本（包括你手动改过的部分），确定？', '切换初稿版本',
       { type: 'warning', confirmButtonText: '切换' })
   }
-  await api.chooseVariant(name.value, rank.value, key)
+  if (dirty.value && !(await save(true))) return
+  await api.chooseVariant(name.value, rank.value, key, revision.value)
   await load()
   ElMessage.success('已切换，选中的这一版会作为剪辑口味的对比基础')
 }
 
 // 点“AI 初稿”先选要几个版本（默认三个都选）；选一个就只出那一版
-const draftDlg = reactive({ show: false, template: 'default', styles: ['restrained', 'standard', 'lively'] })
+const draftDlg = reactive({ show: false, template: 'default', boundaryOption: '', styles: ['restrained', 'standard', 'lively'] })
 const styleOptions = [
   { key: 'restrained', label: '克制', hint: '只在笑点出 1–3 个效果，最多 1 个梗' },
   { key: 'standard', label: '标准', hint: '默认编排：铺垫克制、笑点集中、反应补一个' },
@@ -1672,20 +1685,16 @@ function aiDraft() {
 async function runDraft() {
   draftDlg.show = false
   const has = info.exists || edit.items.length > 0
-  if (has) {
-    await ElMessageBox.confirm('AI 初稿会覆盖当前的剪辑脚本（花字、运镜、贴图和裁剪范围），确定？', 'AI 初稿',
-      { type: 'warning', confirmButtonText: '覆盖' })
-  }
+  if (dirty.value && !(await save(true))) return
   if (!info.llm) {
     ElMessage.info('这个候选还没有精排结果，初稿只能参考原话和弹幕；建议先在场次页跑“精排”')
   }
   drafting.value = true
   try {
-    const j = await api.submitJob('AUTO_EDIT', name.value, { rank: rank.value, force: has, template: draftDlg.template, styles: [...draftDlg.styles] })
+    const j = await api.submitJob('AUTO_EDIT', name.value, { rank: rank.value, force: has, template: draftDlg.template, boundaryOption: draftDlg.boundaryOption || undefined, styles: [...draftDlg.styles] })
     const s = await waitJob(j.id, 3000)
     if (s.status !== 'SUCCESS') return ElMessage.error(`初稿没有生成：${s.summary || s.status}（详情见任务页）`)
-    await load()
-    ElMessage.success('AI 初稿已载入，检查后记得渲染预览')
+    ElMessage.success('AI 草稿已生成，请在待采用草稿中刷新、比较后采用；当前编辑保持不变')
   } finally {
     drafting.value = false
   }

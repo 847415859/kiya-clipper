@@ -137,6 +137,8 @@ def main() -> int:
     ap.add_argument("--range-start", type=float, help="局部试渲染起点（成片秒数，含前情呼应）")
     ap.add_argument("--range-end", type=float)
     ap.add_argument("--schedule-tail", action="store_true", help="只试渲染日程片尾")
+    ap.add_argument("--draft-id")
+    ap.add_argument("--draft-style", choices=['restrained', 'standard', 'lively'])
     args = ap.parse_args()
     has_range = args.range_start is not None or args.range_end is not None
     partial = has_range or args.schedule_tail
@@ -172,7 +174,22 @@ def main() -> int:
     epath = Path(args.edit) if args.edit else sess_dir / "edits" / f"{args.rank:02d}.json"
     try:
         raw = json.loads(epath.read_text(encoding="utf-8")) if epath.exists() else default_edit(clip_len)
+        if args.draft_id:
+            if not partial or not re.fullmatch('[a-f0-9]{32}', args.draft_id) or not args.draft_style:
+                raise ValueError('草稿试渲染必须指定有效草稿ID、风格和局部范围')
+            draft = json.loads((sess_dir/'edits/ai_drafts'/f'{args.rank:02d}'/f'{args.draft_id}.json').read_text(encoding='utf-8'))
+            candidate_revision = hashlib.sha256(cpath.read_bytes()).hexdigest()
+            rerank_path = sess_dir/'rerank.json'
+            rerank_revision = hashlib.sha256(rerank_path.read_bytes()).hexdigest() if rerank_path.exists() else 'missing'
+            if draft['candidate_revision'] != candidate_revision or draft.get('rerank_revision') != rerank_revision:
+                raise ValueError('草稿候选或精排证据已变化，请重新生成')
+            variant = next((v for v in draft['variants'] if v['key'] == args.draft_style), None)
+            if not variant:
+                raise ValueError('草稿中没有该风格')
+            raw = variant['edit']
         edit = validate_edit(raw, clip_len)
+        from clipper.evidence_edit import attach
+        edit = attach(edit, cand, sess_dir)
     except (EditError, ValueError) as e:
         print(f"剪辑脚本有误：{e}", file=sys.stderr)
         return 1
@@ -195,7 +212,11 @@ def main() -> int:
 
     # 1. 干净的源视频（按裁剪范围和分辨率缓存）
     work = sess_dir / "render"
-    rm_tag = "_v2_" + hashlib.sha256(json.dumps([t_start, t_end, removed], sort_keys=True).encode()).hexdigest()[:16]
+    source_revision = [{"video": s["video"], "offset": s["offset"],
+                        "size": Path(s["video"]).stat().st_size if Path(s["video"]).exists() else None,
+                        "mtime_ns": Path(s["video"]).stat().st_mtime_ns if Path(s["video"]).exists() else None} for s in data["segments"]]
+    parts = [part for a, b in kept for part in pieces(data["segments"], a, b)]
+    rm_tag = "_v3_" + hashlib.sha256(json.dumps([t_start, t_end, removed, source_revision], sort_keys=True).encode()).hexdigest()[:16]
     src = work / f"src_{args.rank:02d}_{t_start:.1f}_{t_end:.1f}{rm_tag}_{args.height}.mp4"
     if not src.exists():
         parts = [part for a, b in kept for part in pieces(data["segments"], a, b)]
@@ -340,6 +361,9 @@ def main() -> int:
     out = final_dir / f"{args.rank:02d}_{hhmmss(cand['t']).replace(':', '-')}_{args.height}p.mp4"
     if partial:
         out = final_dir / f"{args.rank:02d}_{first}_{last}_{args.height}p.mp4"
+        if args.draft_id:
+            draft_tag = hashlib.sha256(json.dumps(edit, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
+            out = final_dir / f"{args.rank:02d}_{first}_{last}_{args.height}p_draft_{args.draft_id}_{args.draft_style}_{draft_tag}.mp4"
     tmp = out.with_suffix(".part.mp4")
     t0 = time.time()
     r = subprocess.run(render_cmd() + [str(job), str(job / "props.json"), str(tmp)] + frame_args)
@@ -357,6 +381,31 @@ def main() -> int:
         metadata_tmp.replace(metadata)
     tmp.replace(out)
     out.with_suffix(".edit.json").write_text(json.dumps(edit, ensure_ascii=False, indent=1), encoding="utf-8")
+    from clipper.protection import coverage, required, revision
+    evidence_plan = coverage(required(edit), kept)
+    preview_start = first / FPS if partial else 0
+    preview_end = (last + 1) / FPS if partial else float("inf")
+    for row in evidence_plan["checks"]:
+        visible = []
+        for span in row["output_ranges"]:
+            a = span["output_start"] + cb_frames / FPS
+            b = span["output_end"] + cb_frames / FPS
+            if min(b, preview_end) > max(a, preview_start):
+                visible.append(dict(span, output_start=max(a, preview_start)-preview_start,
+                                    output_end=min(b, preview_end)-preview_start))
+        row["output_ranges"] = visible
+        if partial:
+            row["full_edit_status"] = row["status"]
+            row["status"] = "partial_preview_not_evaluable"
+            row["preview_scope"] = "only_intersection_with_partial_render"
+    if partial:
+        evidence_plan["full_edit_status"] = evidence_plan["status"]
+        evidence_plan["status"] = "partial_preview_not_evaluable"
+        evidence_plan["scope_note"] = "局部预览仅提供交集定位，不能证明完整成片覆盖"
+    evidence_plan.update(source_revision=source_revision, edit_revision=revision(edit), media_size=out.stat().st_size,
+                         media_mtime_ns=out.stat().st_mtime_ns, height=args.height,
+                         callback_offset=cb_frames / FPS, partial=partial)
+    out.with_suffix(".evidence.json").write_text(json.dumps(evidence_plan, ensure_ascii=False, indent=2), encoding="utf-8")
     if partial:
         out.with_suffix(".range.json").write_text(json.dumps({"start": first / FPS, "end": (last + 1) / FPS,
                                                             "duration": (last - first + 1) / FPS}), encoding="utf-8")

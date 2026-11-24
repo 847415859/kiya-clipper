@@ -71,6 +71,8 @@ export function compareEdits(ai, current, candidateStart = 0) {
   }
   if (ai.subtitles?.enabled !== current.subtitles?.enabled) settings.push('字幕开关')
   if (JSON.stringify(ai.cuts || []) !== JSON.stringify(current.cuts || [])) settings.push('片中删除')
+  if (JSON.stringify(ai.required_evidence || []) !== JSON.stringify(current.required_evidence || [])) settings.push('必保证据范围或来源')
+  if (JSON.stringify(ai.required_reaction || null) !== JSON.stringify(current.required_reaction || null)) settings.push('必保回应')
   if ((ai.remove_business !== false) !== (current.remove_business !== false)) settings.push('自动删除营业话')
   return { changes, settings, trim: {
     before: [origin(ai) + ai.trim.start, origin(ai) + ai.trim.end],

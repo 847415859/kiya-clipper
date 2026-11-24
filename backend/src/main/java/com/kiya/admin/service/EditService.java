@@ -31,7 +31,7 @@ import com.kiya.admin.entity.SubtitleStyle;
 public class EditService {
     private static final Pattern FINAL = Pattern.compile("^[0-9]{2,3}_[0-9\\-]{1,16}_[0-9]{3,4}p\\.mp4$");
     private static final Pattern PREVIEW = Pattern.compile("^([0-9]{2,3})_([0-9]+\\.[0-9])_([0-9]+\\.[0-9])(_clean)?\\.mp4$");
-    private static final Pattern RENDER_PREVIEW = Pattern.compile("^[0-9]{2,3}_[0-9]+_[0-9]+_(360|480|720|1080)p\\.mp4$");
+    private static final Pattern RENDER_PREVIEW = Pattern.compile("^[0-9]{2,3}_[0-9]+_[0-9]+_(360|480|720|1080)p(_draft_[a-f0-9]{32}_(restrained|standard|lively)_[a-f0-9]{12})?\\.mp4$");
     static final double MAX_WINDOW = 500;
 
     private final WorkerPaths paths;
@@ -127,6 +127,12 @@ public class EditService {
 
     /** 选用某一版：它成为当前剪辑脚本（编辑器改的就是它），AI 原稿也换成它（剪辑口味按它对比人工修改），并记下选了哪一版。 */
     public synchronized Map<String, Object> chooseVariant(String session, int rank, String key) {
+        return chooseVariant(session, rank, key, recovery.revision(editFile(session, rank)));
+    }
+
+    public synchronized Map<String, Object> chooseVariant(String session, int rank, String key, String expectedRevision) {
+        if (expectedRevision == null) throw ApiException.badRequest("切换前请刷新编辑修订");
+        recovery.check(editFile(session, rank), expectedRevision);
         Map<String, Object> v = readVariants(session, rank);
         if (v == null || !(v.get("variants") instanceof List<?> list)) {
             throw ApiException.notFound("这个候选没有多版本初稿");
@@ -145,7 +151,9 @@ public class EditService {
         Path edits = paths.sessionDir(session).resolve("edits");
         try {
             Files.createDirectories(edits);
+            recovery.archive(editFile(session, rank), "切换风格前版本");
             write(editFile(session, rank), edit);
+            recovery.archive(editFile(session, rank), "采用风格版本");
             Path aiF = edits.resolve(String.format("%02d.ai.json", rank));
             Map<String, Object> ai = Files.exists(aiF)
                     ? om.readValue(aiF.toFile(), new TypeReference<LinkedHashMap<String, Object>>() {}) : new LinkedHashMap<>();
@@ -407,6 +415,37 @@ public class EditService {
             Files.write(part, content);
             Files.move(part, f, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             recovery.archive(f, "人工保存");
+            if (!restoredAi && norm.containsKey("review_feedback")) {
+                Path feedbackDir = dir.resolve("feedback").resolve(String.format("%02d", rank));
+                Files.createDirectories(feedbackDir);
+                Map<String,Object> feedback = new LinkedHashMap<>();
+                feedback.put("session", session);
+                feedback.put("rank", rank);
+                feedback.put("edit_revision", recovery.revision(content));
+                feedback.put("previous_revision", expectedRevision);
+                feedback.put("feedback", norm.get("review_feedback"));
+                feedback.put("adopted_ai_draft", norm.get("adopted_ai_draft"));
+                feedback.put("boundary_trace", norm.get("boundary_trace"));
+                feedback.put("generated_by", norm.get("generated_by"));
+                feedback.put("window", norm.get("window"));
+                feedback.put("trim", norm.get("trim"));
+                feedback.put("saved_at", norm.get("updated_at"));
+                Path baselineFile = dir.resolve(String.format("%02d.ai.json", rank));
+                if (Files.exists(baselineFile)) {
+                    Map<String,Object> baseline = om.readValue(baselineFile.toFile(), new TypeReference<LinkedHashMap<String,Object>>() {});
+                    feedback.put("ai_baseline_revision", recovery.revision(Files.readAllBytes(baselineFile)));
+                    feedback.put("model", baseline.get("model"));
+                    feedback.put("prompt", baseline.get("prompt"));
+                    feedback.put("evidence_revision", baseline.get("rerank_revision"));
+                    feedback.put("candidate_revision", baseline.get("candidate_revision"));
+                    feedback.put("boundary_option", baseline.get("boundary_option"));
+                }
+                Map<String,Object> semantic = new LinkedHashMap<>(norm);
+                for (String key : List.of("updated_at", "human_saved_at", "human")) semantic.remove(key);
+                String feedbackId = recovery.revision(om.writeValueAsBytes(semantic));
+                Path feedbackFile = feedbackDir.resolve(feedbackId + ".json");
+                if (!Files.exists(feedbackFile)) write(feedbackFile, feedback);
+            }
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("edit", norm);
             out.put("warnings", warnings);
@@ -471,6 +510,68 @@ public class EditService {
             throw ApiException.badRequest("文件名不合法");
         }
         return WorkerPaths.inside(paths.output(), paths.sessionDir(session).resolve("edit_preview").resolve(file));
+    }
+
+    public List<Map<String, Object>> pendingAi(String session, int rank) {
+        candidate(session, rank);
+        Path dir = paths.sessionDir(session).resolve("edits/ai_drafts").resolve(String.format("%02d", rank));
+        if (!Files.isDirectory(dir)) return List.of();
+        try (var files = Files.list(dir)) {
+            List<Map<String, Object>> result = new ArrayList<>();
+            for (Path file : files.filter(p -> p.getFileName().toString().matches("[a-f0-9]{32}\\.json")).sorted().toList()) {
+                result.add(om.readValue(file.toFile(), new TypeReference<LinkedHashMap<String, Object>>() {}));
+            }
+            return result;
+        } catch (IOException e) { throw ApiException.badRequest("读取待采用草稿失败"); }
+    }
+
+    public synchronized Map<String, Object> adoptAi(String session, int rank, String id, String key, String expectedRevision) {
+        if (expectedRevision == null) throw ApiException.badRequest("采用前请刷新编辑修订");
+        recovery.check(editFile(session, rank), expectedRevision);
+        Map<String, Object> draft = pendingAi(session, rank).stream().filter(d -> id.equals(d.get("id"))).findFirst()
+                .orElseThrow(() -> ApiException.notFound("待采用草稿不存在"));
+        String base = String.valueOf(draft.get("base_revision"));
+        if (!base.equals(expectedRevision)) throw ApiException.badRequest("生成后编辑已变化，请重新比较并保留最新修改，不能直接采用旧草稿");
+        try {
+            Path candidates = paths.sessionDir(session).resolve("candidates.json");
+            if (!recovery.revision(Files.readAllBytes(candidates)).equals(draft.get("candidate_revision")))
+                throw ApiException.badRequest("候选已变化，请重新生成草稿");
+            Path rr = paths.sessionDir(session).resolve("rerank.json");
+            String rrRevision = Files.exists(rr) ? recovery.revision(Files.readAllBytes(rr)) : "missing";
+            if (!rrRevision.equals(draft.get("rerank_revision"))) throw ApiException.badRequest("精排证据已变化，请重新生成草稿");
+            for (Object o : (List<?>) draft.get("variants")) {
+                Map<String,Object> variant = castMap((Map<?,?>) o);
+                if (!key.equals(variant.get("key"))) continue;
+                Map<String,Object> edit = new LinkedHashMap<>(castMap((Map<?,?>) variant.get("edit")));
+                edit.put("adopted_ai_draft", id);
+                Path formal = editFile(session, rank);
+                Path ai = paths.sessionDir(session).resolve("edits").resolve(String.format("%02d.ai.json", rank));
+                Path variants = variantsFile(session, rank);
+                byte[] oldEdit = Files.exists(formal) ? Files.readAllBytes(formal) : null;
+                byte[] oldAi = Files.exists(ai) ? Files.readAllBytes(ai) : null;
+                byte[] oldVariants = Files.exists(variants) ? Files.readAllBytes(variants) : null;
+                recovery.archive(ai, "采用新草稿前AI基线");
+                try {
+                    Map<String,Object> saved = save(session, rank, edit, null, true, expectedRevision);
+                    Map<String,Object> baseline = new LinkedHashMap<>(draft);
+                    baseline.put("edit", saved.get("edit"));
+                    baseline.put("variant", key);
+                    write(ai, baseline);
+                    Map<String,Object> currentVariants = new LinkedHashMap<>(draft);
+                    currentVariants.put("chosen", key);
+                    write(variants, currentVariants);
+                } catch (IOException | RuntimeException failure) {
+                    Path[] files = {formal, ai, variants};
+                    byte[][] contents = {oldEdit, oldAi, oldVariants};
+                    for (int i = 0; i < files.length; i++) {
+                        if (contents[i] == null) Files.deleteIfExists(files[i]); else Files.write(files[i], contents[i]);
+                    }
+                    throw failure;
+                }
+                return get(session, rank);
+            }
+            throw ApiException.badRequest("草稿中没有该风格");
+        } catch (IOException e) { throw ApiException.badRequest("采用草稿失败：" + e.getMessage()); }
     }
 
     public Map<String, Object> recovery(String session, int rank) {

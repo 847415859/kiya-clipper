@@ -630,6 +630,19 @@ public class SessionService {
             m.put("promptVersion", c.path("prompt_version").asText(""));
             m.put("clipStart", c.path("clip_start").asDouble());
             m.put("pick", c.path("pick").asBoolean(false));          // 推荐发布（v3 精排）：有趣 + 能单独看懂 + 起承转合完整 + 分数达标
+            JsonNode video = c.path("video_evidence");
+            if (video.isObject()) {
+                Map<String, Object> timeline = new LinkedHashMap<>();
+                timeline.put("model", video.path("model").asText());
+                timeline.put("windowCount", video.path("windows").size());
+                timeline.put("needsReview", video.path("needs_review").asBoolean(false));
+                for (String field : List.of("gaps", "selected_gaps", "open_context", "must_keep_ids", "observations")) {
+                    if (video.path(field).isArray()) {
+                        timeline.put(field, om.convertValue(video.path(field), new TypeReference<List<Object>>() {}));
+                    }
+                }
+                m.put("videoEvidence", timeline);
+            }
             if (l.isObject()) {
                 m.put("needsContext", l.path("needs_context").asBoolean(false));
                 m.put("complete", l.path("complete").asBoolean(true));

@@ -355,6 +355,29 @@ def run(args: argparse.Namespace) -> dict:
         if not extra:
             raise Refuse("“仅自己可见”没有配置：biliup 没有这个参数，请在 publish.bili.private_args 里填验证过的参数")
     video = find_video(sess, args.rank, int(bc["height"]))
+    from clipper.edit import validate_edit
+    from clipper.protection import required, revision
+    from clipper.evidence_edit import attach
+    current_raw = read(sess / "edits" / f"{args.rank:02d}.json", {})
+    current_candidate = next((c for c in read(sess / "candidates.json", {}).get("candidates", []) if c["rank"] == args.rank), None)
+    current = attach(validate_edit(current_raw, current_candidate["clip_end"]-current_candidate["clip_start"]), current_candidate, sess) if current_raw and current_candidate else current_raw
+    receipt = read(video.with_suffix(".evidence.json"))
+    if receipt and required(current):
+        if revision(current) != receipt.get("edit_revision"):
+            raise Refuse("当前编辑或必保证据已变化，请重新渲染核验")
+    if receipt:
+        bound = receipt.get("media_size") == video.stat().st_size and receipt.get("media_mtime_ns") == video.stat().st_mtime_ns
+        if not bound or receipt.get("status") == "missing":
+            raise Refuse("当前成片必保证据缺失或报告已失效，请重新渲染并核验对应原片区间")
+    else:
+        if required(current):
+            raise Refuse("当前成片缺少必保证据映射报告，请重新渲染核验")
+    if required(current):
+        from clipper.quality import quality_report
+        quality = quality_report(sess, args.rank, final=video, candidate=current_candidate, edit=current)
+        confirmed = {"required_evidence_missing", "required_audio_missing", "audio_missing", "evidence_receipt_stale"}
+        if any(issue.code in confirmed for issue in quality.errors):
+            raise Refuse("当前成片存在已确认的必保证据或音轨损失，请先处理质量报告")
     cover = sess / "publish" / f"{args.rank:02d}_cover.jpg"
     dtime = resolve_dtime(args.mode, args.at, bc["hold_days"], now)
     try:

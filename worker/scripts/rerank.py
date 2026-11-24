@@ -37,6 +37,7 @@ from clipper.context import danmaku_lines, extract_frames, load_events, profile,
 from clipper.llm import LLMClient, fill, image_part, load_prompt, text_part  # noqa: E402
 from clipper.memory import active_weights, context_text, final_score, load_memory, value_final_score, value_score  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
+from clipper.video_evidence import analyze_candidate, evidence_text, make_video_client, missing, session_sources  # noqa: E402
 
 from clipper.value_strategy import annotate_shadow, evidence_errors, is_value, route, verify_evidence  # noqa: E402
 
@@ -77,6 +78,18 @@ FAIL_REASONS = ("not_funny", "need_context", "read_sc", "repeat_meme", "taboo", 
 TIERS = ("推荐", "备选", "淘汰")
 
 
+class NarrativeAssessment(BaseModel):
+    protagonist: str = ""
+    goal: str = ""
+    payoff: str = ""
+    effective_response: str = ""
+    potential: str = ""
+    usability: str = ""
+    missing_context: list[str] = Field(default_factory=list)
+    fact_basis: list[dict] = Field(default_factory=list)
+    review_points: list[dict] = Field(default_factory=list)
+
+
 class RerankOut(BaseModel):
     """精排输出结构（与 prompts/rerank_v1.md 的字段说明一致）。"""
     funny: bool
@@ -91,6 +104,7 @@ class RerankOut(BaseModel):
     start_time: float | None = None
     end_time: float | None = None
     story: Story = Field(default_factory=Story)
+    narrative: NarrativeAssessment = Field(default_factory=NarrativeAssessment)
     title_candidates: list[str] = Field(default_factory=list)
     # ---- v4：把关与交接（旧提示词不会输出这些，全部有默认值，旧结果照常读）
     value_schema_version: int | None = None
@@ -108,6 +122,7 @@ class RerankOut(BaseModel):
     rubric_version: str = ""
     confidence: float = Field(default=1.0, ge=0, le=1)       # 大模型对自己判断的把握
     evidence: list[Evidence] = Field(default_factory=list)   # 笑点证据：原话 + 秒数
+    must_keep_evidence_ids: list[str] = Field(default_factory=list, max_length=12)
     asr_doubt: bool = False                                  # 笑点依赖的词可能被语音识别听错
     risk_level: str = "none"                                 # none / low / high（审核 / 主播不想发）
     risks: list[str] = Field(default_factory=list)
@@ -365,11 +380,12 @@ def run_listwise(client, recs: list[dict], cfg: dict, rc: dict) -> str:
 
 
 def build_messages(c: dict, segs: list[dict], sents: list[dict], events, delay: float, cfg: dict,
-                   rc: dict, frames_dir: Path, memory: str = "") -> tuple[list, str, int]:
+                   rc: dict, frames_dir: Path, memory: str = "", video_report: dict | None = None) -> tuple[list, str, int]:
     version, system, user = load_prompt(rc["prompt"])
     a, b = c["clip_start"], c["clip_end"]
     before = float(rc["context_before"])
-    frames = extract_frames(segs, a, b, int(rc["frames"]), frames_dir, int(rc["width"]), peak=c["t"], mode=rc.get("frames_mode", "uniform"))
+    frames = [] if video_report and video_report["observations"] else extract_frames(
+        segs, a, b, int(rc["frames"]), frames_dir, int(rc["width"]), peak=c["t"], mode=rc.get("frames_mode", "uniform"))
     hit = emotion_matcher(cfg.get("emotion_words", {}), cfg.get("lore_words", [])) if rc.get("danmaku_smart", True) else None
     dm, gifts = danmaku_lines(events, a, b, a, delay, limit=int(rc.get("danmaku_limit", 60)), peak=c["t"] if hit else None, hit=hit)
     extra = {"memory": memory or "（还没有积累）"} if "{{memory}}" in user else {}
@@ -382,7 +398,18 @@ def build_messages(c: dict, segs: list[dict], sents: list[dict], events, delay: 
                 before_speech=speech_lines(sents, a - before, a, a, limit=1600) if sents else "（这场还没有转写）",
                 speech=speech_lines(sents, a, b, a) if sents else "（这场还没有转写）",
                 danmaku=dm, gifts=gifts,
-                frames_note=(f"共 {len(frames)} 张，见上方（每张标了秒数）" if frames else "（录像不在本地，没有截图，只根据文字判断）"))
+                frames_note=("（依据另附的连续音画观察）" if video_report and video_report["observations"] else
+                             f"共 {len(frames)} 张，见上方（每张标了秒数）" if frames else "（没有可用截图）"))
+    if video_report is not None:
+        system += ("\n按连续音画观察合并相邻窗口。保留跨窗的明确指代和事件归属。"
+                   "模型观察时间是候选定位范围。缺口视为未知，不推断其中内容或确认帧级边界。"
+                   "回传 must_keep_evidence_ids 数组，只引用已附 ID，标出改变理解的回应、结果、画面和阅读时段，"
+                   "并在建议起止中覆盖这些区间。结尾仍在进行或来源不足时说明原因。")
+        low, high = video_report["planned"]
+        text += ("\n\n【连续音画时间线，秒数相对候选起点】\n"
+                 + evidence_text(video_report, a, low, high))
+        if video_report.get("open_context"):
+            text += "\n片段外仍待核对的事件边缘：" + "、".join(video_report["open_context"])
     content = []
     for t, p in frames:
         content += [text_part(f"截图（第 {t:.0f} 秒）："), image_part(p)]
@@ -436,17 +463,34 @@ def main() -> int:
     events = load_events(segs)
     delay = float(data.get("delay_seconds") or 0)
     client = LLMClient(model=rc["model"] or None, cache_dir=sess.parent / "_llm_cache")
+    video_settings = rc.get("video_evidence") or {}
+    material_end = data.get("covered_seconds") if data.get("live") else data.get("duration_seconds")
+    material_end = material_end or data.get("duration_seconds") or data.get("covered_seconds")
+    video_client = None
+    video_sources = []
+    if video_settings.get("enabled") and not args.dry_run:
+        video_client = make_video_client(video_settings, sess.parent / "_llm_cache")
+        video_sources = session_sources(segs)
+        video_settings = {**rc, **video_settings}
+        print(f"连续音画精排：{video_client.model}，{len(video_sources)} 个可读取音画分段", flush=True)
     print(f"精排 {len(cands)} 个候选，模型 {client.model}，提示词 {rc['prompt']}，每个 {rc['frames']} 张图；"
           f"精排记忆 {mem_version or '（无）'}")
 
     shadow_ranks = {c["rank"] for c in data["candidates"][:max(0, int(rc["value_shadow_top_n"]))]} if rc["value_shadow"] else set()
 
     def one(c: dict) -> dict:
+        video_report = None
+        if video_client is not None:
+            video_report = analyze_candidate(c, video_sources, sents, events, delay, video_settings, video_client, material_end)
+            print(f"#{c['rank']} 音画窗 {len(video_report['windows'])} 个，语义覆盖缺口 {len(video_report['gaps'])} 处", flush=True)
         msgs, version, nframes = build_messages(c, segs, sents, events, delay, cfg, rc,
-                                                sess / ("exploration_frames" if exploration else "rerank_frames") / f"{c['rank']:02d}_{c['clip_start']:.2f}_{c['clip_end']:.2f}", memory)
+                                                sess / ("exploration_frames" if exploration else "rerank_frames") / f"{c['rank']:02d}_{c['clip_start']:.2f}_{c['clip_end']:.2f}", memory,
+                                                video_report)
         rec = {"rank": c["rank"], "t": c["t"], "clip_start": c["clip_start"], "clip_end": c["clip_end"],
                "screen_score": c["score"], "frames": nframes, "prompt_version": version, "memory_version": mem_version,
                "taboo": taboo_hits(sents, c["clip_start"], c["clip_end"], taboo)}
+        if video_report is not None:
+            rec["video_evidence"] = video_report
         if args.dry_run:
             prev = [m if isinstance(m["content"], str) else {"role": m["role"], "content": [
                 x if x["type"] == "text" else {"type": "image_url", "image_url": "<图片省略>"} for x in m["content"]]}
@@ -466,6 +510,14 @@ def main() -> int:
         start = a + min(max(o.start_time, -min(a, float(rc["context_before"]))), b - a + float(rc["context_after"])) if o.start_time is not None else None
         end = a + max(-min(a, float(rc["context_before"])), min(o.end_time, (b - a) + float(rc["context_after"]))) if o.end_time is not None else None
         rec["llm"] = o.model_dump()
+        if video_report is not None:
+            required_ids = set(o.must_keep_evidence_ids)
+            required = [item for item in video_report["observations"] if item["id"] in required_ids]
+            video_report["must_keep_ids"] = [item["id"] for item in required]
+            video_report["unknown_ids"] = sorted(required_ids.difference(video_report["must_keep_ids"]))
+            if required and start is not None and end is not None and start < end:
+                start = min(start, min(item["start"] for item in required))
+                end = max(end, max(item["end"] for item in required))
         # Official result remains on the legacy contract; shadow has separate output/cache tags.
         rec["llm"]["value_schema_version"] = None
         rec["pick"] = legacy_pick(rec["llm"], bool(rec["taboo"]), float(rc["pick_score"]), float(rc["pick_confidence"]))
@@ -492,13 +544,34 @@ def main() -> int:
                     absolute_time("start_time"), absolute_time("end_time"), float(rc["min_len"]), float(rc["max_len"]),
                     material_end=data.get("duration_seconds") or data.get("covered_seconds"))
                 rec["value_refined"]["removed"] = []  # Value review never automatically discards context as mere SC/business.
-        material_end = data.get("duration_seconds") or data.get("covered_seconds")
+        review_end = material_end
+        if video_report and video_report["observations"]:
+            review_end = min(review_end, video_report["planned"][1]) if review_end else video_report["planned"][1]
         rec["refined"] = refine_bounds(sents, c["t"], punch, start, end, float(rc["min_len"]), float(rc["max_len"]),
-                                        material_end=material_end)
+                                        material_end=review_end)
+        if video_report is not None:
+            x, y = rec["refined"]["start"], rec["refined"]["end"]
+            if required:
+                rec["refined"]["removed"] = [
+                    cut for cut in rec["refined"]["removed"]
+                    if not any(cut["start"] < item["end"] and cut["end"] > item["start"] for item in required)
+                ]
+            video_report["selected_gaps"] = missing(x, y, video_report["covered"])
+            video_report["outside_selected_ids"] = [item["id"] for item in required
+                                                     if item["start"] < x - .01 or item["end"] > y + .01]
+            first, last = video_report["planned"]
+            open_at_boundary = (("前因" in video_report["open_context"] and x <= first + .5) or
+                                ("收束" in video_report["open_context"] and y >= last - .5))
+            video_report["needs_review"] = bool(video_report["selected_gaps"] or video_report["outside_selected_ids"]
+                                                or video_report["unknown_ids"] or
+                                                open_at_boundary or
+                                                (required and (start is None or end is None)))
+            if video_report["needs_review"]:
+                rec["pick"] = False
         event = normalize_event({**c, "llm": rec["llm"], "refined": rec["refined"]})
         rec["event"] = event
         rec["boundary_options"] = generate_boundary_options(
-            {**c, "llm": rec["llm"], "refined": rec["refined"]}, event, rec["refined"], material_end=material_end)
+            {**c, "llm": rec["llm"], "refined": rec["refined"], "video_evidence": rec.get("video_evidence"), "session": sess.name}, event, rec["refined"], material_end=material_end)
         return rec
 
     t0 = time.time()
@@ -514,7 +587,7 @@ def main() -> int:
         for r in recs:
             if r.get("llm"):
                 r["pick"] = legacy_pick(r["llm"], bool(r.get("taboo")), float(rc["pick_score"]),
-                                       float(rc["pick_confidence"]))
+                                       float(rc["pick_confidence"])) and not (r.get("video_evidence") or {}).get("needs_review")
         print(lw_msg)
     for r in recs:
         r["final"] = round(final_score(r.get("llm"), r["rank"], n_total, w, bool(r.get("taboo"))), 4)
@@ -527,6 +600,11 @@ def main() -> int:
            "generated_at": time.strftime("%F %T"), "listwise": lw_msg,
            "weights": w, "tokens": client.total, "cost_yuan": round(cost, 4) if cost is not None else None,
            "candidates": recs}
+    if video_client is not None:
+        out["video_model"] = video_client.model
+        out["video_tokens"] = {**video_client.total, "request_attempts": video_client.request_attempts,
+                               "requests_without_usage": video_client.requests_without_usage}
+        print(f"音画请求用量：{out['video_tokens']}", flush=True)
     # 只精排了部分序号时，和已有结果合并
     old = result_path
     if args.ranks and old.exists():

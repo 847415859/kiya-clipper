@@ -38,6 +38,7 @@ from clipper.edit import (EditError, enforce_density, ensure_caption, finalize_c
                           suggest_window, validate_edit, validate_item, validate_required_reaction, validate_window)
 from clipper.editdiff import edit_taste, taste_text  # noqa: E402
 from clipper.llm import LLMClient, fill, load_prompt  # noqa: E402
+from clipper.video_evidence import evidence_text  # noqa: E402
 from clipper.variants import DEFAULT, STYLES, load as variants_load, resolve, save as save_variants, variants_cfg, wants_variants  # noqa: E402
 from clipper.memes import (enforce_memes, load_library, offer_text, retrieve, settings as meme_settings,  # noqa: E402
                            situation_text)
@@ -89,8 +90,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("candidates")
     ap.add_argument("--rank", type=int, required=True)
+    ap.add_argument("--boundary-option", help="采用精排boundary_options中的剪法ID，与风格档独立")
     ap.add_argument("--template", choices=["auto", "default", "cute"], default="auto", help="人工模板优先；cute 仍需证据与风险检查")
     ap.add_argument("--force", action="store_true", help="覆盖已有的剪辑脚本")
+    ap.add_argument("--draft-only", action="store_true", help="只生成独立待采用草稿，不修改正式编辑或AI基线")
     ap.add_argument("--styles", help="指定要生成哪几版（逗号分隔：restrained,standard,lively）；指定后不受前 top_n 个的限制。默认 --variants auto 的三版")
     ap.add_argument("--variants", choices=["off", "auto"], default="off",
                     help="auto：AI 评分靠前的前 autoedit.variants.top_n 个候选按克制 / 标准 / 热闹各出一版（其余只出标准版）；off：只出标准版")
@@ -109,13 +112,18 @@ def main() -> int:
     cfg = load_cfg(resolve_config(args.config, sess))
     ac = {"prompt": "edit_v4", "model": "", "max_items": 8, **(cfg.get("autoedit") or {})}
     mc = cfg.get("memory") or {}
-    data = json.loads(cpath.read_text(encoding="utf-8"))
+    import hashlib
+    candidate_bytes = cpath.read_bytes()
+    candidate_revision = hashlib.sha256(candidate_bytes).hexdigest()
+    data = json.loads(candidate_bytes.decode("utf-8"))
     c = next((x for x in data["candidates"] if x["rank"] == args.rank), None)
     if not c:
         print(f"没有序号 {args.rank} 的候选", file=sys.stderr)
         return 1
     dst = sess / "edits" / f"{args.rank:02d}.json"
-    if dst.exists() and not args.force and not args.preview_material:
+    import hashlib
+    base_revision = hashlib.sha256(dst.read_bytes()).hexdigest() if dst.exists() else "none"
+    if dst.exists() and not args.force and not args.preview_material and not args.draft_only:
         print(f"{dst} 已存在（手动编辑过），不覆盖；要重新生成加 --force", file=sys.stderr)
         return 1
     ca = c["clip_start"]
@@ -123,8 +131,14 @@ def main() -> int:
     sents = tr["sentences"] if tr else []
     rr = None
     rpath = sess / "rerank.json"
+    rerank_revision = "missing"
     if rpath.exists():
-        rr = next((r for r in json.loads(rpath.read_text(encoding="utf-8"))["candidates"] if r["rank"] == args.rank), None)
+        rerank_bytes = rpath.read_bytes()
+        rerank_revision = hashlib.sha256(rerank_bytes).hexdigest()
+        rr = next((r for r in json.loads(rerank_bytes.decode("utf-8"))["candidates"] if r["rank"] == args.rank), None)
+        if rr and any(key in rr and abs(rr[key]-c[key]) > 1e-6 for key in ('clip_start', 'clip_end')):
+            print("精排与当前候选边界不匹配，请先重新精排", file=sys.stderr)
+            return 1
     llm = (rr or {}).get("llm") or {}
     # Shadow assessments do not silently select a production template.
     template_llm = ((rr or {}).get("value_llm") or llm) if args.template == "cute" else llm
@@ -137,6 +151,12 @@ def main() -> int:
     if args.template == "cute":
         llm = template_llm
     refined = ((rr or {}).get("value_refined") or (rr or {}).get("refined")) if args.template == "cute" else (rr or {}).get("refined")
+    chosen_boundary = None
+    if args.boundary_option:
+        chosen_boundary = next((o for o in (rr or {}).get('boundary_options', []) if o.get('key', o.get('id')) == args.boundary_option), None)
+        if not chosen_boundary:
+            ap.error('当前精排不存在该剪法方案')
+        refined = {**(refined or {}), 'start': chosen_boundary['start'], 'end': chosen_boundary['end']}
     if args.material_start is None:
         window = suggest_window(c, refined)
     else:
@@ -188,6 +208,11 @@ def main() -> int:
                    beats=shift_beats(llm.get("beats") or [], ca - a) or "（没有节拍，按精排结论自己判断）")
     dm, _ = danmaku_lines(load_events(data["segments"]), a, b, a, float(data.get("delay_seconds") or 0), limit=40)
     version, system_t, user = load_prompt(ac["prompt"])
+    video_report = (rr or {}).get("video_evidence") or {}
+    video_ids = set(video_report.get("must_keep_ids", []))
+    video_keep = [row for row in video_report.get("observations", [])
+                  if row["id"] in video_ids and a <= row["start"] < row["end"] <= b]
+    missing_video_ids = sorted(video_ids.difference(row["id"] for row in video_keep))
     if "{{boundary_evidence}}" in user:
         evidence = []
         for entry in llm.get("evidence") or []:
@@ -273,6 +298,13 @@ def main() -> int:
         if reaction is not None:
             text += (f"\n必须完整保留素材内 {reaction['start'] - a:g}–{reaction['end'] - a:g} 秒的回应原声。"
                      "选择裁剪起止时覆盖该区间并保留理解回应所需的前文。")
+        if video_report:
+            text += ("\n\n【精排连续音画依据，相对当前素材起点】\n"
+                     + evidence_text(video_report, a, a, b, video_ids)
+                     + "\n标为必保的区间应完整纳入裁剪，保留相关画面阅读时间和原声。"
+                       "时间是观察线索，证据缺口或声尾无法核对时在 note 中记录。")
+            if missing_video_ids:
+                text += "\n以下必保证据超出当前素材，标为待核对：" + "、".join(missing_video_ids)
         print(f"#{args.rank} 生成剪辑脚本初稿{'（' + v['label'] + '版）' if multi or key != DEFAULT else ''}（{client.model}，{version}）…")
         r = client.chat_json([{"role": "system", "content": system}, {"role": "user", "content": text}], EditOut, tag=version)
         if r.data is None:
@@ -290,12 +322,15 @@ def main() -> int:
             except EditError as e:
                 bad.append(str(e))
         trim = {"start": t_start, "end": t_end}
-        keep_explicit = refined and (cute_prompt or refined["end"] - refined["start"] < 5)
+        keep_explicit = chosen_boundary is not None or (refined and (cute_prompt or refined["end"] - refined["start"] < 5))
         if not keep_explicit and out.trim and 0 <= out.trim.start < out.trim.end <= clip_len and out.trim.end - out.trim.start > 0:
             trim = {"start": round(out.trim.start, 2), "end": round(out.trim.end, 2)}
         if reaction is not None:
             trim["start"] = min(trim["start"], reaction["start"] - a)
             trim["end"] = max(trim["end"], reaction["end"] - a)
+        if video_keep:
+            trim["start"] = min(trim["start"], min(row["start"] for row in video_keep) - a)
+            trim["end"] = max(trim["end"], max(row["end"] for row in video_keep) - a)
         items = [i for i in items if trim["start"] <= i["start"] < trim["end"]]
         items, st_dropped = limit_stickers(items, int(ac.get("max_stickers", 2)))
         items, fx_dropped = limit_overlays(items)         # 吐槽旁白 / 伪 UI 不能泛滥（旁白最多 2 条、伪 UI 最多 2 个）
@@ -306,6 +341,14 @@ def main() -> int:
                 "generated_by": f"{version} / {client.model}" + (f" / {v['label']}" if multi or key != DEFAULT else ""), "note": out.note[:200]}
         if reaction is not None:
             edit["required_reaction"] = reaction
+        if video_report:
+            from clipper.protection import resolve as resolve_required
+            edit["required_evidence"], evidence_trace = resolve_required(rr, c, sess.name)
+            evidence_trace["outside_material"] = [row for row in edit["required_evidence"] if row["start"] < a or row["end"] > b]
+            edit["boundary_trace"]["required_evidence"] = evidence_trace
+            edit["boundary_trace"]["video_evidence"] = {"kept_ids": [row["id"] for row in video_keep],
+                                                        "outside_material_ids": missing_video_ids,
+                                                        "needs_review": bool(video_report.get("needs_review") or missing_video_ids)}
         track = music_lib.pick_track(args.rank, str(llm.get("type") or "")) if ac.get("music", True) and not cute_prompt else None
         if track:                                          # 曲库里有可用的曲子：配 BGM，效果吸附到鼓点（没有曲库就跳过）
             beats = music_lib.load_beats(track["id"])["beats"]
@@ -356,13 +399,32 @@ def main() -> int:
     chosen_key = DEFAULT if any(k == DEFAULT for k, _ in made) else made[0][0]
     chosen = next(r for k, r in made if k == chosen_key)
     edit = chosen[0]
-    if cb_plan and chosen_key == DEFAULT:
+    if cb_plan and chosen_key == DEFAULT and not args.draft_only:
         cb_lib.mark_used(sess.parent, cb_plan["session"], cb_plan["start"], owner)
     dst.parent.mkdir(exist_ok=True)
-    dst.write_text(json.dumps(edit, ensure_ascii=False, indent=1), encoding="utf-8")
+    if not args.draft_only:
+        if dst.exists():
+            import uuid
+            history = dst.parent / "cli_history"
+            history.mkdir(exist_ok=True)
+            (history / f"{args.rank:02d}-{uuid.uuid4().hex}.json").write_bytes(dst.read_bytes())
+        dst.write_text(json.dumps(edit, ensure_ascii=False, indent=1), encoding="utf-8")
     ai_meta = {"prompt": version, "model": client.model, "taste_used": bool(extra and taste["active"]),
                "memes_offered": [{"meme": m["text"], "sim": m["sim"], "score": m["score"]} for m in offered],
                "meme_method": meme_method, "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    if args.draft_only:
+        import uuid
+        draft_id = uuid.uuid4().hex
+        folder = dst.parent / "ai_drafts" / f"{args.rank:02d}"
+        folder.mkdir(parents=True, exist_ok=True)
+        payload = {"id": draft_id, "session": sess.name, "rank": args.rank, "base_revision": base_revision,
+                   "candidate_revision": candidate_revision,
+                   "rerank_revision": rerank_revision,
+                   "boundary_option": chosen_boundary,
+                   "chosen": chosen_key, "variants": [{"key": k, "label": STYLES[k]["label"], "edit": r[0], "meme_notes": r[3]} for k,r in made], **ai_meta}
+        (folder / f"{draft_id}.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps({"draft_id": draft_id, "path": str(folder / f"{draft_id}.json"), "adopted": False}, ensure_ascii=False))
+        return 0
     # 原稿另存一份：之后和人工终稿对比，剪辑口味才能积累下来（多版本时是被选中的那一版）
     (dst.parent / f"{args.rank:02d}.ai.json").write_text(json.dumps(
         {"edit": edit, "meme_notes": chosen[3], "variant": chosen_key if multi or chosen_key != DEFAULT else None, **ai_meta}, ensure_ascii=False, indent=1), encoding="utf-8")

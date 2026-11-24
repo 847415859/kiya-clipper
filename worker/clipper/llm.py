@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 import threading
 import time
 import urllib.error
@@ -68,7 +69,7 @@ class LLMResult:
 class LLMClient:
     def __init__(self, model: str | None = None, base_url: str | None = None, api_key: str | None = None,
                  cache_dir: str | Path | None = None, timeout: int = 120, temperature: float = 0.3,
-                 max_retries: int = 3):
+                 max_retries: int = 3, request_options: dict | None = None):
         load_env()
         self.model = model or os.environ.get("DASHSCOPE_MODEL") or "qwen3-vl-plus"
         self.base_url = (base_url or os.environ.get("DASHSCOPE_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
@@ -77,16 +78,22 @@ class LLMClient:
         self.timeout = timeout
         self.temperature = temperature
         self.max_retries = max_retries
+        self.request_options = dict(request_options or {})
         self._lock = threading.Lock()
         self.total = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0, "cached": 0}
+        self.request_attempts = 0
+        self.requests_without_usage = 0
 
     # ---------------------------------------------------------------- 缓存
     def _key(self, messages: list, extra: dict) -> str:
         def strip(m):
             if isinstance(m, dict):
-                if m.get("type") == "image_url":
-                    url = m["image_url"]["url"]
-                    return {"img": hashlib.sha256(url.encode()).hexdigest()}
+                media_type = m.get("type")
+                if media_type == "image_url":
+                    return {"img": hashlib.sha256(m["image_url"]["url"].encode()).hexdigest()}
+                if media_type == "video_url":
+                    media = m["video_url"]
+                    return {**m, "video_url": {**media, "url": hashlib.sha256(media["url"].encode()).hexdigest()}}
                 return {k: strip(v) for k, v in m.items()}
             if isinstance(m, list):
                 return [strip(x) for x in m]
@@ -104,26 +111,64 @@ class LLMClient:
 
     def _cache_put(self, key: str, value: dict) -> None:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        tmp = self.cache_dir / f".{key}.tmp"
-        tmp.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(self.cache_dir / f"{key}.json")
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.cache_dir,
+                                         prefix=f".{key}.", suffix=".tmp", delete=False) as handle:
+            tmp = Path(handle.name)
+            try:
+                json.dump(value, handle, ensure_ascii=False)
+                handle.close()
+                tmp.replace(self.cache_dir / f"{key}.json")
+            finally:
+                tmp.unlink(missing_ok=True)
 
     # ---------------------------------------------------------------- 请求
+    @staticmethod
+    def _read_stream(response) -> tuple[str, dict]:
+        chunks = []
+        usage, finish = {}, None
+        for raw in response:
+            line = raw.decode("utf-8").strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                break
+            event = json.loads(payload)
+            error = event.get("error")
+            if error:
+                code = error.get("code", "provider_error") if isinstance(error, dict) else "provider_error"
+                raise RuntimeError(f"模型视频分析失败：{code}")
+            usage = event.get("usage") or usage
+            for choice in event.get("choices") or []:
+                delta = (choice.get("delta") or {}).get("content")
+                if isinstance(delta, str):
+                    chunks.append(delta)
+                finish = choice.get("finish_reason") or finish
+        return ("".join(chunks) if finish == "stop" else ""), usage
+
     def _post(self, messages: list) -> tuple[str, dict]:
         if not self.api_key:
             raise RuntimeError("没有 DASHSCOPE_API_KEY（填在仓库根目录 .env）")
-        body = json.dumps({"model": self.model, "messages": messages, "temperature": self.temperature}).encode()
+        body = json.dumps({**self.request_options, "model": self.model, "messages": messages,
+                           "temperature": self.temperature}).encode()
         last = None
         for i in range(self.max_retries):
             req = urllib.request.Request(self.base_url + "/chat/completions", data=body, method="POST", headers={
                 "Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"})
+            usage = {}
+            with self._lock:
+                self.request_attempts += 1
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                    if self.request_options.get("stream"):
+                        content, usage = self._read_stream(r)
+                        return content, usage
                     data = json.loads(r.read().decode())
                 content = data["choices"][0]["message"]["content"]
                 if isinstance(content, list):
                     content = "".join(c.get("text", "") for c in content if isinstance(c, dict))
-                return content or "", data.get("usage") or {}
+                usage = data.get("usage") or {}
+                return content or "", usage
             except urllib.error.HTTPError as e:
                 detail = e.read().decode(errors="replace")[:300]
                 last = f"HTTP {e.code}：{detail}"
@@ -131,12 +176,18 @@ class LLMClient:
                     raise RuntimeError(last) from None      # 400 / 401 / 404 重试也没用
             except (urllib.error.URLError, TimeoutError, OSError, KeyError, ValueError) as e:
                 last = f"{type(e).__name__}：{e}"
+            finally:
+                if not usage:
+                    with self._lock:
+                        self.requests_without_usage += 1
             time.sleep(2 ** i)
         raise RuntimeError(f"重试 {self.max_retries} 次仍失败：{last}")
 
     def chat_json(self, messages: list, schema: type[BaseModel], tag: str = "", extra: dict | None = None) -> LLMResult:
         """请求并按 schema 校验；输出不合法时带着错误重试一次。tag / extra 只参与缓存键（例如提示词版本）。"""
         extra = dict(extra or {}, tag=tag, schema=schema.__name__)
+        if self.request_options:
+            extra["request_options"] = self.request_options
         key = self._key(messages, extra)
         hit = self._cache_get(key)
         if hit is not None:
@@ -155,7 +206,7 @@ class LLMClient:
             try:
                 raw, usage = self._post(msgs)
             except RuntimeError as e:
-                return LLMResult(data=None, error=str(e), latency=time.time() - t0, attempts=attempt)
+                return LLMResult(data=None, error=str(e), usage=usage_total, latency=time.time() - t0, attempts=attempt)
             for k, v in usage.items():
                 if isinstance(v, (int, float)):
                     usage_total[k] = usage_total.get(k, 0) + v

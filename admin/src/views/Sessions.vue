@@ -102,8 +102,8 @@
         </template>
         <template v-if="form.type === 'RERANK'">
           <p class="muted" style="margin: 0 0 12px">
-            每个候选抽 8 张截图 + 原话 + 弹幕交给多模态大模型打分、找笑点、修正起止、出标题候选。
-            按所选模型的价格计费（任务日志最后会打印 token 用量）；结果有缓存，重跑不重复收费。
+            精排按主播配置分析候选。连续音画模式分窗记录事件、核对关键边界，再给分和建议起止。
+            模型调用按实际用量计费，任务日志显示 token 和缓存命中。
           </p>
           <el-form-item label="只精排序号">
             <el-input v-model="form.ranks" placeholder="留空全部，例如 1 3 5" />

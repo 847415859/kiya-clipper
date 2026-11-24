@@ -338,6 +338,27 @@ def quality_report(session_dir: Path, rank: int, final: Path | None = None,
     _subtitle_check(report, session_dir, rank, edit, media_info.get("duration") if media_info else None)
     _business_check(report, session_dir, rank, start, end)
     _edit_check(report, session_dir, rank, edit)
+    receipt = _load(media.with_suffix(".evidence.json")) if media else None
+    if receipt:
+        bound = receipt.get("media_size") == media.stat().st_size and receipt.get("media_mtime_ns") == media.stat().st_mtime_ns
+        if receipt.get("edit_revision") and edit and candidate:
+            from .protection import revision
+            from .evidence_edit import attach
+            current = attach(validate_edit(edit, candidate["clip_end"]-candidate["clip_start"]), candidate, session_dir)
+            bound = bound and revision(current) == receipt["edit_revision"]
+        report.check("required_evidence", receipt["status"] if bound else "stale", receipt=receipt, bound_to_media=bound)
+        if not bound:
+            report.issue("evidence_receipt_stale", "error", "必保证据报告与当前成片不匹配，请重新渲染核验")
+        for row in receipt.get("checks", []):
+            if row["status"] == "missing":
+                report.issue("required_evidence_missing", "error", "成片缺失必保证据", **row)
+            modality = row["evidence"].get("modality", "unknown")
+            if modality in {"audio", "audio_visual", "both"} and media_info and not media_info["audio"]:
+                report.issue("required_audio_missing", "error", "必保原声对应成片缺少音轨", **row)
+            if modality in {"visual", "audio_visual", "both"}:
+                report.issue("required_visual_review", "warning", "画面必保时间已映射，坐标或跟踪不足，需回看裁剪、叠加和原字幕阅读时间", **row)
+    else:
+        report.check("required_evidence", "not_evaluable", reason="缺少绑定当前成片的必保证据记录")
     human_file = edit_file
     ai = _load(ai_file)
     human = _load(human_file)

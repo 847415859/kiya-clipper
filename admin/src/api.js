@@ -35,6 +35,8 @@ http.interceptors.response.use(
 )
 
 export const api = {
+  pendingAi: (name, rank) => http.get(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}/ai-drafts`),
+  adoptAi: (name, rank, body) => http.post(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}/ai-drafts/adopt`, body),
   deleteSchedule: (week,expectedRevision,entry=null)=>http.delete(`/api/schedules/${encodeURIComponent(week)}`,{data:{expectedRevision,entry}}),
   schedulePosters: week => http.get(`/api/schedules/${encodeURIComponent(week)}/posters`),
   generateSchedulePoster: (week,body) => http.post(`/api/schedules/${encodeURIComponent(week)}/posters`,body,{timeout:660000}),
@@ -94,7 +96,7 @@ export const api = {
   editRecovery: (name, rank) => http.get(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}/recovery`, { quiet: true }),
   editDraft: (name, rank, client, value) => http.put(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}/drafts/${client}`, value, { quiet: true }),
   renderPreviewUrl: (name, file) => `/api/sessions/${encodeURIComponent(name)}/render-previews/${encodeURIComponent(file)}`,
-  chooseVariant: (name, rank, key) => http.post(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}/variant`, { key }),
+  chooseVariant: (name, rank, key, expectedRevision) => http.post(`/api/sessions/${encodeURIComponent(name)}/edits/${rank}/variant`, { key, expectedRevision }),
   finalUrl: (name, file) => `/api/sessions/${encodeURIComponent(name)}/finals/${encodeURIComponent(file)}`,
   stickers: () => http.get('/api/stickers'),
   stickerUrl: (n) => `/api/stickers/${encodeURIComponent(n)}`,

@@ -384,7 +384,11 @@ public class JobService {
             throw ApiException.badRequest("请指定序号");
         }
         String cand = paths.sessionDir(session).resolve("candidates.json").toString();
-        List<String> a = new ArrayList<>(List.of(cand, "--rank", String.valueOf(rank)));
+        List<String> a = new ArrayList<>(List.of(cand, "--rank", String.valueOf(rank), "--draft-only"));
+        if (p.get("boundaryOption") instanceof String option && !option.isBlank()) {
+            if (!option.matches("[a-zA-Z0-9_-]{1,80}")) throw ApiException.badRequest("剪法方案ID不合法");
+            a.addAll(List.of("--boundary-option", option));
+        }
         if (Boolean.TRUE.equals(p.get("force"))) {
             a.add("--force");
         }
@@ -467,6 +471,12 @@ public class JobService {
                 throw ApiException.badRequest("局部试渲染须为 0–30 秒内的有效范围");
             }
             args.addAll(List.of("--range-start", String.valueOf(start), "--range-end", String.valueOf(end)));
+        }
+        if (p.get("draftId") instanceof String id) {
+            String style = String.valueOf(p.get("draftStyle"));
+            if (!id.matches("[a-f0-9]{32}") || !AUTO_EDIT_STYLES.contains(style) || !p.containsKey("previewStart") || !p.containsKey("previewEnd"))
+                throw ApiException.badRequest("草稿预览须指定草稿、风格和局部范围");
+            args.addAll(List.of("--draft-id", id, "--draft-style", style));
         }
         return runner.command("render.py", args);
     }
