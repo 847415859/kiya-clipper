@@ -77,9 +77,9 @@ def collect(question: dict[str, Any], rows: list[dict[str, Any]],
                 continue
             directory.mkdir(parents=True, exist_ok=True)
             output = directory / f'{len(coverage):02d}.mp4'
-            stream = ['-map', '0:a:0'] if mode == 'audio' else ['-map', '0:v:0', '-map', '0:a:0']
+            stream = ['-map', '0:v:0', '-map', '0:a:0']
             cmd = ['ffmpeg', '-nostdin', '-v', 'error', '-xerror', '-y', '-ss', str(left-offset),
-                   '-i', str(source), '-t', str(right-left), *stream, str(output)]
+                   '-i', str(source), '-t', str(right-left), *stream, '-vf', 'scale=-2:360', str(output)]
             result = subprocess.run(cmd, capture_output=True, timeout=120)
             actual_mode = mode
             if result.returncode and mode != 'audio':

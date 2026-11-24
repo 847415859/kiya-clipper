@@ -82,7 +82,9 @@ def fixture(root, video):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--candidates', type=Path)
-    ap.add_argument('--roles', type=Path)
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument('--roles', type=Path)
+    mode.add_argument('--live', action='store_true')
     ap.add_argument('--fixture-video', type=Path)
     ap.add_argument('--out', type=Path, required=True)
     ap.add_argument('--config', type=Path, default=WORKER.parent / 'config/kiya.yaml')
@@ -92,13 +94,22 @@ def main():
     args = ap.parse_args()
     if args.min_free_mib < 1:
         ap.error('--min-free-mib must be positive')
-    if args.fixture_video and not args.candidates and not args.roles:
+    if args.fixture_video and (args.candidates or args.roles or args.live):
+        ap.error('--fixture-video cannot be combined with --candidates, --roles or --live')
+    if args.fixture_video:
         args.candidates, args.roles = fixture(args.out, args.fixture_video)
         args.out = args.out / 'run'
-    if not args.candidates or not args.roles:
-        ap.error('supply --fixture-video or both --candidates and --roles')
+    if not args.candidates or not (args.roles or args.live) or (args.live and not args.ledger):
+        ap.error('supply --fixture-video, or --candidates with --roles or --live --ledger')
     ledger = DailyLedger(args.ledger) if args.ledger else None
-    runner = Production(args.candidates, args.out, RecordedRoles(args.roles), args.config, ledger,
+    if args.live:
+        import os
+        from clipper.agent_live import LiveRoles
+        os.environ['KIYA_OPS_LEDGER'] = str(args.ledger.resolve())
+        roles = LiveRoles(args.candidates, args.out, args.config, args.ledger)
+    else:
+        roles = RecordedRoles(args.roles)
+    runner = Production(args.candidates, args.out, roles, args.config, ledger,
                         minimum=args.min_free_mib * 1024**2)
     result = runner.run(args.ranks)
     attempts = [attempt for row in result for attempt in row.get('attempts', [])]

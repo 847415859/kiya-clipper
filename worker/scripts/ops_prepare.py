@@ -112,6 +112,16 @@ def prepare(root, job_path, job, state, now):
     if not any(row.get("llm") for row in rows):
         raise RuntimeError("本场未得到有效精排结论，见 operations.log")
     state["unresolved_ranks"] = sorted(set(ranks) - {row["rank"] for row in rows if row.get("llm")})
+    if state.get('production_mode') == 'isolated':
+        output = root / 'production' / job_path.stem
+        run_step('agent_produce.py', ['--candidates', candidates, '--live', '--out', output,
+                                      '--config', config, '--ledger', root / 'daily.sqlite3'], None, log)
+        summary = read(output / 'summary.json')
+        pending = {item['rank'] for item in summary['candidates'] if item['status'] in {'paused', 'busy'}}
+        state['unresolved_ranks'] = sorted(pending | set(state['unresolved_ranks']))
+        state.update(status='partial' if state['unresolved_ranks'] else 'prepared',
+                     production=str(output), inventory=production_inventory(output, summary))
+        return
     run_step("agent_run.py", [candidates, "--config", config, "--height", "720", "--timeout", "1800"],
              None, log)
     agent = read(session / "agent_run.json")
@@ -141,6 +151,50 @@ def prepare(root, job_path, job, state, now):
     state.update(status="partial" if state["unresolved_ranks"] else "prepared", inventory=inventory)
 
 
+def production_inventory(output, summary):
+    rows = []
+    for candidate in summary['candidates']:
+        if candidate['status'] != 'inventoried':
+            continue
+        path = output / f"{candidate['rank']:02d}" / 'inventory.json'
+        topic = candidate.get('topic') or {}
+        row = {'rank': candidate['rank'], 'inventory_path': str(path), 'version': candidate['current_version'],
+               'score': topic.get('score') or 0, 'event': topic.get('event_id'), 'topic': topic.get('topic')}
+        verified = proposal_item(row)
+        if verified:
+            rows.append(verified)
+    return rows
+
+
+def proposal_item(row):
+    from clipper.agent_flow import probe
+    from clipper.agent_production import artifacts_valid, fingerprint
+
+    try:
+        item = read(Path(row['inventory_path']))
+        rendered = item['render']
+        media = Path(rendered['media'])
+        review = item['review']
+        candidate = read(Path(row['inventory_path']).with_name('state.json'))
+        if (item['simulation'] or candidate.get('status') != 'inventoried'
+                or candidate.get('current_version') != item['version']
+                or item['version'] != row['version'] or item['rank'] != row['rank']
+                or review['verdict'] != 'pass' or review.get('basis') != 'actual_mp4_model'
+                or review.get('media_sha256') != rendered['files'][str(media)]
+                or not artifacts_valid(rendered['files'])
+                or fingerprint(Path(item['draft'])) != item['draft_sha256']
+                or read(Path(item['draft']))['id'] != item['version']
+                or fingerprint(Path(item['pack'])) != item['pack_sha256']):
+            return None
+        info = probe(media)
+        if info['height'] != 720 or not info['audio'] or info['duration'] <= 0:
+            return None
+        return {**row, 'decision': 'qualified', 'pack': item['pack'], 'quality': rendered['quality'],
+                'media': str(media)}
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        return None
+
+
 def build_daily_plan(root, now):
     day = beijing_day(now)
     ledger = DailyLedger(root / "daily.sqlite3")
@@ -152,9 +206,14 @@ def build_daily_plan(root, now):
         if not status_path.is_file():
             continue
         state = read(status_path)
-        if state.get("status") != "prepared":
+        isolated = state.get('production_mode') == 'isolated'
+        if state.get('status') != 'prepared' and not isolated:
             continue
-        for item in state["inventory"]:
+        for item in state.get('inventory', []):
+            if isolated:
+                item = proposal_item(item)
+                if not item:
+                    continue
             rows.append({**item, "id": f"{job_path.stem}:{item['rank']}",
                          "event": f"{job_path.stem}:{item['event']}" if item["event"] else None,
                          "score": item["score"] or 0,
@@ -185,8 +244,14 @@ def build_daily_plan(root, now):
                     account = uid
                     ledger.reconcile(account, day, ids, complete=True)
         snapshot = ledger.snapshot(account, day)
-        plan = schedule_inventory(rows, snapshot, now, history.get("recent_events") or (),
+        unique_rows = {row['id']: row for row in rows}
+        plan = schedule_inventory(unique_rows.values(), snapshot, now, history.get("recent_events") or (),
                                   history.get("recent_topics") or ())
+        for outcomes in plan.values():
+            for outcome in outcomes:
+                source = unique_rows[outcome['id']]
+                if 'inventory_path' in source:
+                    outcome.update({key: source[key] for key in ('inventory_path', 'version', 'media', 'pack', 'quality')})
         account_statuses[streamer] = {"budget": snapshot, "account_uid": account or None, "plan": plan}
     save(root / "plans" / f"{day}.json", {"mode": "proposal", "streamers": account_statuses})
 
@@ -212,6 +277,7 @@ def drain_one(root, now):
         if now < max(job["ended"] + 120, state.get("retry_at", 0)):
             continue
         attempts = state.get("attempts", 0) + 1
+        state.setdefault('production_mode', 'isolated' if os.environ.get('KIYA_OPS_AGENT_V2') == '1' else 'legacy')
         state.update(status="running", attempts=attempts, retry_at=now + 900)
         save(status_path, state)
         budget_marker = status_path.with_suffix(".budget-blocked")

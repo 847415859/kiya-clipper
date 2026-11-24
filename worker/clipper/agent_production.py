@@ -204,6 +204,7 @@ class Production:
                                lambda: topic_contract(role_data['topic'], rows))
             state.commit(topic=topic, evidence=rows, event_id=topic.get('event_id', f'{state.data["session"]}:{rank}'))
             if topic['verdict'] == 'drop':
+                inventory.unlink(missing_ok=True)
                 state.event('topic', 'dropped', reason=topic['reason'])
                 return state.data
             if topic['verdict'] == 'review':
@@ -234,7 +235,10 @@ class Production:
                     rows = [*rows, answer]
             state.commit(evidence=rows, boundary_status='confirmed_by_adapter')
             length = candidate['clip_end'] - candidate['clip_start']
-            raw_draft = copy.deepcopy(role_data['draft'])
+            transcript = load(transcript_path) if transcript_path.exists() else None
+            raw_draft = copy.deepcopy(state.step('initial-edit', [base, role_data, rows, transcript_revision, self.roles.name],
+                lambda: self.roles.draft(role_data, state, data, candidate, rows, transcript))
+                if hasattr(self.roles, 'draft') else role_data['draft'])
             for index, effect in enumerate(raw_draft.get('items', [])):
                 if not effect.get('id'):
                     effect['id'] = f'effect-{index}-{revision(effect)[:12]}'
@@ -244,7 +248,6 @@ class Production:
             for item in required(draft):
                 if subtract([item['start'], item['end']], [(r['start'], r['end']) for r in rows]):
                     raise Review('required draft time is unsupported by evidence')
-            transcript = load(transcript_path) if transcript_path.exists() else None
             parent = None
             for index in range(self.max_repairs + 1):
                 record = state.step(f'draft-{index}', [base, draft, rows, parent, formal_revision, transcript_revision],
@@ -270,8 +273,9 @@ class Production:
                 receipt = load(Path(result['receipt']))
                 mapping = [dict(row, output_start=row['output_start'] + receipt['callback_offset'],
                                 output_end=row['output_end'] + receipt['callback_offset']) for row in receipt['source_to_output']]
-                decision = state.step(f'review-{index}', [record['id'], result['files'], role_data.get('reviews')],
-                                      lambda: self.roles.review(role_data, index, result))
+                review_input = {**role_data, 'evidence': rows}
+                decision = state.step(f'review-{index}', [record['id'], result['files'], review_input, self.roles.name],
+                                      lambda: self.roles.review(review_input, index, result))
                 state.commit(current_version=record['id'], render=result)
                 if decision['verdict'] == 'pass':
                     if (digest(self.source) != candidate_file_revision or fingerprint(self.config) != base[-1]
