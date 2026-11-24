@@ -83,7 +83,7 @@ def test_video_stream_cache_keys_include_video_content(tmp_path, monkeypatch):
     assert client.requests_without_usage == 0
 
 
-def test_audio_visual_evidence_reaches_normal_rerank_and_editor(tmp_path, monkeypatch):
+def test_audio_visual_evidence_reaches_normal_rerank_and_editor(tmp_path, monkeypatch, capsys):
     config = WORKER.parent / "config" / "kiya.yaml"
     session = tmp_path / "20261124-2033"
     session.mkdir()
@@ -120,6 +120,9 @@ def test_audio_visual_evidence_reaches_normal_rerank_and_editor(tmp_path, monkey
     monkeypatch.setattr(rerank, "LLMClient", Model)
     monkeypatch.setattr(sys, "argv", ["rerank", str(path), "--config", str(config)])
     assert rerank.main() == 0
+    log = capsys.readouterr().out
+    assert "连续音画优先，无有效观察时回退抽帧" in log
+    assert "正式评分使用连续音画观察 1 条，截图 0 张" in log
     record = json.loads((session / "rerank.json").read_text(encoding="utf-8"))["candidates"][0]
     assert record["refined"]["end"] >= 21.4
     assert record["video_evidence"]["needs_review"] and not record["pick"]

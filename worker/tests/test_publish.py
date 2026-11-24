@@ -82,7 +82,7 @@ def test_publish_pack(tmp_path):
     pack = json.loads(r.stdout.strip().splitlines()[-1])
     assert pack["title"] == "怪不得叫金油！" and pack["title_candidates"] == ["怪不得叫金油！", "做局失败"]
     assert pack["description"].startswith("抹精油手滑") and "2026-11-09" in pack["description"]
-    assert "破防" in pack["tags"] and pack["copyright"] == "转载" and pack["source"].startswith("https://live")
+    assert "破防" in pack["tags"] and pack["copyright"] == "自制" and pack["source"].startswith("https://live")
     assert pack["cover_t"] == 59 and pack["cover_source"] == "录像" and (sess / "publish" / "01_cover.jpg").exists()
 
     # 后台改过标题：重跑不覆盖；换封面时间和文字

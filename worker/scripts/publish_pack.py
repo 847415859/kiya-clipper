@@ -36,7 +36,7 @@ from clipper.asr import load_transcript  # noqa: E402
 from clipper.clipwin import clip_origin, read_windows  # noqa: E402
 from clipper.edit import edit_window  # noqa: E402
 from clipper.peaks import hhmmss  # noqa: E402
-from clipper.publish import (COVER_THEMES, DEFAULT_TAGS, build_description, build_tags, clean_title,
+from clipper.publish import (COVER_THEMES, DEFAULT_TAGS, bili_copyright, build_description, build_tags, clean_title,
                              cover_concept, normalize_title_options, render_theme_cover)  # noqa: E402
 from clipper.cover_prompt import seedream_options, seedream_prompt  # noqa: E402
 from clipper.cover_quality import cover_text_options, inspect_cover_text, inspect_reference_frame  # noqa: E402
@@ -154,6 +154,11 @@ def main() -> int:
     sess = cpath.parent
     cfg = load_cfg(resolve_config(args.config, sess))
     pc = cfg.get("publish") or {}
+    try:
+        copyright = bili_copyright(cfg)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 1
     data = json.loads(cpath.read_text(encoding="utf-8"))
     cand = next((c for c in data["candidates"] if c["rank"] == args.rank), None)
     if not cand:
@@ -204,7 +209,7 @@ def main() -> int:
                 candidate_id=f"{sess.name}:{args.rank}", hook_caption=llm.get("hook_caption") or "",
                 session=sess.name, rank=args.rank, title_candidates=titles, title_options=title_options,
                 cover_text_options=cover_text_options(llm, titles[0] if titles else ""),
-                source=streamer.get("live_url", ""), copyright="转载",
+                source=streamer.get("live_url", ""), copyright=copyright,
                 range={"start": round(a, 1), "end": round(b, 1)})
 
     # Both preview and generation use the same automatic concept and saved additions.

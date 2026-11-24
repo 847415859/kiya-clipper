@@ -473,7 +473,11 @@ def main() -> int:
         video_sources = session_sources(segs)
         video_settings = {**rc, **video_settings}
         print(f"连续音画精排：{video_client.model}，{len(video_sources)} 个可读取音画分段", flush=True)
-    print(f"精排 {len(cands)} 个候选，模型 {client.model}，提示词 {rc['prompt']}，每个 {rc['frames']} 张图；"
+    evidence_mode = (f"连续音画优先，无有效观察时回退抽帧（配置 {rc['frames']} 张）" if video_client is not None
+                     else f"截图模式（配置 {rc['frames']} 张）")
+    if args.dry_run and video_settings.get("enabled"):
+        evidence_mode = f"预览仅抽帧（配置 {rc['frames']} 张），本次不请求连续音画"
+    print(f"精排 {len(cands)} 个候选，评分模型 {client.model}，提示词 {rc['prompt']}，{evidence_mode}；"
           f"精排记忆 {mem_version or '（无）'}")
 
     shadow_ranks = {c["rank"] for c in data["candidates"][:max(0, int(rc["value_shadow_top_n"]))]} if rc["value_shadow"] else set()
@@ -482,10 +486,15 @@ def main() -> int:
         video_report = None
         if video_client is not None:
             video_report = analyze_candidate(c, video_sources, sents, events, delay, video_settings, video_client, material_end)
-            print(f"#{c['rank']} 音画窗 {len(video_report['windows'])} 个，语义覆盖缺口 {len(video_report['gaps'])} 处", flush=True)
         msgs, version, nframes = build_messages(c, segs, sents, events, delay, cfg, rc,
                                                 sess / ("exploration_frames" if exploration else "rerank_frames") / f"{c['rank']:02d}_{c['clip_start']:.2f}_{c['clip_end']:.2f}", memory,
                                                 video_report)
+        if video_report is not None:
+            observations = len(video_report["observations"])
+            used = (f"连续音画观察 {observations} 条，截图 {nframes} 张" if observations
+                    else f"无有效音画观察，回退截图 {nframes} 张")
+            print(f"#{c['rank']} 音画窗 {len(video_report['windows'])} 个，"
+                  f"语义覆盖缺口 {len(video_report['gaps'])} 处；正式评分使用{used}", flush=True)
         rec = {"rank": c["rank"], "t": c["t"], "clip_start": c["clip_start"], "clip_end": c["clip_end"],
                "screen_score": c["score"], "frames": nframes, "prompt_version": version, "memory_version": mem_version,
                "taboo": taboo_hits(sents, c["clip_start"], c["clip_end"], taboo)}

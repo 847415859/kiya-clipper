@@ -58,7 +58,7 @@ asr:
 rerank:
   prompt: rerank_v6          # 核对事件归属、最后有效回应和关键画面；可切回 rerank_v5
   model: ""                  # 空 = 用 .env 的 DASHSCOPE_MODEL
-  frames: 8                  # 每个候选抽几张图（越多越贵）
+  frames: 8                  # 截图模式、音画观察缺失回退及影子评估使用的抽帧数量
   width: 640                 # 截图宽度
   frames_mode: peak          # 抽帧方式：uniform = 均匀；peak = 一半集中在粗筛高峰前后（表情多半在那里）、一半均匀看全貌
   video_evidence:
@@ -130,6 +130,7 @@ publish:
   cover_portrait_file: assets/streamers/kiya/cover-portrait.jpg
   # 一键发布到 B站（scripts/publish_bili.py，用 biliup 命令行；要先在服务器上装 biliup 并 `biliup login`，见 deploy/README.md）
   bili:
+    copyright: 自制          # 可选 自制 / 转载，转载须填写直播间来源
     cookie: ~/.config/biliup/cookies.json   # biliup login 生成的登录文件（权限 600，别提交到 git）
     hold_days: 14            # “先放着”：定时发布设到几天后（B站最长约 15 天，创作中心里能改 / 撤回）
     min_interval_sec: 600    # 同一主播两次上传的最短间隔，防止连点触发风控

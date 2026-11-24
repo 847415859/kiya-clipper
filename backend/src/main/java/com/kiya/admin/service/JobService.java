@@ -506,6 +506,13 @@ public class JobService {
         if (Boolean.TRUE.equals(p.get("allowTaboo"))) {
             args.add("--allow-taboo");
         }
+        if (p.get("review") instanceof Map<?, ?> review) {
+            for (String check : List.of("subtitle_checked", "title_fulfilled", "materials_complete")) {
+                if (Boolean.TRUE.equals(review.get(check))) {
+                    args.addAll(List.of("--confirm-review", check));
+                }
+            }
+        }
         if (Boolean.TRUE.equals(p.get("again"))) {
             args.add("--again");
         }

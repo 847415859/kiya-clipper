@@ -409,7 +409,7 @@ python scripts/callbacks.py output/20261112-2000/candidates.json --rank 3       
 
 ## 发布包（封面、标题、简介、标签）
 
-成片编辑页右下“发布”卡片：封面（默认取精排找到的笑点那一帧，可以换成当前播放位置、改上面的大字）、标题（从精排的标题候选里选或自己写）、简介（`config` 的 `publish.desc_template`，自带“非官方切片”声明和主播链接）、标签（固定标签 + 类型 + 片段里出现的梗，最多 10 个），都有“复制”按钮。可以手动投稿（类型选“转载”，来源填直播间），也可以用卡片里的“一键发布到 B站”（见下一节）。
+成片编辑页右下“发布”卡片：封面（默认取精排找到的笑点那一帧，可以换成当前播放位置、改上面的大字）、标题（从精排的标题候选里选或自己写）、简介（`config` 的 `publish.desc_template`，自带“非官方切片”声明和主播链接）、标签（固定标签 + 类型 + 片段里出现的梗，最多 10 个），都有“复制”按钮。可以手动投稿，也可以用卡片里的“一键发布到 B站”（见下一节）。
 
 ```bash
 python scripts/publish_pack.py output/<场次>/candidates.json --rank 3                         # 生成
@@ -426,7 +426,7 @@ python scripts/publish_pack.py output/<场次>/candidates.json --rank 3 --cover-
 
 ## 一键发布到 B站（biliup）
 
-发布卡片的“一键发布到 B站”按钮 → 弹窗里选怎么发 → 后台任务“发布到B站”调用 `scripts/publish_bili.py`，用 biliup 命令行上传成片（`publish.bili.height`，默认 720p：不超过它的最高一份，没有就用最接近的更高一份）+ 封面 + 发布包里的标题 / 简介 / 标签（固定“转载”，来源 = 直播间链接，分区 `publish.bili.tid`）。
+发布卡片的“一键发布到 B站”按钮 → 弹窗里选怎么发 → 后台任务“发布到B站”调用 `scripts/publish_bili.py`，用 biliup 命令行上传成片、封面及发布包里的标题、简介和标签。画质由 `publish.bili.height` 控制，默认 720p。投稿类型由 `publish.bili.copyright` 控制，默认“自制”，配置“转载”时须有直播间来源。分区由 `publish.bili.tid` 控制。
 
 | 方式 | 做什么 |
 | --- | --- |

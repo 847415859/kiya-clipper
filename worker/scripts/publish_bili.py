@@ -38,6 +38,7 @@ sys.path.insert(0, str(ROOT))
 from clipper.publish_account import upload_cookie, read as read_credential
 from clipper.env import load_env
 from clipper.kcfg import load_cfg  # noqa: E402
+from clipper.publish import BILI_COPYRIGHT, bili_copyright
 from clipper.schedule import for_pack, append_description, check_rendered_schedule, parse_at  # noqa: E402
 from clipper.streamer import decisions_path, resolve_config, streamer_from_session_dir  # noqa: E402
 
@@ -45,6 +46,7 @@ ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")   # biliup 输出里的颜色控制�
 MIN_AHEAD = 4 * 3600 + 600          # B站要求定时发布晚于提交 4 小时以上，多留 10 分钟余量
 MAX_AHEAD = 15 * 24 * 3600 - 3600   # 上限约 15 天，少 1 小时留余量
 MODES = ("hold", "now", "timed", "private")
+REVIEW_CHECKS = {"subtitle_checked": "字幕", "title_fulfilled": "标题兑现", "materials_complete": "素材完整性"}
 DEFAULTS = {"hold_days": 14, "min_interval_sec": 600, "tid": 21, "line": "", "submit": "", "limit": 3, "retry": 0,
             "timeout_sec": 3600, "height": 720}
 
@@ -63,6 +65,10 @@ def read(p: Path, default=None):
 def bili_cfg(cfg: dict) -> dict:
     out = dict(DEFAULTS)
     out.update({k: v for k, v in ((cfg.get("publish") or {}).get("bili") or {}).items() if v is not None})
+    try:
+        out["copyright"] = bili_copyright(cfg)
+    except ValueError as e:
+        raise Refuse(str(e)) from e
     return out
 
 
@@ -80,7 +86,8 @@ def status(cfg: dict, streamer=None) -> dict:
     ck = cookie_path(bc, streamer)
     return {"biliup": biliup_bin() is not None, "logged_in": ck.is_file() and ck.stat().st_size > 2 and not read_credential(ck).get("disabled"),
             "cookie": str(ck), "hold_days": bc["hold_days"], "private": bool(bc.get("private_args")),
-            "tid": bc["tid"], "height": int(bc["height"]), "min_interval_sec": bc["min_interval_sec"]}
+            "tid": bc["tid"], "height": int(bc["height"]), "min_interval_sec": bc["min_interval_sec"],
+            "copyright": bc["copyright"]}
 
 
 def find_video(sess: Path, rank: int, height: int = 720) -> Path:
@@ -122,9 +129,11 @@ def resolve_dtime(mode: str, at: str | None, hold_days: float, now: float | None
 
 def build_cmd(bin_: str, cookie: Path, video: Path, pack: dict, cover: Path | None, bc: dict, dtime: int | None,
               extra: list[str]) -> list[str]:
-    cmd = [bin_, "-u", str(cookie), "upload", str(video), "--copyright", "2", "--source", pack.get("source") or "",
+    cmd = [bin_, "-u", str(cookie), "upload", str(video), "--copyright", str(BILI_COPYRIGHT[bc["copyright"]]),
            "--tid", str(bc["tid"]), "--title", pack["title"], "--desc", pack.get("description") or "",
            "--tag", ",".join(pack.get("tags") or [])]
+    if bc["copyright"] == "转载":
+        cmd += ["--source", (pack.get("source") or "").strip()]
     if bc.get("limit"):
         cmd += ["--limit", str(bc["limit"])]
     if bc.get("retry"):                                   # 有的 biliup 版本没有 --retry，默认不传（配置里填了才传）
@@ -225,7 +234,7 @@ def save_result(path: Path, result: dict) -> None:
     tmp.replace(path)
 
 
-def preflight(pack: dict, video: Path, cover: Path, schedule: dict, description: str) -> dict:
+def preflight(pack: dict, video: Path, cover: Path, schedule: dict, description: str, confirmed=()) -> dict:
     """集中检查发布输入；pending 不能被当成通过。"""
     checks: dict[str, dict] = {}
     errors: list[str] = []
@@ -249,13 +258,14 @@ def preflight(pack: dict, video: Path, cover: Path, schedule: dict, description:
     check("description", "pass" if description.strip() else "error",
           "简介已生成" if description.strip() else "简介为空", chars=len(description))
 
-    for key, label in (("subtitle_checked", "字幕"), ("title_fulfilled", "标题兑现"),
-                       ("materials_complete", "素材完整性")):
+    for key, label in REVIEW_CHECKS.items():
         value = pack.get(key)
-        if value is True:
-            check(key, "pass", f"{label}已确认")
-        elif value is False:
+        if value is False:
             check(key, "error", f"{label}检查未通过")
+        elif key in confirmed:
+            check(key, "pass", f"{label}已确认", source="manual_submission")
+        elif value is True:
+            check(key, "pass", f"{label}已确认")
         else:
             check(key, "pending", f"{label}尚未确认")
 
@@ -333,7 +343,7 @@ def run(args: argparse.Namespace) -> dict:
         raise Refuse("还没有发布包：先打开编辑页的“发布”卡片生成标题 / 简介 / 标签")
     if not (pack.get("title") or "").strip():
         raise Refuse("标题是空的")
-    if not pack.get("source"):
+    if bc["copyright"] == "转载" and not (pack.get("source") or "").strip():
         raise Refuse("来源（直播间链接）是空的：转载类型必须填来源，请检查主播配置的 live_url")
     if pack.get("taboo_hits") and not args.allow_taboo:
         raise Refuse(f"标题 / 简介 / 说话内容命中禁区词：{'、'.join(pack['taboo_hits'])}。确认没问题再勾“仍然发布”")
@@ -387,7 +397,8 @@ def run(args: argparse.Namespace) -> dict:
         pack = dict(pack, description=final_description)
     except (ValueError, OSError, TypeError) as e:
         raise Refuse(str(e)) from e
-    preflight_result = preflight(pack, video, cover, schedule, final_description)
+    preflight_result = preflight(pack, video, cover, schedule, final_description,
+                                 getattr(args, "confirm_review", ()))
     if not preflight_result["ok"] and not args.dry_run:
         failed = preflight_result["errors"] + preflight_result["warnings"]
         raise Refuse("发布前检查未通过：" + "；".join(failed))
@@ -398,7 +409,8 @@ def run(args: argparse.Namespace) -> dict:
                  "timed": f"定时 {parse_at(dtime):%m-%d %H:%M}" if dtime else "",
                  "private": "仅自己可见"}[args.mode]
     base = {"session": sess.name, "rank": args.rank, "mode": args.mode, "mode_text": mode_text, "dtime": dtime,
-            "video": video.name, "title": pack["title"], "at": now, "at_text": parse_at(now).strftime("%m-%d %H:%M"),
+            "video": video.name, "title": pack["title"], "copyright": bc["copyright"],
+            "at": now, "at_text": parse_at(now).strftime("%m-%d %H:%M"),
             "upload_status": "not_started", "submission_status": "not_submitted", "binding_status": "not_bound"}
     base.update(final_video=str(video), final_description=final_description,
                 preflight=preflight_result)
@@ -461,6 +473,8 @@ def main() -> int:
     ap.add_argument("--at", help="定时发布时间 2026-11-20T20:00（北京时间）")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--allow-taboo", action="store_true")
+    ap.add_argument("--confirm-review", action="append", choices=REVIEW_CHECKS, default=[],
+                    help="人工已核对的本次投稿检查项，可重复提供")
     ap.add_argument("--again", action="store_true", help="已经投过也再投一次")
     ap.add_argument("--confirm-no-existing", action="store_true", help="已在平台核查没有已有投稿，允许重试上传")
     ap.add_argument("--bind-bvid", help="仅补记已投稿稿件的 BV 号，不上传；请先在创作中心核对")
@@ -476,7 +490,12 @@ def main() -> int:
 
     if args.status:
         cfg = load_cfg(resolve_config(args.config, Path(args.candidates).parent if args.candidates else None))
-        print(json.dumps(status(cfg, streamer_from_session_dir(Path(args.candidates).parent) if args.candidates else None), ensure_ascii=False))
+        try:
+            info = status(cfg, streamer_from_session_dir(Path(args.candidates).parent) if args.candidates else None)
+        except Refuse as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        print(json.dumps(info, ensure_ascii=False))
         return 0
     if not args.candidates or not args.rank:
         ap.error("需要 candidates.json 和 --rank")

@@ -106,12 +106,58 @@ def test_hold_uploads_with_timer_and_records_result(tmp_path):
     assert res["dtime"] > time.time() + 13 * 86400
     line = (tmp_path / "log.txt").read_text(encoding="utf-8").splitlines()
     cmd = next(x for x in line if " upload " in x and "--help" not in x)
-    assert "--copyright 2" in cmd and "--source https://live.bilibili.com/1724773744" in cmd and "--dtime" in cmd
+    assert "--copyright 1" in cmd and "--source" not in cmd and "--dtime" in cmd
+    assert res["copyright"] == "自制"
     assert "--retry" not in cmd and "--limit 3" in cmd
     assert "--tag 虚拟主播,金油" in cmd and "720p.mp4" in cmd and "01_cover.jpg" in cmd and "--submit web" in cmd
     dec = json.loads((tmp_path / "none.json").read_text(encoding="utf-8"))          # BV 号自动绑定到精排记忆
     assert res["bound"] is True and dec["published"] == {"BV1ab411c7de": {"session": "20261109-2014", "rank": 1}}
     assert json.loads((sess / "publish" / "01.bili.json").read_text(encoding="utf-8"))["status"] == "ok"
+
+
+def test_legacy_pack_uses_current_copyright_and_requires_source_only_for_repost(tmp_path):
+    sess, cfg, env = setup_case(tmp_path)
+    pack_path = sess / "publish" / "01.json"
+    pack = json.loads(pack_path.read_text(encoding="utf-8"))
+    source = pack.pop("source")
+    pack.update(copyright="转载")
+    pack_path.write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
+
+    r = run(sess, cfg, env, "--dry-run")
+    assert r.returncode == 0, r.stderr
+    res = last(r)
+    assert res["copyright"] == "自制" and "--source" not in res["command"]
+
+    cfg.write_text(cfg.read_text(encoding="utf-8") + "    copyright: 转载\n", encoding="utf-8")
+    r = run(sess, cfg, env, "--dry-run")
+    assert r.returncode == 2 and "转载类型必须填来源" in r.stderr
+
+    pack["source"] = source
+    pack_path.write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
+    r = run(sess, cfg, env, "--dry-run")
+    assert r.returncode == 0, r.stderr
+    res = last(r)
+    cmd = res["command"]
+    assert res["copyright"] == "转载"
+    assert cmd[cmd.index("--copyright") + 1] == "2"
+    assert cmd[cmd.index("--source") + 1] == source
+
+
+def test_pack_and_publish_status_use_same_copyright_setting(tmp_path):
+    sess, cfg, env = setup_case(tmp_path)
+    candidates = sess / "candidates.json"
+    candidates.write_text(json.dumps({"candidates": [{"rank": 1, "t": 60, "clip_start": 30,
+                                                     "clip_end": 90}], "segments": []}), encoding="utf-8")
+    for setting in ("自制", "转载"):
+        if setting == "转载":
+            cfg.write_text(cfg.read_text(encoding="utf-8") + "    copyright: 转载\n", encoding="utf-8")
+        pack = subprocess.run([sys.executable, str(ROOT / "scripts" / "publish_pack.py"), str(candidates),
+                               "--rank", "1", "--no-cover", "--config", str(cfg)],
+                              capture_output=True, text=True, env=env)
+        status = run(sess, cfg, env, "--status")
+        assert pack.returncode == 0, pack.stderr
+        assert status.returncode == 0, status.stderr
+        assert last(pack)["copyright"] == last(status)["copyright"] == setting
 
 
 def test_now_has_no_timer(tmp_path):
@@ -162,6 +208,30 @@ def test_dry_run_shows_final_video_description_and_preflight(tmp_path):
     assert r.returncode == 0
     assert "最终视频：" in r.stdout and "最终简介：" in r.stdout and "发布前检查：" in r.stdout
     assert "抹精油手滑" in r.stdout
+
+
+def test_confirm_review_applies_to_one_attempt_and_does_not_override_failed_check(tmp_path):
+    sess, cfg, env = setup_case(tmp_path)
+    pack_path = sess / "publish" / "01.json"
+    pack = json.loads(pack_path.read_text(encoding="utf-8"))
+    for key in pb.REVIEW_CHECKS:
+        pack.pop(key)
+    pack_path.write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
+    flags = [item for key in pb.REVIEW_CHECKS for item in ("--confirm-review", key)]
+
+    r = run(sess, cfg, env, "--dry-run")
+    assert not last(r)["preflight"]["ok"]
+    r = run(sess, cfg, env, "--dry-run", *flags)
+    report = last(r)["preflight"]
+    assert report["ok"]
+    assert all(report["checks"][key]["source"] == "manual_submission" for key in pb.REVIEW_CHECKS)
+    assert all(key not in json.loads(pack_path.read_text(encoding="utf-8")) for key in pb.REVIEW_CHECKS)
+
+    pack["subtitle_checked"] = False
+    pack_path.write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
+    r = run(sess, cfg, env, "--mode", "now", *flags)
+    assert r.returncode == 2 and "字幕检查未通过" in r.stderr
+    assert not (tmp_path / "log.txt").exists()
 
 
 def test_unknown_flag_stops_before_upload(tmp_path):

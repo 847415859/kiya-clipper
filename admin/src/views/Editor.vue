@@ -360,7 +360,7 @@
 
         <el-card shadow="never" class="card" v-loading="packLoading">
           <template #header>
-            <b>发布</b> <span class="muted">（投稿时复制粘贴；类型选“转载”，来源填直播间）</span>
+            <b>发布</b>
             <el-button style="float: right" link size="small" @click="regenPack">按精排重新生成文字</el-button>
           </template>
           <div class="cover-compare">
@@ -488,7 +488,10 @@
       <el-descriptions :column="1" size="small" border>
         <el-descriptions-item label="标题">{{ pack.title }}</el-descriptions-item>
         <el-descriptions-item label="标签">{{ (pack.tags || []).join('、') }}</el-descriptions-item>
-        <el-descriptions-item label="类型">转载，来源 {{ pack.source }}</el-descriptions-item>
+        <el-descriptions-item label="类型">
+          {{ bili.env?.copyright || '待确认' }}
+          <span v-if="bili.env?.copyright === '转载'">，来源 {{ pack.source || '未填写' }}</span>
+        </el-descriptions-item>
         <el-descriptions-item label="视频">渲染好的成片里 {{ bili.env?.height || 720 }}p 的那份（没有就用最接近的；一份都没有请先渲染）</el-descriptions-item>
       </el-descriptions>
       <el-alert v-if="(pack.taboo_hits || []).length" type="error" :closable="false" show-icon style="margin-top: 10px"
@@ -508,6 +511,12 @@
       <el-alert v-if="pack.include_schedule !== false" type="info" :closable="false" style="margin-top:10px"
         title="日程按这次选择的公开时间重新核对。若与成片片尾不同，会在上传前提示重新渲染。“先放着”按未来定时日期计算；在创作中心再次改期前，也请重新核对片尾。" />
       <pre v-if="biliScheduleText" class="cover-prompt">{{ biliScheduleText }}</pre>
+      <div style="margin-top: 12px">
+        <b>发布前确认</b>
+        <div v-for="item in biliReviewChecks" :key="item.key">
+          <el-checkbox v-model="bili.review[item.key]" :disabled="bili.running">{{ item.label }}</el-checkbox>
+        </div>
+      </div>
       <div v-if="(pack.taboo_hits || []).length" style="margin-top: 8px">
         <el-checkbox v-model="bili.allowTaboo">我已看过命中的禁区词，仍然发布</el-checkbox>
       </div>
@@ -520,7 +529,7 @@
       <template #footer>
         <el-button @click="bili.show = false">关闭</el-button>
         <el-button :loading="bili.running" @click="submitBili(true)">先预演（不上传）</el-button>
-        <el-button type="success" :loading="bili.running" :disabled="!bili.env?.biliup || !bili.env?.logged_in" @click="submitBili(false)">发布</el-button>
+        <el-button type="success" :loading="bili.running" :disabled="!bili.env?.biliup || !bili.env?.logged_in || !biliReviewComplete" @click="submitBili(false)">发布</el-button>
       </template>
     </el-dialog>
 
@@ -654,8 +663,14 @@ const rendering = ref(false)
 const renderJob = ref(null)
 const drafting = ref(false)
 const pub = reactive({ bvid: '', completion: '', followers: '', saved: '' })
+const biliReviewChecks = [
+  { key: 'subtitle_checked', label: '已回看成片，字幕内容和时间正确' },
+  { key: 'title_fulfilled', label: '标题和封面描述的内容在成片中有体现' },
+  { key: 'materials_complete', label: '已确认关键画面和原声完整' },
+]
 const bili = reactive({ show: false, env: null, last: null, mode: 'hold', at: '', allowTaboo: false, again: false,
-  running: false, result: '', resultOk: false, log: '' })
+  review: {}, running: false, result: '', resultOk: false, log: '' })
+const biliReviewComplete = computed(() => biliReviewChecks.every(({ key }) => bili.review[key] === true))
 const pack = ref({})
 const titleUndo = ref('')
 const titleOptions = computed(() => {
@@ -1599,7 +1614,7 @@ async function unpublish() {
 async function openBili() {
   if (covering.value) return ElMessage.info('请等待封面生成完成')
   await savePack(false)
-  Object.assign(bili, { show: true, mode: pack.value.schedule_publish_at ? 'timed' : 'hold', at: pack.value.schedule_publish_at || '', allowTaboo: false, again: false, result: '', resultOk: false, log: '' })
+  Object.assign(bili, { show: true, env: null, mode: pack.value.schedule_publish_at ? 'timed' : 'hold', at: pack.value.schedule_publish_at || '', allowTaboo: false, again: false, review: {}, result: '', resultOk: false, log: '' })
   try {
     const d = await api.biliInfo(name.value, rank.value)
     bili.env = d.env
@@ -1610,6 +1625,7 @@ async function openBili() {
 }
 
 async function submitBili(dryRun) {
+  if (!dryRun && !biliReviewComplete.value) return ElMessage.warning('请先完成发布前确认')
   if (bili.mode === 'timed' && !bili.at) {
     ElMessage.warning('请选择定时发布的时间')
     return
@@ -1623,13 +1639,21 @@ async function submitBili(dryRun) {
   bili.log = ''
   try {
     const j = await api.submitJob('PUBLISH_BILI', name.value, { rank: rank.value, mode: bili.mode, at: bili.at, dryRun,
-      allowTaboo: bili.allowTaboo, again: bili.again })
+      allowTaboo: bili.allowTaboo, again: bili.again, review: { ...bili.review } })
     const s = await waitJob(j.id, 2000)
     const lg = await api.jobLog(j.id, 0).catch(() => ({ text: '' }))
     const lines = (lg.text || '').trim().split('\n')
     if (s.status === 'SUCCESS') {
       bili.resultOk = true
       bili.result = dryRun ? '预演完成（没有上传），下面是会执行的命令' : '已提交到 B站，BV 号会自动绑定到精排记忆；请到创作中心确认状态'
+      if (dryRun) {
+        let preflight
+        try { preflight = JSON.parse(lines.at(-1)).preflight } catch { /* 任务日志可能还未同步 */ }
+        if (preflight?.ok === false) {
+          bili.resultOk = false
+          bili.result = '预演未通过：' + [...(preflight.errors || []), ...(preflight.warnings || [])].join('；')
+        }
+      }
       bili.log = dryRun ? lines.slice(-3).join('\n') : ''
       if (!dryRun) {
         const d = await api.biliInfo(name.value, rank.value)

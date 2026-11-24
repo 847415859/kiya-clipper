@@ -20,6 +20,14 @@ DEFAULT_DESC = ("{what_happened}\n\n"
                 "出自 {date} 的直播（约 {time}）\n\n"
                 "非官方切片，仅为推广主播；如有不妥请联系删除。")
 DEFAULT_TAGS = ["虚拟主播", "直播切片", "VTuber"]
+BILI_COPYRIGHT = {"自制": 1, "转载": 2}
+
+
+def bili_copyright(cfg: dict) -> str:
+    value = ((cfg.get("publish") or {}).get("bili") or {}).get("copyright", "自制")
+    if value not in ("自制", "转载"):
+        raise ValueError("publish.bili.copyright 必须为“自制”或“转载”")
+    return value
 
 
 def clean_title(t: str) -> str:

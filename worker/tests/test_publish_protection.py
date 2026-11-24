@@ -18,9 +18,8 @@ def test_actual_publish_entry_refuses_missing_before_any_upload(tmp_path, monkey
     media=tmp_path/'fixture.mp4'
     media.write_bytes(b'not uploaded')
     media.with_suffix('.evidence.json').write_text(json.dumps({'status':'missing','media_size':media.stat().st_size,'media_mtime_ns':media.stat().st_mtime_ns}),encoding='utf-8')
-    monkeypatch.setattr(publish,'load_cfg',lambda *_:{})
+    monkeypatch.setattr(publish,'load_cfg',lambda *_:{'publish': {'bili': {'height': 480}}})
     monkeypatch.setattr(publish,'resolve_config',lambda *_:None)
-    monkeypatch.setattr(publish,'bili_cfg',lambda *_:{'height':480})
     monkeypatch.setattr(publish,'find_video',lambda *_:media)
     def no_upload(*a,**k):
         pytest.fail('Confirmed evidence loss must stop before upload')
