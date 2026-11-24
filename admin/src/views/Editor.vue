@@ -185,7 +185,7 @@
                       :cover-url="pack.cover ? api.coverUrl(name, rank, pack.cover_version) : ''"
                       :final-file="latestFinal"
                       @caption="addContextCaption" @seek="seek" @preview="openViewerPreview" />
-        <el-card shadow="never"><template #header><b>本次修改原因（可选）</b></template><el-select :model-value="edit.review_feedback?.reasons || []" multiple clearable placeholder="选择修改原因" @update:model-value="v => edit.review_feedback = {...(edit.review_feedback || {}), reasons: v}"><el-option v-for="(label, key) in {context:'前情太长或不足', response:'有效回应被截断', mixed_event:'误串互动', subtitle_reading:'字幕读不完', occlusion:'画面被遮挡', speaker_tone:'语气或人物归属误读', rhythm:'主观节奏取舍'}" :key="key" :label="label" :value="key" /></el-select><el-input :model-value="edit.review_feedback?.note || ''" maxlength="1000" placeholder="补充原话、时间或取舍理由" @update:model-value="v => edit.review_feedback = {...(edit.review_feedback || {}), note: v}" /></el-card>
+        <el-card shadow="never"><template #header><b>本次修改原因（可选）</b></template><el-select :model-value="edit.review_feedback?.reasons || []" multiple clearable placeholder="选择修改原因" @update:model-value="v => edit.review_feedback = {...(edit.review_feedback || {}), reasons: v}"><el-option v-for="(label, key) in {context:'前情太长或不足', response:'有效回应被截断', mixed_event:'误串互动', subtitle_reading:'字幕读不完', occlusion:'画面被遮挡', early_reveal:'提前揭晓', voice_masking:'背景音乐盖住原声', speaker_tone:'语气或人物归属误读', rhythm:'主观节奏取舍'}" :key="key" :label="label" :value="key" /></el-select><el-input :model-value="edit.review_feedback?.note || ''" maxlength="1000" placeholder="补充原话、时间或取舍理由" @update:model-value="v => edit.review_feedback = {...(edit.review_feedback || {}), note: v}" /></el-card>
         <PendingAiDrafts :session="name" :rank="Number(rank)" :revision="revision" :dirty="dirty" :edit="edit" :candidate-start="info.sourceCandidateStart" @adopted="load" />
         <el-alert v-if="previewPlan?.evidence_coverage?.status === 'missing'" type="error" :closable="false" title="当前编辑缺失必保证据，请核对原片区间后重新渲染。" />
         <details v-if="previewPlan?.evidence_coverage?.checks?.length"><summary>必保证据覆盖</summary><p v-for="row in previewPlan.evidence_coverage.checks" :key="row.evidence.id">{{ row.evidence.id }} · 原片 {{ row.evidence.start }}–{{ row.evidence.end }} 秒 · {{ row.status === 'missing' ? '缺失：' + JSON.stringify(row.missing_source_ranges) : '时间覆盖，内容待回看' }}</p></details>
@@ -1244,7 +1244,7 @@ async function renderPartial() {
   await render(480, {previewStart: round(start), previewEnd: round(Math.min(duration, start + 10))})
 }
 function apply(e) {
-  for (const key of ['required_evidence', 'required_reaction', 'adopted_ai_draft', 'boundary_trace', 'review_feedback']) {
+  for (const key of ['required_evidence', 'required_reaction', 'adopted_ai_draft', 'boundary_trace', 'narrative_plan', 'review_feedback']) {
     if (e[key] !== undefined) edit[key] = clone(e[key]); else delete edit[key]
   }
   Object.assign(edit.window, e.window || { start: info.sourceCandidateStart, end: info.sourceCandidateEnd })
@@ -1326,7 +1326,7 @@ function stateFromEdit(source, style, restored = false) {
   if (source.subtitles.sentence_overrides?.length) body.subtitles.sentence_overrides = clone(source.subtitles.sentence_overrides)
   if (source.music?.track) body.music = clone(source.music)
   if (source.callback) body.callback = clone(source.callback)
-  for (const key of ['required_evidence', 'required_reaction', 'adopted_ai_draft', 'boundary_trace', 'review_feedback']) {
+  for (const key of ['required_evidence', 'required_reaction', 'adopted_ai_draft', 'boundary_trace', 'narrative_plan', 'review_feedback']) {
     if (source[key] !== undefined) body[key] = clone(source[key])
   }
   if (source.generated_by) Object.assign(body, { generated_by: source.generated_by, note: source.note || '' })

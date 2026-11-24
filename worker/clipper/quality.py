@@ -349,13 +349,25 @@ def quality_report(session_dir: Path, rank: int, final: Path | None = None,
         report.check("required_evidence", receipt["status"] if bound else "stale", receipt=receipt, bound_to_media=bound)
         if not bound:
             report.issue("evidence_receipt_stale", "error", "必保证据报告与当前成片不匹配，请重新渲染核验")
+        if bound and "arrangement" in receipt:
+            arrangement = receipt["arrangement"]
+            findings = arrangement.get("findings", [])
+            report.check("arrangement", "review_hint" if findings else "no_plan_flags", **arrangement)
+            for code, message in (
+                ("early_reveal", "标记为揭晓的效果可能早于原片变化"),
+                ("subtitle_overlay_review", "叠层与字幕时段和位置接近，请回看实际画面"),
+                ("caption_reading_review", "手机预览下可能没有足够字幕阅读时间"),
+            ):
+                hits = [finding for finding in findings if finding["code"] == code]
+                if hits:
+                    report.issue(code, "warning", message, count=len(hits), examples=hits[:8])
         for row in receipt.get("checks", []):
             if row["status"] == "missing":
                 report.issue("required_evidence_missing", "error", "成片缺失必保证据", **row)
             modality = row["evidence"].get("modality", "unknown")
-            if modality in {"audio", "audio_visual", "both"} and media_info and not media_info["audio"]:
+            if modality in {"audio", "audio_visual", "both", "原声", "音画", "音频"} and media_info and not media_info["audio"]:
                 report.issue("required_audio_missing", "error", "必保原声对应成片缺少音轨", **row)
-            if modality in {"visual", "audio_visual", "both"}:
+            if modality in {"visual", "audio_visual", "both", "画面", "音画", "字幕"}:
                 report.issue("required_visual_review", "warning", "画面必保时间已映射，坐标或跟踪不足，需回看裁剪、叠加和原字幕阅读时间", **row)
     else:
         report.check("required_evidence", "not_evaluable", reason="缺少绑定当前成片的必保证据记录")

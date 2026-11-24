@@ -28,6 +28,7 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 
 from .env import REPO, load_env
+from .operations import reserve_external_cost
 
 DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEFAULT_CACHE = REPO / "worker" / "output" / "_llm_cache"
@@ -155,6 +156,7 @@ class LLMClient:
         for i in range(self.max_retries):
             req = urllib.request.Request(self.base_url + "/chat/completions", data=body, method="POST", headers={
                 "Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"})
+            reserve_external_cost("LLM")
             usage = {}
             with self._lock:
                 self.request_attempts += 1

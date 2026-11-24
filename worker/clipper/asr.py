@@ -166,6 +166,12 @@ def estimate_cost(model: str, seconds: float) -> float | None:
 def transcribe_files(audio_files: list[Path], offsets: list[float], model: str, key: str, bucket: str,
                      asr_cfg: dict | None = None, keep_remote: bool = False, log=print) -> tuple[list[dict], list[bool]]:
     """上传 → 识别 → 拼接，返回 (整场句子列表, 每个文件是否成功)。"""
+    from .operations import reserve_external_cost
+
+    try:
+        reserve_external_cost("ASR")
+    except RuntimeError as exc:
+        raise AsrError(str(exc)) from exc
     keys = [f"asr-tmp/{uuid.uuid4().hex}.mp3" for _ in audio_files]
     try:
         urls = []

@@ -283,6 +283,10 @@ def main() -> int:
             print(f"呼应检索出错，跳过：{type(e).__name__}: {e}", file=sys.stderr)
             cb_plan = None
 
+    from clipper.arrangement import narrative_handoff
+
+    narrative_plan = narrative_handoff(llm, ca)
+
     def make(key: str):
         """某个档位的一版初稿：(edit, bad, dropped, meme_notes)，大模型失败返回 None。"""
         v = resolve(key, int(ac["max_items"]), int(ms["max_per_clip"]))
@@ -305,6 +309,14 @@ def main() -> int:
                        "时间是观察线索，证据缺口或声尾无法核对时在 note 中记录。")
             if missing_video_ids:
                 text += "\n以下必保证据超出当前素材，标为待核对：" + "、".join(missing_video_ids)
+        draft_plan = {**narrative_plan, "beats": [dict(beat) for beat in narrative_plan["beats"]]}
+        for beat in draft_plan["beats"]:
+            if "source_time" in beat:
+                beat["material_time"] = round(beat.pop("source_time") - a, 3)
+        text += "\n【叙事计划参考，相对当前素材起点】" + json.dumps(draft_plan, ensure_ascii=False)
+        text += ("\n先确定本条的一个叙事重点，按起因、变化、有效回应排序。原话或关键动作先呈现，"
+                 "之后再解释。会揭晓结果的花字、旁白和贴图在 items 标 purpose: reveal。"
+                 "保留出糗后承接语气的停顿和轻声找补。可删段只在 note 建议，写明素材区间、两侧接缝和潜在损失。")
         print(f"#{args.rank} 生成剪辑脚本初稿{'（' + v['label'] + '版）' if multi or key != DEFAULT else ''}（{client.model}，{version}）…")
         r = client.chat_json([{"role": "system", "content": system}, {"role": "user", "content": text}], EditOut, tag=version)
         if r.data is None:
@@ -338,6 +350,7 @@ def main() -> int:
             items = ensure_caption(items, caption, trim)
         edit = {"version": 1, "window": window, "trim": trim, "subtitles": {"enabled": True}, "items": items,
                 "boundary_trace": {"refined": refined, "chosen": dict(trim)},
+                "narrative_plan": narrative_plan,
                 "generated_by": f"{version} / {client.model}" + (f" / {v['label']}" if multi or key != DEFAULT else ""), "note": out.note[:200]}
         if reaction is not None:
             edit["required_reaction"] = reaction

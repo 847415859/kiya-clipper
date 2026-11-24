@@ -56,6 +56,42 @@ def cfg(env: dict, key: str, default: str = "") -> str:
     return v if v != "" else default
 
 
+def operations_root(env: dict) -> Path:
+    return Path(cfg(env, "KIYA_OPS_DIR", str(REPO / "worker" / "output" / "_operations")))
+
+
+def enqueue_operations(env: dict, rec_dir: Path, room: str, since: float, ended: float,
+                       previous_end: float = 0) -> None:
+    streamer = cfg(env, "KIYA_STREAMER", "kiya")
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", streamer) or not str(room).isdigit():
+        raise ValueError("自动运营需要有效的主播和房间号")
+    queue = operations_root(env) / "queue"
+    queue.mkdir(parents=True, exist_ok=True)
+    job = queue / f"{streamer}-{int(since * 1000)}.json"
+    if job.exists():
+        return
+    tmp = job.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps({"streamer": streamer, "room": str(room), "since": since,
+                               "earliest": max(since - 300, previous_end),
+                               "ended": ended, "rec_dir": str(rec_dir.resolve())},
+                              ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, job)
+
+
+def launch_operations(env: dict) -> None:
+    root = operations_root(env)
+    if not any((root / "queue").glob("*.json")):
+        return
+    worker = REPO / "worker"
+    settings = {k: v for k, v in env.items() if k.startswith("KIYA_")}
+    settings["KIYA_OPS_LEDGER"] = str(root / "daily.sqlite3")
+    with (root / "worker.log").open("a", encoding="utf-8") as log:
+        subprocess.Popen([str(worker / ".venv" / "bin" / "python"),
+                          str(worker / "scripts" / "ops_prepare.py"), str(root)],
+                         env={**os.environ, **settings}, cwd=worker, stdin=subprocess.DEVNULL,
+                         stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+
+
 def streamer_cfg_from_yaml(streamer_id: str) -> dict:
     """从 config/streamers/<id>.yaml（回退 config/<id>.yaml）读主播的 name / room_id / uid。
 
@@ -418,6 +454,7 @@ def run_cut(env: dict) -> str | None:
 # ---------------------------------------------------------------- 主流程
 def check(env: dict, dry: bool = False) -> int:
     now = time.time()
+    managed = cfg(env, "KIYA_OPS_PREPARE", "0") == "1"
     rec_dir = Path(cfg(env, "REC_DIR", "/data/rec"))
     st = State(Path(cfg(env, "KIYA_STATE_FILE", "/var/lib/kiya-monitor/state.json")))
     sc = streamer_cfg_from_yaml(cfg(env, "KIYA_STREAMER", "kiya"))
@@ -465,7 +502,12 @@ def check(env: dict, dry: bool = False) -> int:
             st.data["alerts"].pop("live_screen", None)
             for k in ("not_recording", "danmaku_stale"):
                 st.data["alerts"].pop(k, None)
-            if cfg(env, "KIYA_AUTO_ANALYZE", "1") == "1":
+            if managed:
+                if not dry:
+                    enqueue_operations(env, rec_dir, room, since, now, st.data.get("previous_live_end", 0))
+                    st.data["previous_live_end"] = now
+                    st.save()
+            elif cfg(env, "KIYA_AUTO_ANALYZE", "1") == "1":
                 st.save()  # 分析可能较慢，先存状态，避免下一轮重复触发
                 notify(env, f"📈 {name} 弹幕分析", run_analysis(env, rec_dir), dry)
                 if not dry:
@@ -538,7 +580,13 @@ def check(env: dict, dry: bool = False) -> int:
               "OSS 同步已恢复", now, dry)
 
     st.data["last_check"] = datetime.now().strftime("%F %T")
-    st.save()
+    if not (managed and dry):
+        st.save()
+    if managed and not dry:
+        try:
+            launch_operations(env)
+        except OSError as e:
+            print(f"自动运营队列待续跑：{e}", file=sys.stderr)
     return 0
 
 

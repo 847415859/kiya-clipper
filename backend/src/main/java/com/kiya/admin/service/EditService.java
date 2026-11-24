@@ -426,6 +426,7 @@ public class EditService {
                 feedback.put("feedback", norm.get("review_feedback"));
                 feedback.put("adopted_ai_draft", norm.get("adopted_ai_draft"));
                 feedback.put("boundary_trace", norm.get("boundary_trace"));
+                feedback.put("narrative_plan", norm.get("narrative_plan"));
                 feedback.put("generated_by", norm.get("generated_by"));
                 feedback.put("window", norm.get("window"));
                 feedback.put("trim", norm.get("trim"));

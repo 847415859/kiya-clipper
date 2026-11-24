@@ -96,7 +96,7 @@ export const Clip = (props) => {
             : <Sticker item={it} seed={i + 1} src={url(assetBase, 'stickers/' + it.asset)} />}
         </Sequence>
       ))}
-      {music && <Bgm music={music} events={subtitles.enabled !== false ? subtitles.events : []} duration={mainDuration} assetBase={assetBase} />}
+      {music && <Bgm music={music} events={props.speechEvents ?? (subtitles.enabled !== false ? subtitles.events : [])} duration={mainDuration} assetBase={assetBase} />}
       </Sequence>
       {props.schedule?.enabled && <Sequence from={cbFrames + Math.round(mainDuration * fps)} durationInFrames={Math.round(props.schedule.duration * fps)}>
         <ScheduleEndCard schedule={props.schedule} assetBase={assetBase} />

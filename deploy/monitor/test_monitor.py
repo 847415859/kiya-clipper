@@ -183,6 +183,39 @@ def test_run_cut(tmp_path, monkeypatch):
     assert km.run_cut({}) is None
 
 
+def test_managed_down_event_enqueues_once(tmp_path, monkeypatch):
+    import kiya_monitor as km
+
+    root = tmp_path / "operations"
+    state_path = tmp_path / "state.json"
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    now = time.time()
+    state_path.write_text(json.dumps({"live": True, "live_since": now - 600,
+                                      "previous_live_end": now - 700}), encoding="utf-8")
+    settings = {"KIYA_OPS_PREPARE": "1", "KIYA_OPS_DIR": str(root), "KIYA_ROOM_ID": "123",
+                "KIYA_STATE_FILE": str(state_path), "REC_DIR": str(rec), "KIYA_MEME_REFRESH": "0"}
+    monkeypatch.setattr(km, "service_active", lambda *_: True)
+    monkeypatch.setattr(km, "live_status", lambda *_: (0, ""))
+    monkeypatch.setattr(km, "notify", lambda *_: None)
+    monkeypatch.setattr(km, "launch_operations", lambda *_: None)
+
+    def unexpected_analysis(*_):
+        pytest.fail("自动制作模式走到了旧的粗筛分支")
+
+    monkeypatch.setattr(km, "run_analysis", unexpected_analysis)
+    assert km.check(settings, dry=True) == 0
+    assert not (root / "queue").exists()
+    assert km.check(settings) == 0
+    assert km.check(settings) == 0
+    jobs = list((root / "queue").glob("*.json"))
+    assert len(jobs) == 1
+    job = json.loads(jobs[0].read_text(encoding="utf-8"))
+    assert job["room"] == "123"
+    assert job["since"] == now - 600
+    assert job["earliest"] == now - 700
+
+
 def test_run_live_screen(tmp_path, monkeypatch):
     """边播边筛：调用 screen.py --live，把结果整理成 (状态, 说明)。"""
     sys.path.insert(0, str(HERE))

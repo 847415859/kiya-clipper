@@ -340,7 +340,11 @@ def main() -> int:
     # Quantize each sequence independently so the outro starts on the exact next frame.
     main_frames, cb_frames = round(dur * FPS), round(cb_len * FPS)
     tail_frames = round(schedule["duration"] * FPS)
-    props = {"width": width, "height": height, "fps": FPS, "duration": (main_frames + cb_frames + tail_frames) / FPS,
+    from clipper.arrangement import inspect_plan, speech_events
+
+    speech = speech_events(edit, tr["sentences"] if tr else [], kept) if bgm and bgm["duck"] else []
+    findings = inspect_plan(edit, items, subs, kept, FPS)
+    props = {"speechEvents": speech, "width": width, "height": height, "fps": FPS, "duration": (main_frames + cb_frames + tail_frames) / FPS,
              "mainDuration": main_frames / FPS, "video": "source.mp4", "schedule": schedule,
              "subtitles": subs, "items": items, "fonts": fonts, "music": bgm, "callback": callback}
     (job / "props.json").write_text(json.dumps(props, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -391,8 +395,10 @@ def main() -> int:
             a = span["output_start"] + cb_frames / FPS
             b = span["output_end"] + cb_frames / FPS
             if min(b, preview_end) > max(a, preview_start):
-                visible.append(dict(span, output_start=max(a, preview_start)-preview_start,
-                                    output_end=min(b, preview_end)-preview_start))
+                left, right = max(a, preview_start), min(b, preview_end)
+                visible.append(dict(span, source_start=span["source_start"] + left - a,
+                                    source_end=span["source_end"] - (b - right),
+                                    output_start=left - preview_start, output_end=right - preview_start))
         row["output_ranges"] = visible
         if partial:
             row["full_edit_status"] = row["status"]
@@ -405,6 +411,11 @@ def main() -> int:
     evidence_plan.update(source_revision=source_revision, edit_revision=revision(edit), media_size=out.stat().st_size,
                          media_mtime_ns=out.stat().st_mtime_ns, height=args.height,
                          callback_offset=cb_frames / FPS, partial=partial)
+    if not partial:
+        for finding in findings:
+            finding["output_seconds"] = [t + cb_frames / FPS for t in finding["main_seconds"]]
+        evidence_plan["arrangement"] = {"findings": findings, "speech_events": speech,
+                                        "basis": "render_plan", "narrative": edit.get("narrative_plan")}
     out.with_suffix(".evidence.json").write_text(json.dumps(evidence_plan, ensure_ascii=False, indent=2), encoding="utf-8")
     if partial:
         out.with_suffix(".range.json").write_text(json.dumps({"start": first / FPS, "end": (last + 1) / FPS,

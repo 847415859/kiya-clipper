@@ -110,6 +110,8 @@ def validate_item(it: dict, clip_len: float) -> dict:
         out.update(asset=asset, preset=_choice(it, "preset", STICKER_PRESETS, "pop"), x=_num(it, "x", 0, 1, 0.8),
                    y=_num(it, "y", 0, 1, 0.65), scale=_num(it, "scale", 0.03, 1, 0.22),
                    rotate=_num(it, "rotate", -45, 45, 0))
+    if it.get("purpose") in ("reveal", "context", "reaction", "decoration"):
+        out["purpose"] = it["purpose"]
     meme = it.get("meme")                       # 梗库里的梗（可选，只有花字 / 贴图能挂）
     if t in ("text", "sticker", "narration") and isinstance(meme, str) and meme.strip():
         out["meme"] = meme.strip()[:40]
@@ -277,13 +279,20 @@ def validate_edit(raw: dict, clip_len: float) -> dict:
         out["subtitles"]["style_name"] = str(subs.get("style_name") or "")[:64]
     feedback = raw.get("review_feedback")
     if feedback is not None:
-        allowed = {"context", "response", "mixed_event", "subtitle_reading", "occlusion", "speaker_tone", "rhythm"}
+        allowed = {"context", "response", "mixed_event", "subtitle_reading", "occlusion", "speaker_tone", "rhythm", "early_reveal", "voice_masking"}
         if not isinstance(feedback, dict) or not isinstance(feedback.get("reasons", []), list) or any(r not in allowed for r in feedback.get("reasons", [])):
             raise EditError("修改原因标签不合法")
         note = feedback.get("note", "")
         if not isinstance(note, str) or len(note) > 1000:
             raise EditError("修改说明最多1000字")
         out["review_feedback"] = {"reasons": list(dict.fromkeys(feedback.get("reasons", []))), "note": note}
+    narrative = raw.get("narrative_plan")
+    if narrative is not None:
+        if not isinstance(narrative, dict) or not isinstance(narrative.get("beats"), list):
+            raise EditError("叙事计划需要信息节拍列表")
+        if len(narrative["beats"]) > 12 or any(not isinstance(beat, dict) for beat in narrative["beats"]):
+            raise EditError("叙事计划最多含12个有效节拍")
+        out["narrative_plan"] = narrative
     for k in ("session", "rank", "updated_at", "generated_by", "note", "template", "template_reason", "original_audio", "boundary_trace", "adopted_ai_draft"):
         if k in raw:
             out[k] = raw[k]
