@@ -188,6 +188,16 @@ def main() -> int:
                    beats=shift_beats(llm.get("beats") or [], ca - a) or "（没有节拍，按精排结论自己判断）")
     dm, _ = danmaku_lines(load_events(data["segments"]), a, b, a, float(data.get("delay_seconds") or 0), limit=40)
     version, system_t, user = load_prompt(ac["prompt"])
+    if "{{boundary_evidence}}" in user:
+        evidence = []
+        for entry in llm.get("evidence") or []:
+            if not isinstance(entry, dict) or not isinstance(entry.get("t"), (int, float)):
+                continue
+            absolute = ca + entry["t"]
+            quote = str(entry.get("quote") or "").strip()
+            if a <= absolute < b and quote:
+                evidence.append(f"[{absolute - a:.2f}s] {entry.get('src') or '来源未知'}：{quote}")
+        handoff["boundary_evidence"] = "\n".join(evidence) or "（没有可定位到当前素材的精排引用）"
     if cute_prompt:
         cute_version, cute_system, _ = load_prompt(cute_prompt)
         system_t += "\n\n【萌点模板约束】\n" + cute_system

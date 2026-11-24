@@ -302,11 +302,18 @@ def listwise_pool(recs: list[dict], min_score: float, top_n: int) -> list[dict]:
 
 
 
-def list_item_text(r: dict) -> str:
+def list_item_text(r: dict, *, include_event: bool = False) -> str:
     o = r["llm"]
     rf = r.get("refined") or {}
     dur = f"{rf['end'] - rf['start']:.0f}" if rf else "?"
-    ev = "；".join(f"{e['quote']}" for e in o.get("evidence") or []) or "（没有引用）"
+    evidence = o.get("evidence") or []
+    if include_event and rf and r.get("clip_start") is not None:
+        origin = r["clip_start"]
+        evidence_text = [f"[{origin + e['t']:g}s] {e['src']}：{e['quote']}" for e in evidence
+                         if rf["start"] <= origin + e["t"] < rf["end"]]
+    else:
+        evidence_text = [e["quote"] for e in evidence]
+    ev = "；".join(evidence_text) or "（没有引用）"
     flags = []
     if o.get("asr_doubt"):
         flags.append("笑点依赖的词可能被语音识别听错")
@@ -320,9 +327,16 @@ def list_item_text(r: dict) -> str:
         flags.append("结构不完整")
     if o.get("risk_level", "none") != "none":
         flags.append(f"风险 {o['risk_level']}：" + "；".join(o.get("risks") or []))
-    return (f"#{r['rank']}｜时长 {dur} 秒｜{o['score']:g} 分｜{o['type']}｜把握 {float(o.get('confidence', 1)):.1f}\n"
+    summary = (f"#{r['rank']}｜时长 {dur} 秒｜{o['score']:g} 分｜{o['type']}｜把握 {float(o.get('confidence', 1)):.1f}\n"
             f"  发生了什么：{o['what_happened']}\n  笑点原话：{o.get('punch_line') or '（无）'}\n  证据：{ev}\n"
             f"  缺点 / 风险：{'；'.join(flags) or '无'}\n  编辑的理由：{o['reason']}")
+    if not include_event:
+        return summary
+    story = o.get("story") or {}
+    bounds = f"{rf['start']:g}–{rf['end']:g}s" if rf else "未知"
+    return (summary + f"\n  建议整场区间：{bounds}"
+            f"\n  前因：{story.get('setup') or '未知'}｜变化：{story.get('punch') or '未知'}｜回应：{story.get('reaction') or '未知'}"
+            f"\n  起点依据：{o.get('start_reason') or '未知'}｜终点依据：{o.get('end_reason') or '未知'}")
 
 
 def run_listwise(client, recs: list[dict], cfg: dict, rc: dict) -> str:
@@ -332,7 +346,8 @@ def run_listwise(client, recs: list[dict], cfg: dict, rc: dict) -> str:
         return "候选不足 2 条，跳过二次比较"
     version, system, user = load_prompt(rc["listwise_prompt"])
     max_pick = int(rc["listwise_max_pick"])
-    text = fill(user, profile=profile(cfg), items="\n\n".join(list_item_text(r) for r in pool))
+    text = fill(user, profile=profile(cfg),
+                items="\n\n".join(list_item_text(r, include_event=version in {"rerank-list-v2", "rerank-list-v3"}) for r in pool))
     msgs = [{"role": "system", "content": fill(system, max_pick=str(max_pick))}, {"role": "user", "content": text}]
     r = client.chat_json(msgs, ListOut, tag=version)
     if r.data is None:
