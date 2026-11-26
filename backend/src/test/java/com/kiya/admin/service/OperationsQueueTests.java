@@ -40,9 +40,41 @@ class OperationsQueueTests {
         props.setRepoDir(temp.toString());
         props.setRecDir(temp.resolve("rec").toString());
         props.setOpsDir(root.toString());
+        props.setAcceptanceDir(temp.resolve("acceptance").toString());
         props.setOpsRecoveryEnabled(true);
         paths = new WorkerPaths(props);
         service = new OperationsQueueService(paths, json, props);
+    }
+
+    @Test void acceptanceQueueDisplaysItsOwnMonitorAndInventoryWithoutRecovery() throws Exception {
+        Path acceptance = temp.resolve("acceptance");
+        Path ops = acceptance.resolve("operations");
+        Files.createDirectories(ops.resolve("queue"));
+        Files.createDirectories(ops.resolve("status"));
+        json.writeValue(acceptance.resolve("monitor-state.json").toFile(),
+                Map.of("last_check", "2026-11-26 20:00:00", "live", false));
+        json.writeValue(ops.resolve("queue").resolve(ID).toFile(), job("kiya"));
+        Path status = ops.resolve("status").resolve(ID);
+        json.writeValue(status.toFile(), Map.of("session", SESSION, "status", "blocked",
+                "production_mode", "isolated", "production_ranks", List.of(1)));
+        Map<String, Object> overview = service.acceptanceOverview();
+        assertEquals(true, overview.get("observed"));
+        assertEquals("2026-11-26 20:00:00", overview.get("lastCheck"));
+        assertEquals(SESSION, ((Map<?, ?>) ((List<?>) overview.get("sessions")).get(0)).get("name"));
+        assertNull(service.acceptanceSummary(SESSION).get("action"));
+        assertEquals("verify", service.summary(SESSION).get("status"));
+        assertThrows(ApiException.class, () -> service.recover(SESSION, "resume"));
+
+        Path candidate = ops.resolve("production").resolve(ID.replace(".json", "")).resolve("01");
+        Files.createDirectories(candidate);
+        Path media = Files.writeString(candidate.resolve("result.mp4"), "fixture");
+        json.writeValue(candidate.resolve("state.json").toFile(),
+                Map.of("status", "inventoried", "current_version", "v1"));
+        json.writeValue(candidate.resolve("inventory.json").toFile(),
+                Map.of("version", "v1", "render", Map.of("media", media.toString())));
+        // Incomplete legacy inventories lack identity and report bindings: do not claim qualification.
+        assertThrows(ApiException.class, () -> service.acceptanceMedia(SESSION, 1));
+        assertThrows(ApiException.class, () -> service.media(SESSION, 1));
     }
 
     @Test void missedEnqueueRequiresConfirmedEndAndDeduplicatesConcurrentRequests() throws Exception {
@@ -140,6 +172,51 @@ class OperationsQueueTests {
         assertEquals("has_clips", service.summary(SESSION).get("status"));
         assertNull(service.summary(SESSION).get("action"));
         assertEquals(media.toRealPath(), service.media(SESSION, 1));
+    }
+
+    @Test void acceptanceReadOnlyApisKeepSameNamedProductionAndAcceptanceRootsSeparate() throws Exception {
+        write("queue/" + ID, job("kiya"));
+        write("status/" + ID, Map.of("session", SESSION, "status", "prepared", "production_mode", "legacy"));
+        Path acceptOps = temp.resolve("acceptance/operations");
+        Files.createDirectories(acceptOps.resolve("queue"));
+        Files.createDirectories(acceptOps.resolve("status"));
+        json.writeValue(acceptOps.resolve("queue").resolve(ID).toFile(), job("kiya"));
+        json.writeValue(acceptOps.resolve("status").resolve(ID).toFile(), Map.of("session", SESSION, "status", "blocked", "production_mode", "isolated"));
+        Map<String, Object> prod = service.readOnlySummary(SESSION, false);
+        Map<String, Object> isolated = service.readOnlySummary(SESSION, true);
+        assertEquals("production", prod.get("source"));
+        assertEquals("acceptance", isolated.get("source"));
+        assertEquals("prepared", prod.get("workerStatus"));
+        assertEquals("blocked", isolated.get("workerStatus"));
+        assertFalse(prod.containsKey("action"));
+        assertFalse(isolated.containsKey("action"));
+        assertEquals("prepared", service.readOnlySummary(SESSION, false).get("workerStatus"));
+    }
+
+    @Test void acceptanceDetailDoesNotBindOldReviewToNewCurrentVersion() throws Exception {
+        Path acceptOps = temp.resolve("acceptance/operations");
+        Files.createDirectories(acceptOps.resolve("queue"));
+        Files.createDirectories(acceptOps.resolve("status"));
+        json.writeValue(acceptOps.resolve("queue").resolve(ID).toFile(), job("kiya"));
+        json.writeValue(acceptOps.resolve("status").resolve(ID).toFile(), Map.of("session", SESSION, "status", "prepared", "production_mode", "isolated", "production_ranks", List.of(1)));
+        Path candidate = acceptOps.resolve("production").resolve(ID.replace(".json", "")).resolve("01");
+        Files.createDirectories(candidate);
+        json.writeValue(candidate.resolve("state.json").toFile(), Map.of("session", SESSION, "rank", 1, "status", "needs_review", "current_version", "v2"));
+        json.writeValue(candidate.resolve("inventory.json").toFile(), Map.of("rank", 1, "version", "v1", "review", Map.of("verdict", "pass", "media_sha256", "a".repeat(64)), "render", Map.of("media", "old.mp4")));
+        @SuppressWarnings("unchecked") List<Map<String, Object>> candidates = (List<Map<String, Object>>) service.acceptanceSummary(SESSION).get("candidates");
+        assertEquals("v2", candidates.get(0).get("version"));
+        assertFalse(Boolean.TRUE.equals(((Map<?, ?>) candidates.get(0).get("review")).get("bound")));
+        assertFalse(Boolean.TRUE.equals(candidates.get(0).get("playable")));
+    }
+
+    @Test void acceptanceOverviewExposesUnmatchedTaskWithoutTouchingProduction() throws Exception {
+        Path acceptOps = temp.resolve("acceptance/operations");
+        Files.createDirectories(acceptOps.resolve("queue"));
+        json.writeValue(acceptOps.resolve("queue").resolve(ID).toFile(), job("kiya"));
+        Map<String, Object> overview = service.acceptanceOverview();
+        assertEquals(1, overview.get("unmatched"));
+        assertEquals(ID, ((Map<?, ?>) ((List<?>) overview.get("unmatchedTasks")).get(0)).get("jobId"));
+        assertFalse(Files.exists(root.resolve("queue")));
     }
 
     private Map<String, Object> job(String streamer) {

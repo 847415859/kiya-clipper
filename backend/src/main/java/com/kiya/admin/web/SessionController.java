@@ -47,6 +47,26 @@ public class SessionController {
         return operations.summary(name);
     }
 
+    @GetMapping("/acceptance-operations")
+    public Map<String, Object> acceptanceOverview() {
+        return operations.acceptanceOverview();
+    }
+
+    @GetMapping("/production-acceptance")
+    public Map<String, Object> productionAcceptanceOverview() {
+        return operations.productionOverview();
+    }
+
+    @GetMapping("/{name}/production-acceptance")
+    public Map<String, Object> productionAcceptanceDetail(@PathVariable String name) {
+        return operations.readOnlySummary(name, false);
+    }
+
+    @GetMapping("/{name}/acceptance-operations")
+    public Map<String, Object> acceptanceOperations(@PathVariable String name) {
+        return operations.acceptanceSummary(name);
+    }
+
     @PostMapping("/{name}/operations/{action:enqueue|resume}")
     public Map<String, Object> recover(@PathVariable String name, @PathVariable String action) throws IOException {
         return operations.recover(name, action);
@@ -54,9 +74,18 @@ public class SessionController {
 
     @GetMapping("/{name}/operations/media/{rank}")
     public ResponseEntity<Resource> operationsMedia(@PathVariable String name, @PathVariable int rank) {
+        return video(operations.media(name, rank));
+    }
+
+    @GetMapping("/{name}/acceptance-operations/media/{rank}")
+    public ResponseEntity<Resource> acceptanceMedia(@PathVariable String name, @PathVariable int rank) {
+        return video(operations.acceptanceMedia(name, rank));
+    }
+
+    private ResponseEntity<Resource> video(Path media) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
                 .contentType(MediaType.parseMediaType("video/mp4"))
-                .body(new FileSystemResource(operations.media(name, rank)));
+                .body(new FileSystemResource(media));
     }
 
     @PostMapping("/scan")

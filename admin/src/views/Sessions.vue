@@ -4,6 +4,7 @@
       <el-button type="primary" :loading="scanning" @click="scan">扫描录像</el-button>
       <el-button @click="load">刷新</el-button>
       <el-button @click="lookupOpen = true">按场次排查</el-button>
+      <el-button @click="router.push('/sessions/acceptance')">新场验收</el-button>
       <span class="spacer" />
       <span class="muted">录像按计划同步到 OSS。磁盘空间不足时，优先清理最老的已归档场次。</span>
     </div>
@@ -78,7 +79,42 @@
       </el-form>
     </el-dialog>
 
-    <el-dialog v-model="opsOpen" :title="`自动制作 · ${opsName}`" width="min(720px, 95vw)">
+    <el-dialog v-model="acceptanceOpen" title="新场验收" width="min(720px, 95vw)">
+      <div v-loading="acceptanceLoading">
+        <template v-if="acceptance">
+          <p v-if="acceptance.observed">
+            {{ acceptance.apiFailures ? '最近一次直播状态查询失败' : acceptance.live ? '最近记录为直播中' : '最近记录为未直播' }}
+            · {{ acceptance.lastCheck }}
+          </p>
+          <p v-else>还没有监控轮询记录。</p>
+          <el-alert v-if="acceptance.unmatched" type="warning" :closable="false"
+            :title="`有 ${acceptance.unmatched} 条任务尚未匹配到唯一录播场次`" />
+          <el-table :data="acceptance.sessions" empty-text="尚无已匹配的下播任务">
+            <el-table-column prop="name" label="场次" min-width="130" />
+            <el-table-column label="状态" min-width="110">
+              <template #default="{ row }">
+                <el-tag size="small" :type="opType(row.status)">{{ opLabel(row.status) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="当前步骤" min-width="100">
+              <template #default="{ row }">{{ row.currentStep ? stepLabel(row.currentStep) : '—' }}</template>
+            </el-table-column>
+            <el-table-column label="成片" width="65" prop="clipCount" />
+            <el-table-column width="92">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="openOperations(row.name, true)">查看详情</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
+        <p v-else-if="!acceptanceLoading">暂时无法读取验收状态。</p>
+      </div>
+      <template #footer>
+        <el-button :loading="acceptanceLoading" @click="refreshAcceptance">刷新状态</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="opsOpen" :title="`${opsAcceptance ? '新场验收' : '自动制作'} · ${opsName}`" width="min(720px, 95vw)">
       <div v-loading="opsLoading" class="ops-detail">
         <template v-if="ops">
           <el-space wrap>
@@ -101,7 +137,7 @@
           <el-collapse v-if="ops.candidates?.length" class="ops-candidates">
             <el-collapse-item v-for="item in ops.candidates" :key="item.rank" :name="item.rank">
               <template #title>候选 {{ item.rank }} · {{ candidateLabel(item.status) }}</template>
-              <a v-if="item.hasMedia" :href="api.operationsMedia(opsName, item.rank)" target="_blank" rel="noopener">打开成片</a>
+              <a v-if="item.hasMedia" :href="api.operationsMedia(opsName, item.rank, opsAcceptance)" target="_blank" rel="noopener">打开成片</a>
               <ul v-if="item.findings?.length" class="ops-findings">
                 <li v-for="(finding, idx) in item.findings" :key="idx">
                   {{ finding.message }}
@@ -191,8 +227,12 @@ const scanning = ref(false)
 const dialog = ref(false)
 const lookupOpen = ref(false)
 const lookupName = ref('')
+const acceptanceOpen = ref(false)
+const acceptance = ref(null)
+const acceptanceLoading = ref(false)
 const opsOpen = ref(false)
 const opsName = ref('')
+const opsAcceptance = ref(false)
 const ops = ref(null)
 const opsLoading = ref(false)
 const recovering = ref(false)
@@ -212,9 +252,24 @@ const stepLabel = (step) => stepLabels[step] || (/^evidence-/.test(step) ? '定�
   : /^render-/.test(step) ? '渲染' : /^review-/.test(step) ? '审片' : opsLabels[step] || step)
 const candidateLabel = (status) => candidateLabels[status] || '处理中'
 
-async function openOperations(name) {
+async function openAcceptance() {
+  acceptanceOpen.value = true
+  await refreshAcceptance()
+}
+
+async function refreshAcceptance() {
+  if (acceptanceLoading.value) return
+  acceptanceLoading.value = true
+  try { acceptance.value = await api.acceptanceOperations() }
+  catch { acceptance.value = null }
+  finally { acceptanceLoading.value = false }
+}
+
+async function openOperations(name, fromAcceptance = false) {
   lookupOpen.value = false
+  acceptanceOpen.value = false
   opsName.value = name
+  opsAcceptance.value = fromAcceptance
   ops.value = null
   opsOpen.value = true
   await refreshOperations()
@@ -225,7 +280,7 @@ async function refreshOperations() {
   const request = ++detailRequest
   opsLoading.value = true
   try {
-    const result = await api.sessionOperations(opsName.value)
+    const result = await api.sessionOperations(opsName.value, opsAcceptance.value)
     if (request === detailRequest) ops.value = result
   } catch {
     if (request === detailRequest) ops.value = null
@@ -237,15 +292,15 @@ async function refreshOperations() {
 async function recoverOperations() {
   const name = opsName.value
   const action = ops.value?.action
-  if (!action || recovering.value || opsLoading.value) return
+  if (opsAcceptance.value || !action || recovering.value || opsLoading.value) return
   recovering.value = true
   try {
     const result = await api.recoverSession(name, action)
-    if (opsName.value === name) ops.value = result
+    if (opsName.value === name && !opsAcceptance.value) ops.value = result
     ElMessage.success(action === 'resume' ? '已提交原任务的续跑请求' : '本场已入队')
     await load()
   } catch {
-    if (opsName.value === name) await refreshOperations()
+    if (opsName.value === name && !opsAcceptance.value) await refreshOperations()
   } finally { recovering.value = false }
 }
 const typeName = { PIPELINE: '全流程', TRANSCRIBE: '语音转写', SCREEN: '粗筛', RERANK: '大模型精排', CUT: '剪切' }

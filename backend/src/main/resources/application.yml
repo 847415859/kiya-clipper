@@ -44,6 +44,7 @@ kiya:
   admin-username: ${ADMIN_USERNAME:admin}
   admin-password: ${ADMIN_PASSWORD:}             # 只在第一次启动、还没有账号时使用；留空则随机生成并打印到日志
   ops-dir: ${KIYA_OPS_DIR:}
+  acceptance-dir: ${KIYA_ACCEPTANCE_DIR:/var/lib/kiya-next-session-acceptance}
   ops-recovery-enabled: ${KIYA_OPS_RECOVERY_ENABLED:false}
   task-timeout-minutes: 180
 

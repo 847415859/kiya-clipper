@@ -66,9 +66,11 @@ export const api = {
   switchStreamer: (id) => http.post('/api/streamers/current', { streamer: id }),
 
   sessions: () => http.get('/api/sessions'),
-  sessionOperations: (name) => http.get(`/api/sessions/${encodeURIComponent(name)}/operations`),
+  acceptanceOperations: (source = 'acceptance') => http.get(source === 'production' ? '/api/sessions/production-acceptance' : '/api/sessions/acceptance-operations'),
+  acceptanceDetail: (name, source = 'acceptance') => http.get(`/api/sessions/${encodeURIComponent(name)}/${source === 'production' ? 'production-acceptance' : 'acceptance-operations'}`),
+  sessionOperations: (name, acceptance = false) => http.get(`/api/sessions/${encodeURIComponent(name)}/${acceptance ? 'acceptance-operations' : 'operations'}`),
   recoverSession: (name, action) => http.post(`/api/sessions/${encodeURIComponent(name)}/operations/${action}`),
-  operationsMedia: (name, rank) => `/api/sessions/${encodeURIComponent(name)}/operations/media/${rank}`,
+  operationsMedia: (name, rank, acceptance = false) => `/api/sessions/${encodeURIComponent(name)}/${acceptance ? 'acceptance-operations' : 'operations'}/media/${rank}`,
   scan: () => http.post('/api/sessions/scan', null, { timeout: 200000 }),
   valueStrategy: (name) => http.get(`/api/sessions/${encodeURIComponent(name)}/value-strategy`),
   candidates: (name) => http.get(`/api/sessions/${encodeURIComponent(name)}/candidates`),

@@ -1,0 +1,231 @@
+{
+  "kind": "SIMULATED / MOCK API ONLY — not backend verification",
+  "generatedAt": "2026-11-26T10:28:07.205Z",
+  "assertions": [
+    {
+      "name": "No observation is unknown, not inferred offline",
+      "passed": true
+    },
+    {
+      "name": "Live observation waits for end event",
+      "passed": true
+    },
+    {
+      "name": "Monitor API failures show stale-state warning",
+      "passed": true
+    },
+    {
+      "name": "Queue, budget, failure and qualified clip rows render",
+      "passed": true
+    },
+    {
+      "name": "Refresh 503 retains previous four session rows",
+      "passed": true
+    },
+    {
+      "name": "Detail opens: queued",
+      "passed": true
+    },
+    {
+      "name": "Detail opens: waiting_for_budget",
+      "passed": true
+    },
+    {
+      "name": "Budget detail shows zero balance",
+      "passed": true
+    },
+    {
+      "name": "Detail opens: failed",
+      "passed": true
+    },
+    {
+      "name": "Detail opens: has_clips",
+      "passed": true
+    },
+    {
+      "name": "FFmpeg mock MP4 plays and seeks to 3 seconds",
+      "passed": true
+    },
+    {
+      "name": "Production source uses read-only production detail endpoint",
+      "passed": true
+    },
+    {
+      "name": "All API requests remain GET-only",
+      "passed": true
+    },
+    {
+      "name": "No unknown API escaped mock contract",
+      "passed": true
+    },
+    {
+      "name": "No browser page errors",
+      "passed": true
+    },
+    {
+      "name": "Mock media endpoint requested",
+      "passed": true
+    }
+  ],
+  "requests": [
+    {
+      "scenario": "unknown",
+      "method": "GET",
+      "path": "/api/auth/me",
+      "range": null
+    },
+    {
+      "scenario": "unknown",
+      "method": "GET",
+      "path": "/api/auth/me",
+      "range": null
+    },
+    {
+      "scenario": "unknown",
+      "method": "GET",
+      "path": "/api/sessions/acceptance-operations",
+      "range": null
+    },
+    {
+      "scenario": "unknown",
+      "method": "GET",
+      "path": "/api/streamers",
+      "range": null
+    },
+    {
+      "scenario": "live",
+      "method": "GET",
+      "path": "/api/auth/me",
+      "range": null
+    },
+    {
+      "scenario": "live",
+      "method": "GET",
+      "path": "/api/sessions/acceptance-operations",
+      "range": null
+    },
+    {
+      "scenario": "live",
+      "method": "GET",
+      "path": "/api/streamers",
+      "range": null
+    },
+    {
+      "scenario": "stale",
+      "method": "GET",
+      "path": "/api/auth/me",
+      "range": null
+    },
+    {
+      "scenario": "stale",
+      "method": "GET",
+      "path": "/api/sessions/acceptance-operations",
+      "range": null
+    },
+    {
+      "scenario": "stale",
+      "method": "GET",
+      "path": "/api/streamers",
+      "range": null
+    },
+    {
+      "scenario": "states",
+      "method": "GET",
+      "path": "/api/auth/me",
+      "range": null
+    },
+    {
+      "scenario": "states",
+      "method": "GET",
+      "path": "/api/sessions/acceptance-operations",
+      "range": null
+    },
+    {
+      "scenario": "states",
+      "method": "GET",
+      "path": "/api/streamers",
+      "range": null
+    },
+    {
+      "scenario": "states",
+      "method": "GET",
+      "path": "/api/sessions/acceptance-operations",
+      "range": null
+    },
+    {
+      "scenario": "states",
+      "method": "GET",
+      "path": "/api/sessions/模拟-已入队/acceptance-operations",
+      "range": null
+    },
+    {
+      "scenario": "states",
+      "method": "GET",
+      "path": "/api/sessions/模拟-等待预算/acceptance-operations",
+      "range": null
+    },
+    {
+      "scenario": "states",
+      "method": "GET",
+      "path": "/api/sessions/模拟-处理失败/acceptance-operations",
+      "range": null
+    },
+    {
+      "scenario": "states",
+      "method": "GET",
+      "path": "/api/sessions/模拟-合格MP4/acceptance-operations",
+      "range": null
+    },
+    {
+      "scenario": "states",
+      "method": "GET",
+      "path": "/api/sessions/模拟-合格MP4/acceptance-operations/media/1",
+      "range": "bytes=0-"
+    },
+    {
+      "scenario": "states",
+      "method": "GET",
+      "path": "/api/sessions/模拟-合格MP4/acceptance-operations/media/1",
+      "range": "bytes=589824-"
+    },
+    {
+      "scenario": "states",
+      "method": "GET",
+      "path": "/api/sessions/production-acceptance",
+      "range": null
+    },
+    {
+      "scenario": "states",
+      "method": "GET",
+      "path": "/api/sessions/模拟-合格MP4/production-acceptance",
+      "range": null
+    },
+    {
+      "scenario": "states",
+      "method": "GET",
+      "path": "/api/sessions/模拟-合格MP4/operations/media/1",
+      "range": "bytes=0-"
+    }
+  ],
+  "screenshots": [
+    "01-mock-monitor-unknown.png",
+    "02-mock-monitor-live.png",
+    "03-mock-monitor-stale.png",
+    "04-mock-session-states.png",
+    "05-mock-refresh-failure-retained.png",
+    "06-mock-budget-detail.png",
+    "07-mock-failed-detail.png",
+    "08-mock-qualified-mp4-seek.png",
+    "09-mock-production-detail.png"
+  ],
+  "browserErrors": [],
+  "unexpectedApi": [],
+  "browserVersion": "158.0.8127.36",
+  "playback": {
+    "duration": 6,
+    "currentTime": 3,
+    "readyState": 4,
+    "error": null
+  },
+  "success": true
+}

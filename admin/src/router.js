@@ -4,6 +4,7 @@ import { api } from './api'
 import Layout from './views/Layout.vue'
 import Login from './views/Login.vue'
 import Sessions from './views/Sessions.vue'
+import Acceptance from './views/Acceptance.vue'
 import Review from './views/Review.vue'
 import Jobs from './views/Jobs.vue'
 import Styles from './views/Styles.vue'
@@ -29,6 +30,7 @@ const router = createRouter({
       children: [
         { path: '', redirect: '/sessions' },
         { path: 'sessions', component: Sessions, meta: { title: '场次' } },
+        { path: 'sessions/acceptance', component: Acceptance, meta: { title: '新场验收' } },
         {
           // 顶部菜单“审核”：直接打开最近一场有候选片段的审核页；还没有就回场次页
           path: 'review',
