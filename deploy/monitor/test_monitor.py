@@ -214,6 +214,34 @@ def test_managed_down_event_enqueues_once(tmp_path, monkeypatch):
     assert job["room"] == "123"
     assert job["since"] == now - 600
     assert job["earliest"] == now - 700
+    assert os.path.samefile(jobs[0], root / 'ended' / jobs[0].name)
+
+
+def test_recorded_down_event_survives_manual_and_automatic_publish(tmp_path):
+    import kiya_monitor as km
+    from concurrent.futures import ThreadPoolExecutor
+
+    root = tmp_path / 'operations'
+    settings = {'KIYA_OPS_DIR': str(root)}
+    args = (settings, tmp_path, '123', 1000, 2000)
+    km.enqueue_operations(*args, publish=False)
+    event = next((root / 'ended').glob('*.json'))
+    queue = root / 'queue'
+    assert not queue.exists()
+    queue.mkdir()
+
+    def manual():
+        try:
+            os.link(event, queue / event.name)
+        except FileExistsError:
+            pass
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        workers = [pool.submit(manual), pool.submit(km.enqueue_operations, *args), pool.submit(manual)]
+        for worker in workers:
+            worker.result()
+    assert list(queue.iterdir()) == [queue / event.name]
+    assert os.path.samefile(event, queue / event.name)
 
 
 def test_run_live_screen(tmp_path, monkeypatch):

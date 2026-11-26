@@ -27,6 +27,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -61,21 +62,32 @@ def operations_root(env: dict) -> Path:
 
 
 def enqueue_operations(env: dict, rec_dir: Path, room: str, since: float, ended: float,
-                       previous_end: float = 0) -> None:
+                       previous_end: float = 0, *, publish: bool = True) -> None:
     streamer = cfg(env, "KIYA_STREAMER", "kiya")
     if not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", streamer) or not str(room).isdigit():
         raise ValueError("自动运营需要有效的主播和房间号")
-    queue = operations_root(env) / "queue"
-    queue.mkdir(parents=True, exist_ok=True)
-    job = queue / f"{streamer}-{int(since * 1000)}.json"
-    if job.exists():
-        return
-    tmp = job.with_suffix(f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps({"streamer": streamer, "room": str(room), "since": since,
-                               "earliest": max(since - 300, previous_end),
-                               "ended": ended, "rec_dir": str(rec_dir.resolve())},
-                              ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, job)
+    root = operations_root(env)
+    name = f"{streamer}-{int(since * 1000)}.json"
+    payload = dict(streamer=streamer, room=str(room), since=since, earliest=max(since - 300, previous_end),
+                   ended=ended, rec_dir=str(rec_dir.resolve()))
+    event = root / 'ended' / name
+    event.parent.mkdir(parents=True, exist_ok=True)
+    if not event.exists():
+        with tempfile.NamedTemporaryFile(dir=event.parent, suffix='.tmp', delete=False) as tmp:
+            tmp.write(json.dumps(payload, ensure_ascii=False).encode('utf-8'))
+        try:
+            os.link(tmp.name, event)
+        except FileExistsError:
+            pass
+        finally:
+            Path(tmp.name).unlink(missing_ok=True)
+    if publish:
+        target = root / 'queue' / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(event, target)
+        except FileExistsError:
+            pass
 
 
 def launch_operations(env: dict) -> None:

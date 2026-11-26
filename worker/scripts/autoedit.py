@@ -103,7 +103,24 @@ def main() -> int:
     ap.add_argument("--keep-reaction", type=float, nargs=2, metavar=("START", "END"),
                     help="指定必须完整保留的回应区间（整场秒数）")
     ap.add_argument("--preview-material", action="store_true", help="只显示将交给初稿模型的素材范围和原话，不调用接口")
+    ap.add_argument('--isolated-reaction-ending', action='store_true',
+                    help='隔离试跑，优先以已核实的原声回应收尾')
+    ap.add_argument('--isolated-audit', type=Path)
+    ap.add_argument('--manual-review-record', type=Path)
     args = ap.parse_args()
+    if args.isolated_reaction_ending and not (args.draft_only and args.styles == 'standard'
+                                             and args.keep_reaction == [2058.223, 2060.080]
+                                             and args.isolated_audit and args.manual_review_record
+                                             and args.manual_review_record.is_file()
+                                             and os.environ.get('KIYA_OPS_LEDGER')
+                                             and os.environ.get('KIYA_OPS_LLM_MAX_FEN') == '368'):
+        ap.error('isolated ending requires the rank-5 target, standard draft-only, manual review, audit and existing budget')
+    if args.isolated_reaction_ending:
+        record = json.loads(args.manual_review_record.read_text(encoding='utf-8'))
+        if (record.get('session') != '20261124-2151' or record.get('rank') != 5
+                or record.get('question_id') != 'gap-1' or record.get('quote') != '我有点嫌弃他'
+                or record.get('source_range') != [2058.223, 2060.080]):
+            ap.error('manual review does not attest the configured rank-5 target')
     if (args.material_start is None) != (args.material_end is None):
         ap.error("--material-start 和 --material-end 必须同时提供")
 
@@ -234,8 +251,9 @@ def main() -> int:
     # 梗库：用精排结论 + 弹幕当情境去检索，只给大模型“已确认、相符”的几个；提示词用 edit_v3 才有这一块（几个版本共用这一份结果）
     offered, meme_method = [], "none"
     if "{{memes}}" in user:
-        lib = load_library(Path(os.environ.get("KIYA_MEMES") or sess.parent / "_memory" / "memes.json"))
-        offered, meme_method = retrieve(situation_text(llm, extra=dm), lib, cfg, taboo=cfg.get("taboo") or [])
+        if not args.isolated_reaction_ending:
+            lib = load_library(Path(os.environ.get("KIYA_MEMES") or sess.parent / "_memory" / "memes.json"))
+            offered, meme_method = retrieve(situation_text(llm, extra=dm), lib, cfg, taboo=cfg.get("taboo") or [])
         extra["memes"] = offer_text(offered)
     # 多版本：前 top_n 个候选按风格档位各出一版（提示词要有 {{variant}}），其余只出标准版
     vc = variants_cfg(ac)
@@ -253,14 +271,26 @@ def main() -> int:
         multi, why = (wants_variants(args.variants, (rr or {}).get("new_rank"), args.rank, int(vc["top_n"]))
                       if "{{variant}}" in user else (False, ""))
         styles = vc["styles"] if multi else [DEFAULT]
-    client = LLMClient(model=ac["model"] or None, cache_dir=sess.parent / "_llm_cache")
+    if args.isolated_reaction_ending:
+        from clipper.llm import DEFAULT_BASE_URL
+        from clipper.video_evidence import make_video_client
+        client = make_video_client({}, sess.parent / '_llm_cache')
+        if (client.model != 'qwen3.8-omni-flash' or client.base_url != DEFAULT_BASE_URL
+                or not client.api_key or os.environ.get('KIYA_OPS_LLM_MAX_FEN') != '368'):
+            ap.error('isolated draft requires Beijing Omni credentials and the configured 368 fen ceiling')
+        client.max_retries = 1
+    else:
+        client = LLMClient(model=ac["model"] or None, cache_dir=sess.parent / "_llm_cache")
+    if args.isolated_reaction_ending:
+        llm['context_caption'] = '手上有奶粉味'
+        llm['what_happened'] = '前因：手上有奶粉味；回应原声：我有点嫌弃他'
 
     # 跨场次呼应：每个候选找一次（检索 + 一次大模型判定），只并入标准版（clipper/callbacks.py）
     cbc = cb_lib.settings(cfg)
     owner = f"{sess.name}#{args.rank}"
     cb_plan = None
     pos = (rr or {}).get("new_rank") or args.rank
-    if not cbc["enabled"] or not sents:
+    if args.isolated_reaction_ending or not cbc["enabled"] or not sents:
         pass
     elif pos > int(cbc["top_n"]):
         print(f"呼应：排名第 {pos}，不在前 {cbc['top_n']} 个，不找呼应（callbacks.top_n）")
@@ -318,7 +348,20 @@ def main() -> int:
                  "之后再解释。会揭晓结果的花字、旁白和贴图在 items 标 purpose: reveal。"
                  "保留出糗后承接语气的停顿和轻声找补。可删段只在 note 建议，写明素材区间、两侧接缝和潜在损失。")
         print(f"#{args.rank} 生成剪辑脚本初稿{'（' + v['label'] + '版）' if multi or key != DEFAULT else ''}（{client.model}，{version}）…")
-        r = client.chat_json([{"role": "system", "content": system}, {"role": "user", "content": text}], EditOut, tag=version)
+        if args.isolated_reaction_ending:
+            from clipper.agent_flow import now, save
+            text += ('\n优先以已核实目标区间内第一句完整回应的原声收尾，尽量在目标终点附近结束。'
+                     '不截断原声，不删掉其他必保证据；如果不能兼顾，保留证据并在 note 说明。')
+            audit = {'started_at': now(), 'model': client.model, 'purpose': 'EditOut',
+                     'ledger': os.environ['KIYA_OPS_LEDGER'], 'configured_max_fen': '368'}
+            save(args.isolated_audit, {**audit, 'status': 'in_flight'})
+        r = client.chat_json([{"role": "system", "content": system}, {"role": "user", "content": text}],
+                             EditOut, tag=version, retry_invalid=not args.isolated_reaction_ending)
+        if args.isolated_reaction_ending:
+            save(args.isolated_audit, {**audit, 'finished_at': now(), 'usage': r.usage, 'cached': r.cached,
+                                      'request_attempts': client.request_attempts,
+                                      'requests_without_usage': client.requests_without_usage, 'error': r.error,
+                                      'status': 'completed' if r.data is not None else 'failed'})
         if r.data is None:
             print(f"生成失败：{r.error}", file=sys.stderr)
             return None
@@ -430,6 +473,27 @@ def main() -> int:
         draft_id = uuid.uuid4().hex
         folder = dst.parent / "ai_drafts" / f"{args.rank:02d}"
         folder.mkdir(parents=True, exist_ok=True)
+        if args.isolated_reaction_ending:
+            from clipper.agent_flow import digest, load
+            manual = load(args.manual_review_record)
+            media = manual.get('media', {})
+            verified_assets = []
+            for asset in media.get('assets', []):
+                path = Path(asset.get('path', ''))
+                if not path.is_file() or path.stat().st_size != asset.get('bytes') or digest(path) != asset.get('sha256'):
+                    ap.error('manual review media hash changed during draft generation')
+                verified_assets.append(asset)
+            if len(verified_assets) != 2:
+                ap.error('manual review must bind both source clips')
+            edit['required_reaction'] = validate_required_reaction(
+                {'start': args.keep_reaction[0], 'end': args.keep_reaction[1]}, edit['window'])
+            edit['required_evidence'] = [*edit.get('required_evidence', []), {
+                'id': 'manual-gap-1', 'start': 2058.223, 'end': 2060.080, 'content': '我有点嫌弃他',
+                'modality': 'audio', 'answers': ['gap-1'], 'basis': 'human_review',
+                'media_sha256': [asset['sha256'] for asset in verified_assets], 'reviewer': manual['reviewer']}]
+            if not any('手上有奶粉味' in str(value) for value in llm.values()):
+                ap.error('the existing setup about 手上有奶粉味 is unavailable; refusing to lose the setup')
+            edit['note'] = (edit.get('note', '') + '；保留“手上有奶粉味”前因，回应“我有点嫌弃他”完整说完后自然收尾').strip('；')
         payload = {"id": draft_id, "session": sess.name, "rank": args.rank, "base_revision": base_revision,
                    "candidate_revision": candidate_revision,
                    "rerank_revision": rerank_revision,

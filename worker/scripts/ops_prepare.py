@@ -60,8 +60,13 @@ def run_step(script, args, timeout, log_path):
 
 
 def prepare(root, job_path, job, state, now):
+    def stage(name):
+        state['stage'] = name
+        save(root / 'status' / job_path.name, state)
+
     target = root / "sessions" / job_path.stem / job["streamer"]
     if "sources" not in state:
+        stage('recording')
         paths = recordings(job)
         if not paths or any(not p.with_suffix(".flv").is_file() for p in paths):
             raise ValueError("未找到完整的同房间录播 XML 和 FLV")
@@ -83,7 +88,9 @@ def prepare(root, job_path, job, state, now):
     candidates = session / "candidates.json"
     if not state.get("screen_complete"):
         if os.environ.get("KIYA_ASR") == "1" and not (session / "transcript.json").is_file():
+            stage('transcribe')
             run_step("transcribe.py", inputs, int(os.environ.get("KIYA_ASR_TIMEOUT", "3600")), log)
+        stage('screen')
         screen_args = inputs + (["--no-video"] if os.environ.get("KIYA_ANALYZE_NO_VIDEO") == "1" else [])
         run_step("screen.py", screen_args, int(os.environ.get("KIYA_ANALYZE_TIMEOUT", "1800")), log)
         state["screen_complete"] = True
@@ -95,7 +102,20 @@ def prepare(root, job_path, job, state, now):
         state.update(status="no_candidates", inventory=[])
         return
 
+    isolated = state.get('production_mode') == 'isolated'
+    if isolated and 'production_ranks' not in state:
+        limit = int(os.environ.get('KIYA_OPS_AGENT_MAX_CANDIDATES', '3'))
+        if limit < 1:
+            raise ValueError('KIYA_OPS_AGENT_MAX_CANDIDATES must be positive')
+        selected = sorted(set(ranks))[:limit]
+        state.update(production_limit=limit, production_ranks=selected,
+                     deferred_ranks=sorted(set(ranks) - set(selected)))
+        save(root / 'status' / job_path.name, state)
+    if isolated:
+        ranks = state['production_ranks']
+
     rerank_path = session / "rerank.json"
+    stage('rerank')
     if rerank_path.is_file():
         # Partial model failures are recorded as rows. Keep successful rows and retry only gaps.
         rows = read(rerank_path)["candidates"]
@@ -105,23 +125,30 @@ def prepare(root, job_path, job, state, now):
             run_step("rerank.py", [candidates, "--config", config, "--ranks", *missing],
                      int(os.environ.get("KIYA_RERANK_TIMEOUT", "1800")), log)
     else:
-        run_step("rerank.py", [candidates, "--config", config],
-                 int(os.environ.get("KIYA_RERANK_TIMEOUT", "1800")), log)
+        args = [candidates, '--config', config]
+        if isolated:
+            args.extend(['--ranks', *ranks])
+        run_step('rerank.py', args, int(os.environ.get('KIYA_RERANK_TIMEOUT', '1800')), log)
 
-    rows = read(rerank_path)["candidates"]
-    if not any(row.get("llm") for row in rows):
+    rows = read(rerank_path)['candidates']
+    if not any(row.get('llm') and row['rank'] in ranks for row in rows):
         raise RuntimeError("本场未得到有效精排结论，见 operations.log")
     state["unresolved_ranks"] = sorted(set(ranks) - {row["rank"] for row in rows if row.get("llm")})
-    if state.get('production_mode') == 'isolated':
+    if isolated:
         output = root / 'production' / job_path.stem
+        stage('produce')
         run_step('agent_produce.py', ['--candidates', candidates, '--live', '--out', output,
-                                      '--config', config, '--ledger', root / 'daily.sqlite3'], None, log)
-        summary = read(output / 'summary.json')
-        pending = {item['rank'] for item in summary['candidates'] if item['status'] in {'paused', 'busy'}}
+                                      '--config', config, '--ledger', root / 'daily.sqlite3', '--ranks', *ranks], None, log)
+        summary = read(output / 'summary-selected.json')
+        results = {item['rank']: item['status'] for item in summary['candidates']}
+        if set(results) != set(ranks) or len(results) != len(summary['candidates']):
+            raise ValueError('production summary does not match selected ranks')
+        pending = {rank for rank, status in results.items() if status in {'paused', 'busy'}}
         state['unresolved_ranks'] = sorted(pending | set(state['unresolved_ranks']))
         state.update(status='partial' if state['unresolved_ranks'] else 'prepared',
                      production=str(output), inventory=production_inventory(output, summary))
         return
+    stage('produce')
     run_step("agent_run.py", [candidates, "--config", config, "--height", "720", "--timeout", "1800"],
              None, log)
     agent = read(session / "agent_run.json")
@@ -272,14 +299,21 @@ def drain_one(root, now):
         job = read(job_path)
         status_path = root / "status" / job_path.name
         state = read(status_path) if status_path.is_file() else {}
-        if state.get("status") in {"prepared", "no_candidates", "blocked"}:
+        if state.get("status") in {"prepared", "no_candidates"}:
             continue
-        if now < max(job["ended"] + 120, state.get("retry_at", 0)):
+        resume_marker = status_path.with_suffix(status_path.suffix + '.resume')
+        manually_resumed = (resume_marker.is_file() and state.get('production_mode') == 'isolated'
+                            and state.get('status') in {'partial', 'retry', 'blocked'})
+        if state.get('status') == 'blocked' and not manually_resumed:
+            continue
+        if now < job['ended'] + 120 or (not manually_resumed and now < state.get('retry_at', 0)):
             continue
         attempts = state.get("attempts", 0) + 1
         state.setdefault('production_mode', 'isolated' if os.environ.get('KIYA_OPS_AGENT_V2') == '1' else 'legacy')
         state.update(status="running", attempts=attempts, retry_at=now + 900)
         save(status_path, state)
+        resume_marker = status_path.with_suffix(status_path.suffix + '.resume')
+        resume_marker.unlink(missing_ok=True)
         budget_marker = status_path.with_suffix(".budget-blocked")
         budget_marker.unlink(missing_ok=True)
         os.environ["KIYA_OPS_BUDGET_BLOCKED"] = str(budget_marker)

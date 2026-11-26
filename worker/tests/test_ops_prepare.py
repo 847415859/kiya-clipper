@@ -84,6 +84,55 @@ def test_preparation_resumes_and_plans_without_posting(tmp_path, monkeypatch):
     assert daily["plan"]["would_publish"][0]["planned_at"] == "2026-11-24T18:30:00+08:00"
 
 
+def test_manual_resume_reuses_original_checkpoints(tmp_path, monkeypatch):
+    import json
+    import os
+    import time
+
+    now = time.time()
+    root = tmp_path / 'ops'
+    job = root / 'queue' / 'kiya-123456.json'
+    status = root / 'status' / job.name
+    session = root / 'sessions' / job.stem / 'kiya' / 'fixture'
+    output = root / 'production' / job.stem
+    inventory = output / '01' / 'inventory.json'
+    rerank = session / 'rerank.json'
+    ops_prepare.save(job, {'streamer': 'kiya', 'room': '123', 'since': now - 1200, 'ended': now - 300})
+    ops_prepare.save(status, {'sources': [], 'session': 'fixture', 'screen_complete': True,
+                             'production_mode': 'isolated', 'production_ranks': [1, 2],
+                             'status': 'blocked', 'retry_at': now + 900, 'attempts': 3})
+    ops_prepare.save(session / 'candidates.json', {'candidates': [{'rank': 1}, {'rank': 2}]})
+    ops_prepare.save(rerank, {'candidates': [{'rank': i, 'llm': {'score': 8}} for i in (1, 2)]})
+    ops_prepare.save(inventory, {'version': 'kept'})
+    calls = []
+
+    def step(script, args, timeout, log):
+        assert script == 'agent_produce.py'
+        calls.append(script)
+        ops_prepare.save(output / 'summary-selected.json', {'candidates': [
+            {'rank': 1, 'status': 'inventoried'}, {'rank': 2, 'status': 'needs_review'}]})
+
+    monkeypatch.setenv('KIYA_OPS_LEDGER', str(root / 'daily.sqlite3'))
+    monkeypatch.setattr(ops_prepare, 'run_step', step)
+    monkeypatch.setattr(ops_prepare, 'production_inventory', lambda *args: [{'rank': 1, 'version': 'kept'}])
+    ops_prepare.drain_one(root, now)
+    assert calls == []
+    before = ops_prepare.read(status)
+    marker = status.with_suffix('.json.resume')
+    marker.touch()
+    versions = {p.name: p.read_bytes() for p in (rerank, inventory)}
+    ops_prepare.drain_one(root, now)
+    ops_prepare.drain_one(root, now + 1)
+    after = ops_prepare.read(status)
+    assert calls == ['agent_produce.py'] and after['status'] == 'prepared'
+    assert not marker.exists()
+    assert versions == {p.name: p.read_bytes() for p in (rerank, inventory)}
+    if os.environ.get('KIYA_SESSION_ACCEPTANCE_OUT'):
+        ops_prepare.save(Path(os.environ['KIYA_SESSION_ACCEPTANCE_OUT']) / 'resume.json',
+                         {'mode': 'mock-production', 'jobId': job.name, 'before': before, 'after': after,
+                          'executed': calls, 'unchanged': sorted(versions), 'markerConsumed': True})
+
+
 def test_paid_attempts_fail_closed_and_keep_unknown_cost(tmp_path, monkeypatch):
     path = tmp_path / "ledger.sqlite3"
     monkeypatch.setenv("KIYA_OPS_LEDGER", str(path))

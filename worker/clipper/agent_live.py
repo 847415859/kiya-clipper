@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import subprocess
@@ -12,15 +13,42 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from .agent_flow import Pause, Review, load, save
+from .agent_flow import Pause, Review, digest, load, now, probe, save
 from .agent_production import SCRIPTS
-from .llm import load_env, text_part
+from .llm import DEFAULT_BASE_URL, load_env, text_part
 from .video_evidence import make_video_client
 
 
 class EvidenceAnswer(BaseModel):
     supported: bool
     content: str
+
+
+class ContextAnswer(BaseModel):
+    supported: bool
+    quote: str = ''
+    explanation: str = ''
+    reason: str = ''
+
+
+class ManualEvidenceReview(BaseModel):
+    schema_version: int = Field(alias='schema')
+    session: str
+    streamer: str
+    rank: int
+    question_id: str
+    quote: str
+    source_range: list[float]
+    vocal_range: list[float]
+    media: dict
+    reviewer: str
+    reviewed_at: str
+    note: str
+
+
+RANK5_TARGET = [2058.223, 2060.080]
+CONTEXT_QUESTION = 'Kiya 在目标区间说了什么？请引用能听清的原话，并说明前文如何帮助理解。无法确认时说明原因。'
+CONTEXT_VERSION = 'rank5-gap1-context-v1'
 
 
 class MediaDecision(BaseModel):
@@ -71,22 +99,60 @@ class LiveRoles:
         return {'topic': topic, 'evidence': observations, 'rerank': row,
                 'pack': {'title': str(title or reason)[:80], 'eligibility': 'proposal_only'}}
 
-    def _request(self, media, prompt, schema):
+    def _request(self, media, prompt, schema, *, context=None):
         load_env()
         if Path(os.environ.get('KIYA_OPS_LEDGER', '')).resolve() != self.ledger:
             raise Pause('isolated model ledger missing')
         client = make_video_client({}, self.output / '_llm_cache')
+        if getattr(self, 'contextual_gap', None) is not None:
+            if (client.model != 'qwen3.8-omni-flash' or client.base_url != DEFAULT_BASE_URL
+                    or os.environ.get('KIYA_OPS_LLM_MAX_FEN') != '368'):
+                raise Pause('rank5 isolation requires Beijing Omni and the verified 368 fen reservation')
+            if not client.api_key:
+                raise Pause('rank5 isolation requires an existing Omni credential')
         content = []
         if sum(path.stat().st_size for path in media) > 18_000_000:
             raise Review('media exceeds bounded model request size')
+        assets = []
         for path in media:
+            payload = path.read_bytes()
+            assets.append({'path': str(path), 'sha256': hashlib.sha256(payload).hexdigest(), 'bytes': len(payload)})
             content.append({'type': 'video_url', 'video_url': {
-                'url': 'data:;base64,' + base64.b64encode(path.read_bytes()).decode('ascii')}})
+                'url': 'data:;base64,' + base64.b64encode(payload).decode('ascii')}})
         content.append(text_part(prompt))
-        result = client.chat_json([{'role': 'user', 'content': content}], schema, tag=self.name)
-        if result.data is None:
-            raise Pause(result.error or 'model observation unavailable')
-        return result.data.model_dump(exclude_none=True)
+        request_id = uuid4().hex
+        if context is not None:
+            if assets != context['assets']:
+                raise Review('context media changed before request')
+            client.max_retries = 1
+            from .protection import revision
+            request_id = revision(context)
+        audit_path = self.output / 'model_requests' / f'{request_id}.json'
+        if context is not None and audit_path.exists():
+            prior = load(audit_path)
+            if prior.get('status') == 'completed' and prior.get('response') is not None:
+                return prior['response']
+            if prior.get('status') != 'failed' or prior.get('request_attempts') != 0:
+                raise Review(prior.get('error') or 'previous contextual request may have reached the model; not resending')
+        audit = {'started_at': now(), 'model': client.model, 'purpose': schema.__name__, 'media': assets,
+                 'ledger': str(self.ledger), 'configured_max_fen': os.environ.get('KIYA_OPS_LLM_MAX_FEN'),
+                 'status': 'in_flight'}
+        if context is not None:
+            audit['context'] = context
+        save(audit_path, audit)
+        result = client.chat_json([{'role': 'user', 'content': content}], schema, tag=self.name,
+                                  retry_invalid=context is None)
+        response = result.data.model_dump(exclude_none=True) if result.data is not None else None
+        save(audit_path, {**audit, 'finished_at': now(), 'status': 'completed' if response is not None else 'failed',
+                          'usage': result.usage, 'cached': result.cached, 'request_attempts': client.request_attempts,
+                          'requests_without_usage': client.requests_without_usage, 'error': result.error,
+                          **({'response': response} if context is not None else {})})
+        if response is None:
+            error = result.error or 'model observation unavailable'
+            if context is not None and client.request_attempts:
+                raise Review(error)
+            raise Pause(error)
+        return response
 
     def answer(self, row, question, result, state):
         from .agent_evidence import MODES
@@ -102,6 +168,81 @@ class LiveRoles:
                     'end': max(c['range'][1] for c in usable), 'modality': MODES[question['kind']],
                     'content': answer['content'], 'answers': [question['id']]}
         return None
+
+    def check_context_target(self, state, questions):
+        if (state.data['rank'] != 5 or state.data['streamer'] != 'kiya'
+                or state.data['session'] != '20261124-2151'
+                or [q['id'] for q in questions] != ['gap-0', 'gap-1']
+                or questions[1]['range'] != RANK5_TARGET or questions[1]['kind'] != 'response'):
+            raise Review('context is only configured for rank 5, session 20261124-2151, gap-1')
+
+    def context_inputs(self, question):
+        assets, mapping = [], []
+        for index, path in enumerate(self.context_media):
+            path = Path(path)
+            info = probe(path)
+            if not info['audio'] or info['height'] <= 0 or not info['duration'] > 0:
+                raise Review(f'context requires playable audio and video: {path}')
+            assets.append({'path': str(path), 'sha256': digest(path), 'bytes': path.stat().st_size})
+            mapping.append({'clip': index, 'local_range': [0, info['duration']], 'role': 'context_only'})
+        start, end = question['range']
+        duration = round(end - start, 3)
+        if mapping[1]['local_range'][1] < duration:
+            raise Review('second context clip is shorter than the target')
+        mapping[1].update(role='target_then_context', target_local_range=[0, duration],
+                          target_source_range=[start, end], context_only_after=duration)
+        return {'assets': assets, 'mapping': mapping, 'question': CONTEXT_QUESTION,
+                'version': CONTEXT_VERSION, 'model': 'qwen3.8-omni-flash'}
+
+    def answer_context(self, question, context, manual_record=None):
+        if manual_record is not None:
+            return self.manual_context_review(question, context, manual_record)
+        if self.output.joinpath('05', 'manual_reviews', 'gap-1-human.json').is_file():
+            raise Review('manual review is present; skip gap-1 model re-question')
+        prompt = (CONTEXT_QUESTION + '\n按发送顺序看两段原声音画。仅第二段开头 0–1.857 秒是目标；'
+                  '第一段及第二段其余内容仅供理解，不得引用为目标原话。请独立判断，不猜测。'
+                  '只返回 JSON：supported（布尔值），quote（目标内原话），explanation（前文如何帮助理解），'
+                  'reason（无法确认的原因）。\n' + json.dumps(context['mapping'], ensure_ascii=False))
+        response = self._request(self.context_media, prompt, ContextAnswer, context=context)
+        quote = response['quote'].strip()
+        if not response['supported'] or not quote:
+            return {'answer': None, 'reason': response['reason'].strip() or '模型未确认目标区间的可引用原话',
+                    'response': response, 'context': context}
+        start, end = question['range']
+        answer = {'id': 'live-' + question['id'], 'start': start, 'end': end, 'modality': 'audio',
+                  'content': quote, 'answers': [question['id']]}
+        return {'answer': answer, 'response': response, 'context': context}
+
+    def manual_context_review(self, question, context, record_path):
+        if (question['id'] != 'gap-1' or question['range'] != RANK5_TARGET
+                or context.get('question') != CONTEXT_QUESTION):
+            raise Review('manual review does not match the configured target')
+        verified = []
+        for asset in context['assets']:
+            path = Path(asset['path'])
+            if not path.is_file() or path.stat().st_size != asset['bytes'] or digest(path) != asset['sha256']:
+                raise Review('context media changed since evidence collection')
+            verified.append({'path': str(path), 'sha256': asset['sha256'], 'bytes': asset['bytes']})
+        if len(verified) != 2:
+            raise Review('manual review requires both ordered context clips')
+        record = load(record_path)
+        try:
+            review = ManualEvidenceReview.model_validate(record)
+        except Exception as exc:
+            raise Review(f'invalid manual review record: {exc}') from exc
+        if (review.schema_version != 1 or review.session != '20261124-2151' or review.streamer != 'kiya'
+                or review.rank != 5 or review.question_id != 'gap-1' or review.source_range != RANK5_TARGET
+                or review.vocal_range != [2058.223, 2059.423] or review.quote != '我有点嫌弃他'
+                or not review.reviewer.strip() or not review.note.strip()
+                or review.media != {'assets': verified, 'mapping': context['mapping']}):
+            raise Review('manual review identity, quote, target interval or media hashes do not match')
+        answer = {'id': 'manual-gap-1', 'start': RANK5_TARGET[0], 'end': RANK5_TARGET[1],
+                  'modality': 'audio', 'content': review.quote, 'answers': ['gap-1'],
+                  'basis': 'human_review', 'reviewer': review.reviewer, 'reviewed_at': review.reviewed_at}
+        record_path = Path(record_path)
+        return {'answer': answer, 'reason': review.note, 'context': context,
+                'manual_review': {'path': str(record_path), 'sha256': digest(record_path),
+                                  'reviewer': review.reviewer, 'reviewed_at': review.reviewed_at}}
 
     def draft(self, row, state, data, candidate, evidence, transcript):
         if Path(os.environ.get('KIYA_OPS_LEDGER', '')).resolve() != self.ledger:
@@ -124,10 +265,19 @@ class LiveRoles:
         save(folder / 'rerank.json', {'candidates': [rerank]})
         if transcript is not None:
             save(folder / 'transcript.json', transcript)
+        command = [sys.executable, str(SCRIPTS / 'autoedit.py'), str(source), '--rank', str(rank),
+                   '--config', str(self.config), '--draft-only', '--styles', 'standard', '--template', 'default']
+        answer_audit = state.data.get('manual_review')
+        if getattr(self, 'contextual_gap', None) is not None:
+            if answer_audit is None:
+                raise Review('missing auditable manual confirmation for contextual draft')
+            command += ['--isolated-reaction-ending', '--keep-reaction', *map(str, RANK5_TARGET),
+                        '--isolated-audit', str(self.output / 'model_requests' / f'{uuid4().hex}.json'),
+                        '--manual-review-record', answer_audit['path']]
+            if digest(Path(answer_audit['path'])) != answer_audit['sha256']:
+                raise Review('manual review record changed before draft generation')
         with (folder / 'autoedit.log').open('w', encoding='utf-8') as log:
-            process = subprocess.run([sys.executable, str(SCRIPTS / 'autoedit.py'), str(source), '--rank', str(rank),
-                                      '--config', str(self.config), '--draft-only', '--styles', 'standard',
-                                      '--template', 'default'], stdout=log, stderr=subprocess.STDOUT, timeout=600)
+            process = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=600)
         drafts = list((folder / 'edits' / 'ai_drafts' / f'{rank:02d}').glob('*.json'))
         if process.returncode or len(drafts) != 1:
             raise Pause(f'autoedit pending: {folder / "autoedit.log"}')
@@ -141,6 +291,32 @@ class LiveRoles:
             if not any(entry['id'] == item['id'] for entry in protected):
                 protected.append({**item, 'role': 'context'})
         return edit
+
+    def verify_manual_review_render(self, rendered, manual_review):
+        if not manual_review:
+            raise Review('render pass requires the persisted human review record')
+        record_path = Path(manual_review['path'])
+        if not record_path.is_file() or digest(record_path) != manual_review['sha256']:
+            raise Review('manual review record changed after drafting')
+        edit_path = Path(rendered['media']).with_suffix('.edit.json')
+        edit = load(edit_path)
+        record = load(record_path)
+        expected_hashes = [asset['sha256'] for asset in record['media']['assets']]
+        # Older snapshots can contain a model projection before the human record.
+        human_rows = [row for row in edit.get('required_evidence', [])
+                      if row.get('id') == 'manual-gap-1' and row.get('basis') == 'human_review']
+        if len(human_rows) != 1:
+            raise Review('rendered edit does not contain exactly one human evidence record for gap-1')
+        item = human_rows[0]
+        if (item.get('content') != record['quote'] or [item.get('start'), item.get('end')] != RANK5_TARGET
+                or item.get('media_sha256') != expected_hashes):
+            raise Review('rendered edit lost the hash-bound human evidence')
+        receipt = load(Path(rendered['receipt']))
+        spans = [(row['source_start'], row['source_end']) for row in receipt.get('source_to_output', [])]
+        from .protection import coverage as source_coverage
+        report = source_coverage([item], spans)
+        if report['status'] != 'time_covered':
+            raise Review('rendered edit no longer covers the confirmed source evidence')
 
     def review(self, row, index, rendered):
         media = Path(rendered['media'])

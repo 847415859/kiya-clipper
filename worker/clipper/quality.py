@@ -105,6 +105,42 @@ def _streams(info: dict[str, Any] | None, kind: str) -> list[dict[str, Any]]:
     return [s for s in (info or {}).get("streams", []) if s.get("codec_type") == kind]
 
 
+def _audio_continuity(report: QualityReport, media: Path, sample_rate: float | None) -> None:
+    ffprobe = _tool("ffprobe")
+    if not ffprobe or not sample_rate or not math.isfinite(sample_rate) or sample_rate <= 0:
+        report.check("audio_continuity", "warning", available=False)
+        return
+    try:
+        result = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "a:0", "-show_frames",
+             "-show_entries", "frame=best_effort_timestamp_time,nb_samples", "-of", "json", str(media)],
+            capture_output=True, text=True, check=True, timeout=120,
+        )
+        frames = json.loads(result.stdout)["frames"]
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError):
+        report.check("audio_continuity", "warning", available=False)
+        report.issue("audio_continuity_unavailable", "warning", "无法核对成片音频帧时间戳")
+        return
+    end = None
+    gaps = []
+    for frame in frames:
+        start = _number(frame.get("best_effort_timestamp_time"))
+        samples = _number(frame.get("nb_samples"))
+        if start is None or samples is None or not math.isfinite(start) or not math.isfinite(samples) or samples <= 0:
+            continue
+        if end is not None and start - end > 0.10:
+            gaps.append({"start": round(end, 3), "end": round(start, 3), "duration": round(start - end, 3)})
+        frame_end = start + samples / sample_rate
+        end = frame_end if end is None else max(end, frame_end)
+    if end is None:
+        report.check("audio_continuity", "error", available=False)
+        report.issue("audio_frames_missing", "error", "音轨没有可核验的解码音频帧")
+        return
+    report.check("audio_continuity", "error" if gaps else "pass", gaps=gaps)
+    if gaps:
+        report.issue("audio_timestamp_gap", "error", "成片存在音频采样时间断点", gaps=gaps)
+
+
 def _media_checks(report: QualityReport, media: Path, expected_duration: float | None = None) -> dict[str, Any] | None:
     if not media.exists() or media.stat().st_size <= 0:
         report.issue("file_missing", "error", "成片文件不存在或为空", path=str(media))
@@ -135,6 +171,7 @@ def _media_checks(report: QualityReport, media: Path, expected_duration: float |
     else:
         report.check("duration", "pass" if dur else "error", actual=dur)
     if vs and aud:
+        _audio_continuity(report, media, _number(aud[0].get("sample_rate")))
         vd, ad = _number(vs[0].get("duration")), _number(aud[0].get("duration"))
         v0, a0 = _number(vs[0].get("start_time")) or 0.0, _number(aud[0].get("start_time")) or 0.0
         duration_delta = abs(vd - ad) if vd is not None and ad is not None else None

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import json
 import sys
 from pathlib import Path
 
 WORKER = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WORKER))
-from clipper.agent_flow import load, save
+from clipper.agent_flow import load, save, session_lock
 from clipper.operations import beijing_day
 from datetime import datetime, timezone
 from clipper.agent_production import Production
@@ -91,7 +92,15 @@ def main():
     ap.add_argument('--ledger', type=Path)
     ap.add_argument('--min-free-mib', type=int, default=1024)
     ap.add_argument('--ranks', type=int, nargs='+')
+    ap.add_argument('--rank5-gap1-context', type=Path, nargs=2, metavar=('BEFORE', 'TARGET'))
+    ap.add_argument('--rank5-gap1-manual-reviewer')
     args = ap.parse_args()
+    if args.rank5_gap1_context and (not args.live or args.ranks != [5] or not args.ledger
+                                   or not args.ledger.is_file() or not (args.out / '05/state.json').is_file()
+                                   or not (args.out / 'session.json').is_file()):
+        ap.error('--rank5-gap1-context requires --live --ranks 5, existing output and existing ledger')
+    if args.rank5_gap1_manual_reviewer and (not args.rank5_gap1_context or not args.rank5_gap1_manual_reviewer.strip()):
+        ap.error('--rank5-gap1-manual-reviewer requires --rank5-gap1-context and a non-empty reviewer identity')
     if args.min_free_mib < 1:
         ap.error('--min-free-mib must be positive')
     if args.fixture_video and (args.candidates or args.roles or args.live):
@@ -107,6 +116,45 @@ def main():
         from clipper.agent_live import LiveRoles
         os.environ['KIYA_OPS_LEDGER'] = str(args.ledger.resolve())
         roles = LiveRoles(args.candidates, args.out, args.config, args.ledger)
+        if args.rank5_gap1_context:
+            if not all(path.is_file() for path in args.rank5_gap1_context):
+                ap.error('both context clips must exist')
+            roles.contextual_gap = 'gap-1'
+            roles.context_media = [path.resolve() for path in args.rank5_gap1_context]
+            roles.manual_reviews = {}
+            if args.rank5_gap1_manual_reviewer:
+                import os
+                if os.environ.get('KIYA_OPS_LLM_MAX_FEN') != '368':
+                    ap.error('manual continuation requires the preconfigured 368 fen model ceiling')
+                from clipper.agent_live import RANK5_TARGET
+                from clipper.agent_flow import digest, probe
+                from clipper.protection import revision
+                assets = [{'path': str(path), 'sha256': digest(path), 'bytes': path.stat().st_size}
+                          for path in roles.context_media]
+                mapping = []
+                for index, path in enumerate(roles.context_media):
+                    info = probe(path)
+                    mapping.append({'clip': index, 'local_range': [0, info['duration']], 'role': 'context_only'})
+                duration = round(RANK5_TARGET[1] - RANK5_TARGET[0], 3)
+                mapping[1].update(role='target_then_context', target_local_range=[0, duration],
+                                  target_source_range=RANK5_TARGET, context_only_after=duration)
+                record_dir = args.out / '05' / 'manual_reviews'
+                record_dir.mkdir(parents=True, exist_ok=True)
+                record_path = record_dir / 'gap-1-human.json'
+                manual_record = {'schema': 1, 'session': '20261124-2151', 'streamer': 'kiya', 'rank': 5,
+                     'question_id': 'gap-1', 'quote': '我有点嫌弃他', 'source_range': RANK5_TARGET,
+                     'vocal_range': [2058.223, 2059.423],
+                     'media': {'assets': assets, 'mapping': mapping}, 'reviewer': args.rank5_gap1_manual_reviewer,
+                     'note': '人工复听确认原话；Omni 原结论“只有背景音乐”保留为独立模型观察，不覆盖或删除。'}
+                with closing(session_lock(args.out / 'session.lock.sqlite3')):
+                    if record_path.exists():
+                        existing = load(record_path)
+                        if {key: value for key, value in existing.items() if key != 'reviewed_at'} != manual_record:
+                            ap.error(f'manual review record already exists and differs: {record_path}')
+                    else:
+                        save(record_path, {**manual_record, 'reviewed_at': datetime.now(timezone.utc).isoformat()})
+                roles.manual_reviews['gap-1'] = record_path
+                roles.manual_review_revision = revision(load(record_path))
     else:
         roles = RecordedRoles(args.roles)
     runner = Production(args.candidates, args.out, roles, args.config, ledger,

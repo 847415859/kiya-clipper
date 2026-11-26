@@ -27,6 +27,9 @@ class AdminApplicationTests {
     @Test
     void apiRequiresLogin() throws Exception {
         mvc.perform(get("/api/sessions")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/sessions/20261124-2151/operations")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/sessions/20261124-2151/operations/media/1")).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/sessions/20261124-2151/operations/resume").with(csrf())).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/publish-account")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/schedules")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/schedules/images/" + "a".repeat(32))).andExpect(status().isUnauthorized());

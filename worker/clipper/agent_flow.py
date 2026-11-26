@@ -71,11 +71,13 @@ class RunState:
         self.commit(stage=stage, status=state)
 
     def step(self, name: str, inputs: Any, perform: Callable[[], T], *,
-             valid: Callable[[T], bool] = lambda result: True) -> T:
+             valid: Callable[[T], bool] = lambda result: True, reuse_only: bool = False) -> T:
         key = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
         old = self.data['steps'].get(name)
         if old and old['key'] == key and valid(old['result']):
             return old['result']
+        if reuse_only:
+            raise Review(f'{name}: existing checkpoint is missing, stale or invalid; not rerunning')
         self.event(name, 'running', step_id=key)
         result = perform()
         self.data['steps'][name] = {'key': key, 'result': result}

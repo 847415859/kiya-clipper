@@ -154,6 +154,8 @@ def test_local_caption_and_overlay_repairs():
     issue = {'output_range': [1, 2], 'reason': 'fixture review'}
     revised = repair(edit, dict(issue, action='remove_overlay', item_id='overlay'), [], mapping)
     assert revised['items'] == [] and len(edit['items']) == 1
+    with pytest.raises(Review, match='output_range.*fixture review'):
+        repair(edit, {'action': 'remove_overlay', 'item_id': 'overlay', 'reason': 'fixture review'}, [], mapping)
     with pytest.raises(Review, match='location'):
         repair(edit, dict(issue, action='remove_overlay', item_id='overlay', output_range=[3, 4]), [], mapping)
     transcript = {'sentences': [{'t0': 11, 't1': 12, 'text': '那个结果是三'}]}
@@ -162,3 +164,22 @@ def test_local_caption_and_overlay_repairs():
     assert repair(edit, decision, [], mapping, transcript)['subtitles']['sentence_overrides'] == [subtitle]
     with pytest.raises(Review, match='shortening'):
         repair(edit, dict(decision, subtitle=dict(subtitle, text='结果是四')), [], mapping, transcript)
+
+
+def test_rank5_opening_overlay_repair_preserves_model_review():
+    from clipper.agent_production import rank5_opening_overlay_decision, repair
+
+    edit = {'window': {'start': 10, 'end': 14}, 'items': [
+        {'id': '4334c3f5', 'type': 'text', 'text': '开头原稿文案', 'start': 0.2, 'duration': 3},
+        {'id': 'keep', 'type': 'text', 'text': '另一个效果', 'start': 2, 'duration': 1},
+    ]}
+    review = {'verdict': 'repair', 'reason': '刚做完奶粉雪花酥与原生标题重叠遮挡', 'media_sha256': 'verified'}
+    rendered = {'media': 'preview.mp4', 'files': {'preview.mp4': 'verified'}}
+    mapping = [{'source_start': 10, 'source_end': 14, 'output_start': 0, 'output_end': 4}]
+    decision = rank5_opening_overlay_decision(edit, review, rendered)
+    assert [item['id'] for item in repair(edit, decision, [], mapping)['items']] == ['keep']
+    assert 'action' not in review and len(edit['items']) == 2
+    with pytest.raises(Review, match='不匹配'):
+        rank5_opening_overlay_decision(edit, {**review, 'media_sha256': 'stale'}, rendered)
+    with pytest.raises(Review, match='唯一'):
+        rank5_opening_overlay_decision({**edit, 'items': edit['items'] * 2}, review, rendered)

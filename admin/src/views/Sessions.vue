@@ -3,8 +3,9 @@
     <div class="toolbar">
       <el-button type="primary" :loading="scanning" @click="scan">扫描录像</el-button>
       <el-button @click="load">刷新</el-button>
+      <el-button @click="lookupOpen = true">按场次排查</el-button>
       <span class="spacer" />
-      <span class="muted">录像在服务器上只保留 2 天，之后同步到 OSS 并从本地删除；转写和剪切要在这之前做</span>
+      <span class="muted">录像按计划同步到 OSS。磁盘空间不足时，优先清理最老的已归档场次。</span>
     </div>
 
     <el-table :data="rows" size="small" stripe v-loading="loading" empty-text="还没有场次，点“扫描录像”">
@@ -41,8 +42,17 @@
           </el-space>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="230" fixed="right">
+      <el-table-column label="自动制作" min-width="205">
+      <template #default="{ row }">
+        <el-tag size="small" :type="opType(row.operations?.status)">{{ opLabel(row.operations?.status) }}</el-tag>
+        <span v-if="row.operations?.clipCount" class="ops-count">成片 {{ row.operations.clipCount }}</span>
+        <div v-if="row.operations?.totalCandidates" class="muted">完成 {{ row.operations.completedCandidates }}/{{ row.operations.totalCandidates }}</div>
+        <div v-if="row.operations?.currentStep" class="muted">{{ stepLabel(row.operations.currentStep) }}</div>
+      </template>
+    </el-table-column>
+    <el-table-column label="操作" width="265" fixed="right">
         <template #default="{ row }">
+          <el-button link type="primary" @click="openOperations(row.name)">制作详情</el-button>
           <el-button link type="primary" :disabled="!row.hasCandidates" @click="review(row)">审核</el-button>
           <el-dropdown trigger="click" @command="(c) => run(row, c)">
             <el-button link type="primary">运行 ▾</el-button>
@@ -60,6 +70,55 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <el-dialog v-model="lookupOpen" title="按场次排查" width="min(420px, 95vw)">
+      <el-form @submit.prevent="openOperations(lookupName.trim())">
+        <el-form-item label="场次"><el-input v-model="lookupName" placeholder="例如 20261124-2151" /></el-form-item>
+        <el-button native-type="submit" type="primary" :disabled="!lookupName.trim()">查询</el-button>
+      </el-form>
+    </el-dialog>
+
+    <el-dialog v-model="opsOpen" :title="`自动制作 · ${opsName}`" width="min(720px, 95vw)">
+      <div v-loading="opsLoading" class="ops-detail">
+        <template v-if="ops">
+          <el-space wrap>
+            <el-tag :type="opType(ops.status)">{{ opLabel(ops.status) }}</el-tag>
+            <span v-if="ops.totalCandidates">完成 {{ ops.completedCandidates }}/{{ ops.totalCandidates }}</span>
+            <span v-if="ops.clipCount">成片 {{ ops.clipCount }}</span>
+            <span v-if="ops.needsReviewCount">待复核 {{ ops.needsReviewCount }}</span>
+          </el-space>
+          <p v-if="ops.message">{{ ops.message }}</p>
+          <p v-if="ops.blocker" class="ops-findings">{{ ops.blocker }}</p>
+          <dl class="ops-meta">
+            <template v-if="ops.room"><dt>房间</dt><dd>{{ ops.room }}</dd></template>
+            <template v-if="ops.jobId"><dt>任务</dt><dd>{{ ops.jobId }}</dd></template>
+            <template v-if="ops.currentStep"><dt>当前步骤</dt><dd>{{ stepLabel(ops.currentStep) }}</dd></template>
+            <template v-if="ops.updatedAt"><dt>最后更新</dt><dd>{{ dateLabel(ops.updatedAt) }}</dd></template>
+            <template v-if="ops.retryAt"><dt>下次可处理</dt><dd>{{ dateLabel(ops.retryAt) }}</dd></template>
+            <template v-if="ops.budget"><dt>预算快照</dt><dd>剩余 ¥{{ (ops.budget.remainingFen / 100).toFixed(2) }}（{{ ops.budget.day }}）</dd></template>
+          </dl>
+          <el-alert v-if="ops.resumeRequested" title="已请求续跑，等待自动队列领取" type="info" :closable="false" />
+          <el-collapse v-if="ops.candidates?.length" class="ops-candidates">
+            <el-collapse-item v-for="item in ops.candidates" :key="item.rank" :name="item.rank">
+              <template #title>候选 {{ item.rank }} · {{ candidateLabel(item.status) }}</template>
+              <a v-if="item.hasMedia" :href="api.operationsMedia(opsName, item.rank)" target="_blank" rel="noopener">打开成片</a>
+              <ul v-if="item.findings?.length" class="ops-findings">
+                <li v-for="(finding, idx) in item.findings" :key="idx">
+                  {{ finding.message }}
+                  <span v-if="finding.range?.length === 2">（{{ finding.timeline === 'source' ? '原片' : '对应' }} {{ finding.range[0] }}–{{ finding.range[1] }} 秒）</span>
+                </li>
+              </ul>
+              <span v-else-if="item.currentStep" class="muted">{{ stepLabel(item.currentStep) }}</span>
+            </el-collapse-item>
+          </el-collapse>
+        </template>
+        <p v-else-if="!opsLoading" class="muted">读取失败，请刷新重试。</p>
+      </div>
+      <template #footer>
+        <el-button @click="refreshOperations">刷新详情</el-button>
+        <el-button v-if="ops?.action" type="primary" :loading="recovering" @click="recoverOperations">{{ ops.action === 'resume' ? '续跑本场' : '补入本场' }}</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="dialog" :title="`${typeName[form.type]} · ${form.session}`" width="480px">
       <el-form label-width="96px">
@@ -130,6 +189,65 @@ const styles = ref([])
 const loading = ref(false)
 const scanning = ref(false)
 const dialog = ref(false)
+const lookupOpen = ref(false)
+const lookupName = ref('')
+const opsOpen = ref(false)
+const opsName = ref('')
+const ops = ref(null)
+const opsLoading = ref(false)
+const recovering = ref(false)
+const opsLabels = { verify: '待核对', not_queued: '未入队', queued: '已入队', processing: '正在处理',
+  waiting_for_budget: '等待预算', waiting_for_resources: '等待资源', needs_review: '部分候选待复核',
+  no_candidates: '无合适候选', has_clips: '已有成片', failed: '失败', prepared: '处理完成' }
+const stepLabels = { recording: '核对录播', transcribe: '语音转写', screen: '粗筛', rerank: '精排', produce: '制作候选',
+  topic: '选题', inventory: '入库', inputs: '核对制作输入', 'initial-edit': '生成初稿' }
+const candidateLabels = { inventoried: '已有成片', needs_review: '待复核', paused: '已暂停', failed: '失败',
+  dropped: '不适合制作', pending: '等待处理', running: '处理中' }
+const dateFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium', timeZone: 'Asia/Shanghai' })
+const dateLabel = (value) => `${dateFormat.format(new Date(value))}（北京时间）`
+const opLabel = (status) => opsLabels[status] || '待核对'
+const opType = (status) => ({ has_clips: 'success', failed: 'danger', needs_review: 'warning',
+  waiting_for_budget: 'warning', waiting_for_resources: 'warning', processing: 'primary' })[status] || 'info'
+const stepLabel = (step) => stepLabels[step] || (/^evidence-/.test(step) ? '定向补证据'
+  : /^render-/.test(step) ? '渲染' : /^review-/.test(step) ? '审片' : opsLabels[step] || step)
+const candidateLabel = (status) => candidateLabels[status] || '处理中'
+
+async function openOperations(name) {
+  lookupOpen.value = false
+  opsName.value = name
+  ops.value = null
+  opsOpen.value = true
+  await refreshOperations()
+}
+
+let detailRequest = 0
+async function refreshOperations() {
+  const request = ++detailRequest
+  opsLoading.value = true
+  try {
+    const result = await api.sessionOperations(opsName.value)
+    if (request === detailRequest) ops.value = result
+  } catch {
+    if (request === detailRequest) ops.value = null
+  } finally {
+    if (request === detailRequest) opsLoading.value = false
+  }
+}
+
+async function recoverOperations() {
+  const name = opsName.value
+  const action = ops.value?.action
+  if (!action || recovering.value || opsLoading.value) return
+  recovering.value = true
+  try {
+    const result = await api.recoverSession(name, action)
+    if (opsName.value === name) ops.value = result
+    ElMessage.success(action === 'resume' ? '已提交原任务的续跑请求' : '本场已入队')
+    await load()
+  } catch {
+    if (opsName.value === name) await refreshOperations()
+  } finally { recovering.value = false }
+}
 const typeName = { PIPELINE: '全流程', TRANSCRIBE: '语音转写', SCREEN: '粗筛', RERANK: '大模型精排', CUT: '剪切' }
 const form = reactive({ type: 'CUT', session: '', model: '', refresh: false, noVideo: false, height: 480, styleId: null, noSubs: false, ranks: '' })
 
@@ -189,3 +307,13 @@ async function submit() {
 
 onMounted(load)
 </script>
+
+<style scoped>
+.ops-count { margin-left: 8px; }
+.ops-detail { min-height: 60px; }
+.ops-meta { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
+.ops-meta dt { color: var(--el-text-color-secondary); }
+.ops-meta dd { margin: 0; overflow-wrap: anywhere; }
+.ops-candidates { margin-top: 16px; }
+.ops-findings { margin: 6px 0 0; padding-left: 20px; overflow-wrap: anywhere; }
+</style>

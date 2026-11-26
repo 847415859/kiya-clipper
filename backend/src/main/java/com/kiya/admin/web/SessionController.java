@@ -1,5 +1,6 @@
 package com.kiya.admin.web;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.kiya.admin.common.ApiException;
+import com.kiya.admin.service.OperationsQueueService;
 import com.kiya.admin.service.SessionService;
 import com.kiya.admin.service.WorkerPaths;
 
@@ -27,15 +29,34 @@ import com.kiya.admin.service.WorkerPaths;
 public class SessionController {
     private final SessionService sessions;
     private final WorkerPaths paths;
+    private final OperationsQueueService operations;
 
-    public SessionController(SessionService sessions, WorkerPaths paths) {
+    public SessionController(SessionService sessions, WorkerPaths paths, OperationsQueueService operations) {
         this.sessions = sessions;
         this.paths = paths;
+        this.operations = operations;
     }
 
     @GetMapping
     public List<Map<String, Object>> list() {
         return sessions.list();
+    }
+
+    @GetMapping("/{name}/operations")
+    public Map<String, Object> operations(@PathVariable String name) {
+        return operations.summary(name);
+    }
+
+    @PostMapping("/{name}/operations/{action:enqueue|resume}")
+    public Map<String, Object> recover(@PathVariable String name, @PathVariable String action) throws IOException {
+        return operations.recover(name, action);
+    }
+
+    @GetMapping("/{name}/operations/media/{rank}")
+    public ResponseEntity<Resource> operationsMedia(@PathVariable String name, @PathVariable int rank) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .contentType(MediaType.parseMediaType("video/mp4"))
+                .body(new FileSystemResource(operations.media(name, rank)));
     }
 
     @PostMapping("/scan")

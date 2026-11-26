@@ -66,6 +66,9 @@ export const api = {
   switchStreamer: (id) => http.post('/api/streamers/current', { streamer: id }),
 
   sessions: () => http.get('/api/sessions'),
+  sessionOperations: (name) => http.get(`/api/sessions/${encodeURIComponent(name)}/operations`),
+  recoverSession: (name, action) => http.post(`/api/sessions/${encodeURIComponent(name)}/operations/${action}`),
+  operationsMedia: (name, rank) => `/api/sessions/${encodeURIComponent(name)}/operations/media/${rank}`,
   scan: () => http.post('/api/sessions/scan', null, { timeout: 200000 }),
   valueStrategy: (name) => http.get(`/api/sessions/${encodeURIComponent(name)}/value-strategy`),
   candidates: (name) => http.get(`/api/sessions/${encodeURIComponent(name)}/candidates`),

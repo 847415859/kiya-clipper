@@ -24,6 +24,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -38,6 +39,7 @@ from clipper.boiler import business_cuts, compact_time, keep_ranges  # noqa: E40
 from clipper.timeline import edit_cuts, compact_events as map_events  # noqa: E402
 from clipper.render_plan import plan  # noqa: E402
 from clipper.kcfg import load_cfg  # noqa: E402
+from clipper.env import load_env  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.speech_edit import apply_overrides  # noqa: E402
 from clipper.edit import EditError, default_edit, edit_window, validate_edit, validate_item  # noqa: E402
@@ -46,11 +48,44 @@ from clipper.peaks import hhmmss  # noqa: E402
 from clipper.subtitles import (STRIP_PUNCT, StyleError, apply_corrections, build_events, get_style,  # noqa: E402
                                load_config, lore_keywords, validate_style)
 from clipper.media import probe_duration  # noqa: E402
-from clipper.quality import quality_report, write_report  # noqa: E402
+from clipper.quality import probe as probe_media, quality_report, write_report  # noqa: E402
 from clipper.schedule import for_pack, append_description  # noqa: E402
 from cut import cut_one, pieces, probe_size  # noqa: E402
 
 FPS = 30
+
+
+def restore_source_audio(source: Path, rendered: Path, duration: float) -> bool:
+    """Recover a truncated Remotion audio track for a main-only composition."""
+    def timing(info, kind):
+        stream = next((s for s in (info or {}).get("streams", []) if s.get("codec_type") == kind), {})
+        try:
+            start, length = float(stream["start_time"]), float(stream["duration"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        return (start, length) if math.isfinite(start) and math.isfinite(length) and length > 0 else None
+
+    current = probe_media(rendered)
+    audio = timing(current, "audio")
+    if audio and audio[0] + audio[1] >= duration - 0.25:
+        return False
+    video = timing(current, "video")
+    original = timing(probe_media(source), "audio")
+    tolerance = 1 / FPS
+    if (not video or not original or abs(video[0]) > tolerance or abs(original[0]) > tolerance
+            or abs(video[1] - duration) > tolerance or sum(original) < duration - tolerance):
+        return False
+
+    with tempfile.TemporaryDirectory(prefix=".restore-audio-", dir=rendered.parent) as directory:
+        output = Path(directory) / rendered.name
+        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-xerror", "-i", str(rendered),
+                        "-i", str(source), "-map", "0:v:0", "-map", "1:a:0", "-c", "copy",
+                        "-t", f"{duration:.6f}", "-movflags", "+faststart", str(output)], check=True, timeout=120)
+        restored = timing(probe_media(output), "audio")
+        if not restored or abs(restored[0]) > tolerance or abs(sum(restored) - duration) > tolerance:
+            raise ValueError("恢复的原声音轨未覆盖成片时长")
+        output.replace(rendered)
+    return True
 
 
 def stickers_dir() -> Path:
@@ -59,16 +94,6 @@ def stickers_dir() -> Path:
 
 def fonts_dir() -> Path:
     return Path(os.environ.get("KIYA_FONTS") or REPO / "fonts")
-
-
-def load_env() -> None:
-    """读仓库根目录 .env（REMOTION_BROWSER 等），后台调用时也能拿到。"""
-    env = REPO / ".env"
-    if env.exists():
-        for line in env.read_text(encoding="utf-8").splitlines():
-            m = re.match(r"\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$", line)
-            if m and m.group(1) not in os.environ and m.group(2):
-                os.environ[m.group(1)] = m.group(2).strip('"').strip("'")
 
 
 def render_cmd() -> list[str]:
@@ -216,16 +241,19 @@ def main() -> int:
                         "size": Path(s["video"]).stat().st_size if Path(s["video"]).exists() else None,
                         "mtime_ns": Path(s["video"]).stat().st_mtime_ns if Path(s["video"]).exists() else None} for s in data["segments"]]
     parts = [part for a, b in kept for part in pieces(data["segments"], a, b)]
-    rm_tag = "_v3_" + hashlib.sha256(json.dumps([t_start, t_end, removed, source_revision], sort_keys=True).encode()).hexdigest()[:16]
+    cache_version = "_v4_" if len(parts) > 1 else "_v3_"
+    rm_tag = cache_version + hashlib.sha256(json.dumps([t_start, t_end, removed, source_revision], sort_keys=True).encode()).hexdigest()[:16]
     src = work / f"src_{args.rank:02d}_{t_start:.1f}_{t_end:.1f}{rm_tag}_{args.height}.mp4"
-    if not src.exists():
-        parts = [part for a, b in kept for part in pieces(data["segments"], a, b)]
+    if not src.is_file() or not src.stat().st_size:
         if not parts:
             print("找不到对应的录像文件（可能已同步到 OSS 并从本地删除）", file=sys.stderr)
             return 1
         work.mkdir(parents=True, exist_ok=True)
         t0 = time.time()
-        cut_one(parts, src, False, args.height, None, removed)
+        with tempfile.TemporaryDirectory(prefix=".source-", dir=work) as tmp:
+            pending = Path(tmp) / src.name
+            cut_one(parts, pending, False, args.height, None, removed)
+            pending.replace(src)
         print(f"源视频已剪好（{time.time() - t0:.0f} 秒）")
     width, height = probe_size(src)
 
@@ -375,6 +403,9 @@ def main() -> int:
         print("渲染失败（看上面 Remotion 的输出）", file=sys.stderr)
         return 1
     if not partial:
+        if not bgm and not callback and not schedule["enabled"]:
+            if restore_source_audio(src, tmp, props["mainDuration"]):
+                print("Remotion 音轨提前结束，已从拼接源视频恢复原声")
         # Record the new file before replacing the video. An interrupted replacement
         # leaves a detectable mismatch, never a new outro without its matching receipt.
         metadata = out.with_suffix(".schedule.json")

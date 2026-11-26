@@ -64,10 +64,13 @@ public class SessionService {
     private final ProcessRunner runner;
     private final ObjectMapper om;
     private final MemoryService memory;
+    private final OperationsQueueService operationsQueue;
 
     public SessionService(LiveSessionMapper sessions, CandidateMapper candidates, WorkerPaths paths,
-                          ProcessRunner runner, ObjectMapper om, MemoryService memory) {
+                          ProcessRunner runner, ObjectMapper om, MemoryService memory,
+                          OperationsQueueService operationsQueue) {
         this.memory = memory;
+        this.operationsQueue = operationsQueue;
         this.sessions = sessions;
         this.candidates = candidates;
         this.paths = paths;
@@ -164,6 +167,9 @@ public class SessionService {
                 a[1]++;
             }
         }
+        Map<String, Map<String, Object>> operationStates = operationsQueue.list();
+        operationStates.keySet().forEach(name -> byName.computeIfAbsent(name,
+                key -> new LinkedHashMap<>(Map.of("name", key))));
         List<Map<String, Object>> out = new ArrayList<>(byName.values());
         for (Map<String, Object> m : out) {
             String name = (String) m.get("name");
@@ -178,6 +184,7 @@ public class SessionService {
             int[] a = marks.getOrDefault(name, new int[2]);
             m.put("reviewed", a[0]);
             m.put("funny", a[1]);
+            m.put("operations", operationStates.getOrDefault(name, Map.of("status", "verify")));
         }
         out.sort(Comparator.comparing((Map<String, Object> m) -> (String) m.get("name")).reversed());
         return out;

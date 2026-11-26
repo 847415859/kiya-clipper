@@ -428,6 +428,8 @@ python scripts/publish_pack.py output/<场次>/candidates.json --rank 3 --cover-
 
 发布卡片的“一键发布到 B站”按钮 → 弹窗里选怎么发 → 后台任务“发布到B站”调用 `scripts/publish_bili.py`，用 biliup 命令行上传成片、封面及发布包里的标题、简介和标签。画质由 `publish.bili.height` 控制，默认 720p。投稿类型由 `publish.bili.copyright` 控制，默认“自制”，配置“转载”时须有直播间来源。分区由 `publish.bili.tid` 控制。
 
+手动投稿发现缺少单独的内容审核记录时，报告会提示。明确未通过的检查仍阻止提交。无人值守的调用需要使用 `--automated-submission` 启用严格内容审核。预演始终跳过上传，存在阻塞项时以失败退出并在日志中列出原因。
+
 | 方式 | 做什么 |
 | --- | --- |
 | 先放着（默认） | 定时发布设到 `hold_days`（14）天后，创作中心里能改时间 / 撤回，相当于草稿 |

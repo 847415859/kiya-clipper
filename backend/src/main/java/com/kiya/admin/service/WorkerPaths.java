@@ -98,6 +98,12 @@ public class WorkerPaths {
 
     public Path overridesFile() { return streamerStateFile("admin_overrides.json"); }
     public Path recDir() { return Path.of(props.getRecDir()).toAbsolutePath().normalize(); }
+    public Path operationsRoot() {
+        String configured = props.getOpsDir();
+        return (configured == null || configured.isBlank()
+                ? worker().resolve("output").resolve("_operations") : Path.of(configured))
+                .toAbsolutePath().normalize();
+    }
     public Path jobLogs() { return output().resolve("_jobs"); }
     public Path previewDir() { return output().resolve("_preview"); }
 

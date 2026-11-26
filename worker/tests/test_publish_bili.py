@@ -200,6 +200,10 @@ def test_preflight_refuses_missing_cover_and_unconfirmed_review(tmp_path):
     assert r.returncode == 2 and "封面" in r.stderr
     assert "字幕检查未通过" in r.stderr
     assert not (tmp_path / "log.txt").exists()
+    preview = run(sess, cfg, env, "--dry-run")
+    assert preview.returncode == 2 and not last(preview)["preflight"]["ok"]
+    assert "封面不存在或为空" in preview.stderr and "字幕检查未通过" in preview.stderr
+    assert not (sess / "publish" / "01.bili.json").exists()
 
 
 def test_dry_run_shows_final_video_description_and_preflight(tmp_path):
@@ -219,8 +223,10 @@ def test_confirm_review_applies_to_one_attempt_and_does_not_override_failed_chec
     pack_path.write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
     flags = [item for key in pb.REVIEW_CHECKS for item in ("--confirm-review", key)]
 
-    r = run(sess, cfg, env, "--dry-run")
-    assert not last(r)["preflight"]["ok"]
+    r = run(sess, cfg, env, "--dry-run", "--automated-submission")
+    assert r.returncode == 2 and not last(r)["preflight"]["ok"]
+    assert "发布前检查未通过" in r.stderr
+    assert not (sess / "publish" / "01.bili.json").exists()
     r = run(sess, cfg, env, "--dry-run", *flags)
     report = last(r)["preflight"]
     assert report["ok"]
@@ -242,9 +248,10 @@ def test_manual_submission_allows_missing_review_but_still_blocks_failed_review(
         pack.pop(key)
     pack_path.write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
 
-    r = run(sess, cfg, env, "--mode", "now")
+    r = run(sess, cfg, env, "--mode", "now", "--automated-submission")
     assert r.returncode == 2 and "字幕尚未确认" in r.stderr
-    r = run(sess, cfg, env, "--dry-run", "--manual-submission")
+    r = run(sess, cfg, env, "--dry-run")
+    assert r.returncode == 0, r.stderr
     report = last(r)["preflight"]
     assert report["ok"]
     assert all(report["checks"][key]["status"] == "warning" for key in pb.REVIEW_CHECKS)

@@ -185,7 +185,8 @@ class LLMClient:
             time.sleep(2 ** i)
         raise RuntimeError(f"重试 {self.max_retries} 次仍失败：{last}")
 
-    def chat_json(self, messages: list, schema: type[BaseModel], tag: str = "", extra: dict | None = None) -> LLMResult:
+    def chat_json(self, messages: list, schema: type[BaseModel], tag: str = "", extra: dict | None = None,
+                  *, retry_invalid: bool = True) -> LLMResult:
         """请求并按 schema 校验；输出不合法时带着错误重试一次。tag / extra 只参与缓存键（例如提示词版本）。"""
         extra = dict(extra or {}, tag=tag, schema=schema.__name__)
         if self.request_options:
@@ -204,7 +205,7 @@ class LLMClient:
         msgs = list(messages)
         usage_total: dict = {}
         raw, err = "", None
-        for attempt in (1, 2):
+        for attempt in range(1, 3 if retry_invalid else 2):
             try:
                 raw, usage = self._post(msgs)
             except RuntimeError as e:

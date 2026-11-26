@@ -130,13 +130,14 @@ def test_render_pipeline(tmp_path, manual):
     assert r.returncode == 0 and "源视频已剪好" not in r.stdout
 
 
-def test_cut_across_segments_is_frame_accurate(tmp_path):
+@pytest.mark.parametrize("second_size", ["320x180", "250x200"])
+def test_cut_across_segments_is_frame_accurate(tmp_path, second_size):
     """跨两个录像分段的片段：两段各自精确定位后拼接，总时长准确。"""
     sys.path.insert(0, str(ROOT / "scripts"))
-    from cut import cut_one
+    from cut import cut_one, probe_size
     a, b = tmp_path / "a.flv", tmp_path / "b.flv"
-    for f, c in ((a, "red"), (b, "blue")):     # GOP 很长（250 帧），旧做法会多出十几秒
-        subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"color=c={c}:s=320x180:r=10:d=40",
+    for f, c, size in ((a, "red", "320x180"), (b, "blue", second_size)):     # GOP 很长（250 帧），旧做法会多出十几秒
+        subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"color=c={c}:s={size}:r=10:d=40",
                         "-f", "lavfi", "-i", "sine=d=40", "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
                         "-c:a", "aac", str(f)], check=True)
     out = tmp_path / "x.mp4"
@@ -144,6 +145,28 @@ def test_cut_across_segments_is_frame_accurate(tmp_path):
     dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(out)],
                                capture_output=True, text=True).stdout)
     assert 24.8 <= dur <= 25.3
+    assert probe_size(out) == (320, 180)
+
+
+def test_restore_source_audio_uses_original_audio_without_reencoding_video(tmp_path):
+    from scripts.render import restore_source_audio
+
+    source = tmp_path / "source.mp4"
+    rendered = tmp_path / "rendered.mp4"
+    for path, tone, audio_length in ((source, 440, 3), (rendered, 880, 1.5)):
+        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=s=160x90:r=30:d=3",
+                        "-f", "lavfi", "-i", f"sine=frequency={tone}:duration={audio_length}",
+                        "-c:v", "libx264", "-c:a", "aac", str(path)], check=True)
+
+    def checksum(path, stream):
+        return subprocess.check_output(["ffmpeg", "-nostdin", "-v", "error", "-i", str(path),
+                                        "-map", stream, "-c", "copy", "-f", "hash", "-"])
+
+    video_before = checksum(rendered, "0:v:0")
+    assert restore_source_audio(source, rendered, 3)
+    assert checksum(rendered, "0:v:0") == video_before
+    assert checksum(rendered, "0:a:0") == checksum(source, "0:a:0")
+    assert not restore_source_audio(source, rendered, 3)
 
 
 def test_window_beyond_candidate(tmp_path):

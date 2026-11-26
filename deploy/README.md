@@ -107,7 +107,9 @@ sudo crontab -e
 7 * * * * REC_DIR=/data/rec OSS_REMOTE=oss:<bucket>/rec /opt/kiya-clipper/deploy/recorder/sync_to_oss.sh >> /var/log/kiya-sync.log 2>&1
 ```
 
-脚本会把写完的文件复制到 OSS，并删掉本地超过 3 天的视频；弹幕 XML 很小，一直留在本地，方便直接分析。
+脚本先把修改时间超过 10 分钟的文件复制到 OSS。本地录像按磁盘余量保留，低于 `REC_MIN_FREE_GIB`（默认 8 GiB）时，每次最多清理一个最老场次的本地 FLV。场次按同一房间的弹幕 XML 开录时间归组，最近两小时有文件变动时暂缓清理。删除前逐段校验 OSS 内容，弹幕 XML 保留。旧的 `KEEP_DAYS` 参数可从 cron 移除。
+
+在同步命令末尾加 `--plan` 可以只查看余量及本次将按规则选择的场次，不上传或删除文件。
 
 ## 第 7 步：第一场录完后检查
 

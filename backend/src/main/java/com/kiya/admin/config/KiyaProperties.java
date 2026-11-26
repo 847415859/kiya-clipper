@@ -7,6 +7,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class KiyaProperties {
     private String repoDir = "/opt/kiya-clipper";
     private String recDir = "/data/rec";
+    private String opsDir = "";
+    private boolean opsRecoveryEnabled;
     private String streamer = "kiya";
     private String python = "";
     private String adminUsername = "admin";
@@ -17,6 +19,10 @@ public class KiyaProperties {
     public void setRepoDir(String repoDir) { this.repoDir = repoDir; }
     public String getRecDir() { return recDir; }
     public void setRecDir(String recDir) { this.recDir = recDir; }
+    public boolean isOpsRecoveryEnabled() { return opsRecoveryEnabled; }
+    public void setOpsRecoveryEnabled(boolean enabled) { this.opsRecoveryEnabled = enabled; }
+    public String getOpsDir() { return opsDir; }
+    public void setOpsDir(String opsDir) { this.opsDir = opsDir; }
     public String getStreamer() { return streamer; }
     public void setStreamer(String streamer) { this.streamer = streamer; }
     public String getPython() { return python; }

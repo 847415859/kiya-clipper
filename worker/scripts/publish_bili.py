@@ -403,10 +403,12 @@ def run(args: argparse.Namespace) -> dict:
     preflight_result = preflight(pack, video, cover, schedule, final_description,
                                  getattr(args, "confirm_review", ()),
                                  manual_submission=getattr(args, "manual_submission", False))
-    if not preflight_result["ok"] and not args.dry_run:
+    if not preflight_result["ok"]:
         failed = [v["message"] for v in preflight_result["checks"].values()
                   if v["status"] in ("error", "pending")]
-        raise Refuse("发布前检查未通过：" + "；".join(failed))
+        failure = "发布前检查未通过：" + "；".join(failed)
+        if not args.dry_run:
+            raise Refuse(failure)
     bin_ = biliup_bin()
     ck = cookie_path(bc, streamer_from_session_dir(sess))
     mode_text = {"hold": f"先放着（{parse_at(dtime):%m-%d %H:%M} 定时，可在创作中心改 / 撤回）" if dtime else "",
@@ -424,6 +426,8 @@ def run(args: argparse.Namespace) -> dict:
     if args.dry_run:
         cmd = build_cmd(bin_ or "biliup", ck, video, pack, cover if cover.exists() else None, bc, dtime, extra)
         base.update(status="dry_run", command=mask(cmd), biliup=bin_ is not None, logged_in=ck.is_file() and not read_credential(ck).get("disabled"))
+        if not preflight_result["ok"]:
+            base["preflight_failure"] = failure
         print("预演（不会上传）：")
         print("最终视频：" + str(video))
         print("最终简介：\n" + pack["description"])
@@ -478,8 +482,12 @@ def main() -> int:
     ap.add_argument("--at", help="定时发布时间 2026-11-20T20:00（北京时间）")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--allow-taboo", action="store_true")
-    ap.add_argument("--manual-submission", action="store_true",
-                    help="手动投稿时，缺少单独内容审核记录只提示，已确认的问题仍拦截")
+    submission = ap.add_mutually_exclusive_group()
+    submission.add_argument("--manual-submission", dest="manual_submission", action="store_true",
+                            help="手动投稿（默认），缺少单独内容审核记录只提示")
+    submission.add_argument("--automated-submission", dest="manual_submission", action="store_false",
+                            help="无人值守时要求三项内容审核均有通过记录")
+    ap.set_defaults(manual_submission=True)
     ap.add_argument("--confirm-review", action="append", choices=REVIEW_CHECKS, default=[],
                     help="人工已核对的本次投稿检查项，可重复提供")
     ap.add_argument("--again", action="store_true", help="已经投过也再投一次")
@@ -514,7 +522,10 @@ def main() -> int:
     if res["status"] != "dry_run":
         out = Path(args.candidates).parent / "publish" / f"{args.rank:02d}.bili.json"
         save_result(out, res)
-    print(json.dumps(res, ensure_ascii=False))
+    print(json.dumps(res, ensure_ascii=False), flush=True)
+    if res["status"] == "dry_run" and not res["preflight"]["ok"]:
+        print(res["preflight_failure"], file=sys.stderr)
+        return 2
     return 0 if res["status"] in ("ok", "dry_run") else 1
 
 

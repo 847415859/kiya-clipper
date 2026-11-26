@@ -96,12 +96,27 @@ def cut_one(parts: list[tuple[Path, float, float]], dst: Path, fast: bool, heigh
     # 每段用输入端 -ss 精确定位（重新编码时 ffmpeg 会解码到准确的帧），再用 concat 滤镜拼接。
     # 不用 concat 分离器的 inpoint：那样会从起点前最近的关键帧开始，片段会多出 1–2 秒，字幕就对不上了。
     inputs, chains = [], []
+    filters = []
+    multi = len(parts) > 1
+    if multi:
+        first_width, first_height = probe_size(parts[0][0])
+        canvas_height = max(2, min(height, first_height) // 2 * 2)
+        canvas_width = max(2, round(first_width * canvas_height / first_height / 2) * 2)
+        fit = (f"scale='trunc(min({canvas_width},{canvas_height}*dar)/2)*2':"
+               f"'trunc(min({canvas_height},{canvas_width}/dar)/2)*2',"
+               f"pad={canvas_width}:{canvas_height}:(ow-iw)/2:(oh-ih)/2,setsar=1")
     for i, (v, a, b) in enumerate(parts):
+        if multi:
+            # 分辨率切换时保持拼接滤镜状态，缩放滤镜逐帧适配来帧尺寸。
+            inputs += ["-reinit_filter:v", "0"]
+            filters.append(f"[{i}:v:0]{fit}[in{i}]")
         inputs += ["-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-i", str(v)]
-        chains.append(f"[{i}:v:0][{i}:a:0]")
-    vf = f"scale=-2:'min({height},ih)'" + (f",{ass_filter(ass)}" if ass else "")
-    fc = "".join(chains) + f"concat=n={len(parts)}:v=1:a=1[cv][ca];[cv]{vf}[v]"
-    cmd = [ff, "-nostdin", "-loglevel", "error", "-y", *inputs, "-filter_complex", fc, "-map", "[v]", "-map", "[ca]",
+        chains.append((f"[in{i}]" if multi else f"[{i}:v:0]") + f"[{i}:a:0]")
+    vf = "null" if multi else f"scale=-2:'min({height},ih)'"
+    if ass:
+        vf += f",{ass_filter(ass)}"
+    filters += ["".join(chains) + f"concat=n={len(parts)}:v=1:a=1[cv][ca]", f"[cv]{vf}[v]"]
+    cmd = [ff, "-nostdin", "-loglevel", "error", "-y", *inputs, "-filter_complex", ";".join(filters), "-map", "[v]", "-map", "[ca]",
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-b:a", "128k",
            "-movflags", "+faststart", str(dst)]
     subprocess.run(cmd, check=True)
