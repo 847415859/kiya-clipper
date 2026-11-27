@@ -166,7 +166,7 @@ def repair(edit, decision, evidence, mapping, transcript=None):
                     fail('subtitle layout needs a changed position')
                 if any(not number(override[k]) or not .05 <= override[k] <= .95 for k in keys):
                     fail('subtitle position outside supported bounds')
-                if override.get('parts') != previous.get('parts'):
+                if 'parts' in override and override['parts'] != previous.get('parts'):
                     fail('layout action may not change subtitle splitting')
             else:
                 parts = override.get('parts')
@@ -204,6 +204,10 @@ def repair(edit, decision, evidence, mapping, transcript=None):
         merged_override = {**previous, **override}
         if action in {'shorten_subtitle', 'correct_subtitle', 'adjust_subtitle_timing'}:
             merged_override.pop('parts', None)
+        try:
+            merged_override, = validate_overrides([merged_override])
+        except (ValueError, TypeError):
+            fail('combined subtitle revision is invalid')
         subs['sentence_overrides'] = [r for r in overrides if (r['t0'], r['t1']) != (a, b)] + [merged_override]
     elif action == 'extend_tail':
         source_end = decision['source_end']

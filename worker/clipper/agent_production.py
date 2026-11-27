@@ -302,6 +302,7 @@ class Production:
                     raise Review('draft snapshot changed')
                 if not manifest.exists():
                     save(manifest, record)
+                state.commit(working_version=record['id'])
                 def render_version():
                     target = version
                     if (version / 'final').exists():
