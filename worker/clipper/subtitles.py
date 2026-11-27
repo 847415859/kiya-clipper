@@ -185,23 +185,39 @@ def build_events(sentences: list[dict], start: float, end: float, style: dict,
     for s in sentences:
         if s["t1"] <= start or s["t0"] >= end:
             continue
-        for c in chunk_sentence(s, style["max_chars"]):
+        # Explicit subclauses are already timed against the bound sentence. Do not
+        # auto-split them or synthesize word alignment from their display times.
+        explicit_parts = s.get("parts") if s.get("subtitle_manual") else None
+        chunks = explicit_parts or chunk_sentence(s, style["max_chars"])
+        for c in chunks:
             if c["t1"] <= start or c["t0"] >= end:
                 continue
-            ws = [[max(0.0, a - start), max(0.0, b - start), t] for a, b, t in c["words"]]
+            ws = [[max(0.0, a - start), max(0.0, b - start), t] for a, b, t in c.get("words", [])]
             event = {"t0": max(0.0, c["t0"] - start), "t1": min(end, c["t1"]) - start, "words": ws}
             if s.get("subtitle_manual"):
                 event["manual"] = True
+                # Manual display intervals, including each explicit part, are hard
+                # bounds: automatic anti-flicker padding must not extend them.
+                event["display_end"] = min(end, s["t1"]) - start
+            if explicit_parts:
+                event.update(text=c["text"], explicit_part=True)
+            for axis in ("display_x", "display_y"):
+                if axis in s:
+                    event[axis] = s[axis]
             events.append(event)
     events.sort(key=lambda e: e["t0"])
     # 时长下限 + 相邻条之间的小空隙补齐（减少闪烁），且不与下一条重叠
     for i, e in enumerate(events):
+        if e.get("explicit_part"):
+            continue
         nxt = events[i + 1]["t0"] if i + 1 < len(events) else end - start
         if nxt - e["t1"] < 0.3:
             e["t1"] = nxt
         e["t1"] = min(max(e["t1"], e["t0"] + style["min_duration"]), max(nxt, e["t0"] + 0.2))
+        if "display_end" in e:
+            e["t1"] = min(e["t1"], e["display_end"])
     for e in events:
-        text = "".join(w[2] for w in e["words"])
+        text = e["text"] if e.get("explicit_part") else "".join(w[2] for w in e["words"])
         text = apply_corrections(text, None if e.get("manual") else corrections)
         if style["strip_punct"]:
             text = text.strip().rstrip(STRIP_PUNCT).replace("，", " ").replace(",", " ").replace("。", " ")
@@ -295,9 +311,16 @@ def to_ass(events: list[dict], style: dict, width: int = 1920, height: int = 108
     for e in events:
         text = _karaoke(e, corrections, style["strip_punct"]) if style["karaoke"] and not e.get("manual") else _highlight(e["text"], kw, hl, ass_color(primary))
         t0, t1 = ass_time(e["t0"]), ass_time(e["t1"])
+        position = ""
+        if "display_x" in e or "display_y" in e:
+            default_y = {"bottom": PLAY_RES_Y - style["margin_v"],
+                         "middle": PLAY_RES_Y / 2, "top": style["margin_v"]}[style["position"]]
+            x = round(e.get("display_x", 0.5) * play_x)
+            y = round(e["display_y"] * PLAY_RES_Y) if "display_y" in e else round(default_y)
+            position = f"{{\\pos({x},{y})}}"
         if style["box"]:
-            lines.append(f"Dialogue: 0,{t0},{t1},Box,,0,0,0,,{_esc(e['text'])}")
-        lines.append(f"Dialogue: 1,{t0},{t1},Default,,0,0,0,,{text}")
+            lines.append(f"Dialogue: 0,{t0},{t1},Box,,0,0,0,,{position}{_esc(e['text'])}")
+        lines.append(f"Dialogue: 1,{t0},{t1},Default,,0,0,0,,{position}{text}")
     return "\n".join(head + lines) + "\n"
 
 

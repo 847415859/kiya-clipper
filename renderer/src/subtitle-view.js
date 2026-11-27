@@ -7,6 +7,15 @@ export function subtitleView(subs, t, width, height) {
   const k = height / 1080, pos = style.position || 'bottom';
   const wrap = {position: 'absolute', left: style.margin_h * k, right: style.margin_h * k, display: 'flex', justifyContent: 'center',
     ...(pos === 'top' ? {top: style.margin_v * k} : pos === 'middle' ? {top: 0, bottom: 0, alignItems: 'center'} : {bottom: style.margin_v * k})};
+  // Per-sentence normalized coordinates are a targeted override, not a global style edit.
+  if (Number.isFinite(ev.display_x)) {
+    const available = Math.max(0, Math.min(ev.display_x, 1 - ev.display_x) * 2 * width - style.margin_h * k * 2);
+    Object.assign(wrap, {left: ev.display_x * width, right: 'auto', width: available, transform: 'translateX(-50%)'});
+  }
+  if (Number.isFinite(ev.display_y)) {
+    Object.assign(wrap, {top: ev.display_y * height, bottom: 'auto', alignItems: 'center',
+      transform: `${Number.isFinite(ev.display_x) ? 'translateX(-50%) ' : ''}translateY(-50%)`});
+  }
   const text = {fontFamily: `"${style.font}", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif`,
     fontSize: style.font_size * k, fontWeight: style.bold ? 800 : 500, letterSpacing: (style.spacing || 0) * k,
     color: style.color, lineHeight: 1.25, textAlign: 'center', whiteSpace: 'pre-wrap', maxWidth: width - 2 * style.margin_h * k};

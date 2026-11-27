@@ -76,3 +76,25 @@ def test_save_validation_preserves_overrides_and_reports_stale_transcript(tmp_pa
     assert saved["edit"]["subtitles"]["sentence_overrides"] == [ROW] and not saved["warnings"]
     transcript.write_text('{"sentences": []}', encoding="utf-8")
     assert any("无法匹配" in warning for warning in check()["warnings"])
+
+
+
+def test_display_timing_keeps_original_binding_and_changes_render_event():
+    row = dict(ROW, display_t0=99.8, display_t1=104.2)
+    validated = validate_overrides([row])
+    assert validated == [row]
+    corrected, stale = apply_overrides([SENTENCE], validated)
+    assert not stale and corrected[0]['t0'] == 99.8 and corrected[0]['t1'] == 104.2
+    assert SENTENCE['t0'] == 100
+    events = subtitle_events([SENTENCE], 99, 106, validate_style({}), {}, validated)
+    assert events[0]['t0'] == pytest.approx(.8)
+    assert events[0]['t1'] == pytest.approx(5.2)
+    changed = dict(SENTENCE, t0=100.001)
+    result, stale = apply_overrides([changed], validated)
+    assert result == [changed] and stale == validated
+
+
+@pytest.mark.parametrize('changes', [{'display_t0': 100}, {'display_t0': True, 'display_t1': 105}, {'display_t0': 105, 'display_t1': 100}])
+def test_invalid_display_timing_rejected(changes):
+    with pytest.raises(ValueError):
+        validate_overrides([dict(ROW, **changes)])
