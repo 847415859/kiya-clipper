@@ -92,12 +92,19 @@ def main():
             page.evaluate('document.querySelectorAll(".compare-grid video")[0].currentTime = 0')
             page.get_by_role('button', name='按原片锚点同步').click()
             page.set_viewport_size({'width': 390, 'height': 844})
-            page.screenshot(path=str(OUT / 'acceptance-mobile.png'), full_page=True)
+            comparison = page.locator('.version-compare')
+            comparison.scroll_into_view_if_needed()
+            assert comparison.evaluate("""el => [...el.querySelectorAll('.compare-controls button, .compare-grid video')]
+                .every(child => {
+                    const bounds = child.getBoundingClientRect()
+                    return bounds.left >= -1 && bounds.right <= window.innerWidth + 1
+                })"""), 'Mobile comparison buttons or video overflow the viewport'
+            comparison.screenshot(path=str(OUT / 'acceptance-mobile.png'), animations='disabled')
             assert not errors, errors
             browser.close()
         (OUT / 'browser-result.json').write_text(json.dumps({'passed': True, 'evidence_type': 'synthetic-api-and-media',
             'assertions': ['two version players', 'historical 7s maps current 2s', 'stable ID edit diff', 'GET only',
-                           'desktop/mobile screenshots', 'no browser errors'], 'requests': requests, 'errors': errors}, ensure_ascii=False, indent=2), encoding='utf-8')
+                           'mobile comparison fits viewport', 'desktop/mobile screenshots', 'no browser errors'], 'requests': requests, 'errors': errors}, ensure_ascii=False, indent=2), encoding='utf-8')
     finally:
         server.shutdown()
     print('PASS offline browser comparison: historical 7s -> current 2s; GET-only; screenshots saved')
