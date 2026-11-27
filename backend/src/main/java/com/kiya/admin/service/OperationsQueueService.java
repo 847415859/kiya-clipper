@@ -55,6 +55,67 @@ public class OperationsQueueService {
 
     public Map<String, Object> productionOverview() { return overview(paths.operationsRoot(), MissingNode.getInstance()); }
 
+    // Historical tasks have explicit identities, never monitor/recording name matching.
+    public Map<String, Object> historicalDetail(Path root, String id, String session) {
+        Entry entry = new Entry(root, root.resolve("queue").resolve(id + ".json"), id + ".json", session,
+                read(root.resolve("queue").resolve(id + ".json")), read(root.resolve("status").resolve(id + ".json")), true);
+        Catalog catalog = new Catalog(root, false, List.of(entry), List.of(), List.of());
+        Map<String, Object> result = new LinkedHashMap<>(view(session, catalog));
+        result.remove("action");
+        result.put("timeline", timeline(catalog, session));
+        List<Map<String, Object>> historicalRows = candidateRows(entry, session);
+        for (Map<String, Object> row : historicalRows) {
+            int rank = (Integer) row.get("rank");
+            Path dir = candidateDir(entry, rank);
+            JsonNode candidate = read(dir.resolve("state.json"));
+            String currentVersion = candidate.path("current_version").asText();
+            Path scoped = historicalVersion(dir, currentVersion, root);
+            if ("fixture".equals(entry.job().path("mode").asText())) { row.put("playable", false); row.put("accepted", false); row.put("simulation", true); }
+            if (scoped != null) {
+                Historical current = historical(candidate, dir, scoped, currentVersion);
+                row.put("previewPlayable", current.playable()); row.put("simulation", current.simulation()); row.put("accepted", false);
+                if (Boolean.TRUE.equals(current.simulation()) || "fixture".equals(entry.job().path("mode").asText())) row.put("playable", false);
+                row.put("review", current.review()); row.put("quality", current.quality()); row.put("evidence", current.receipt());
+            }
+        }
+        result.put("candidates", historicalRows);
+        if ("fixture".equals(entry.job().path("mode").asText())) {
+            result.put("clipCount", 0);
+            result.put("previewClipCount", historicalRows.stream().filter(r -> Boolean.TRUE.equals(r.get("previewPlayable"))).count());
+        }
+        JsonNode state = entry.state();
+        if (state.path("reason").isTextual() && !state.path("reason").asText().isBlank()) {
+            result.put("blocker", state.path("reason").asText()); result.put("message", state.path("reason").asText());
+        }
+        if (state.path("phase").isTextual()) result.put("currentStep", state.path("phase").asText());
+        if (!state.path("events").isArray()) {
+            Map<String, Object> event = new LinkedHashMap<>();
+            event.put("stage", state.path("phase").asText(state.path("stage").asText("queue")));
+            event.put("status", state.path("status").asText("queued"));
+            event.put("at", state.path("updated_at").asText(modified(entry.file()).toString()));
+            event.put("reason", state.path("reason").asText(state.path("error").asText("")));
+            result.put("timeline", List.of(event));
+        }
+        return sanitized(result);
+    }
+
+    public Path historicalMedia(Path root, String id, String session, int rank, String version) {
+        Entry entry = new Entry(root, root.resolve("queue").resolve(id + ".json"), id + ".json", session,
+                read(root.resolve("queue").resolve(id + ".json")), read(root.resolve("status").resolve(id + ".json")), true);
+        Path dir = candidateDir(entry, rank);
+        if (version == null) {
+            Path current = inventoryMedia(entry, dir);
+            if (current != null) return current;
+            version = read(dir.resolve("state.json")).path("current_version").asText();
+        }
+        Path scoped = historicalVersion(dir, version, root);
+        if (scoped != null) {
+            Historical result = historical(read(dir.resolve("state.json")), dir, scoped, version);
+            if (result.playable()) return result.media();
+        }
+        throw ApiException.notFound("历史试跑媒体或报告绑定无效");
+    }
+
     public Map<String, Object> acceptanceOverview() {
         Path directory = acceptanceDirectory();
         return overview(directory.resolve("operations"), read(directory.resolve("monitor-state.json")));

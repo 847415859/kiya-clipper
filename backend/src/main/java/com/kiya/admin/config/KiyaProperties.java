@@ -10,6 +10,13 @@ public class KiyaProperties {
     private String opsDir = "";
     private String acceptanceDir = "/var/lib/kiya-next-session-acceptance";
     private boolean opsRecoveryEnabled;
+    private boolean historicalTrialFixtureEnabled;
+    /** Shared POSIX group, restricted to acceptanceDir/history. Ignored on non-POSIX filesystems. */
+    private String historicalTrialGroup = "kiya";
+    public String getHistoricalTrialGroup() { return historicalTrialGroup; }
+    public void setHistoricalTrialGroup(String group) { historicalTrialGroup = group; }
+    public boolean isHistoricalTrialFixtureEnabled() { return historicalTrialFixtureEnabled; }
+    public void setHistoricalTrialFixtureEnabled(boolean enabled) { historicalTrialFixtureEnabled = enabled; }
     private String streamer = "kiya";
     private String python = "";
     private String adminUsername = "admin";

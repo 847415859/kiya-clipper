@@ -6,7 +6,7 @@
         <p class="muted">只读验收：刷新、展开和播放不会入队、续跑、付费或发布。</p>
       </div>
       <span class="spacer" />
-      <el-radio-group v-model="source" :disabled="loading || drawer" @change="changeSource"><el-radio-button value="acceptance">隔离验收队列</el-radio-button><el-radio-button value="production">生产队列</el-radio-button></el-radio-group>
+      <el-radio-group v-model="source" :disabled="loading" @change="changeSource"><el-radio-button value="acceptance">隔离验收队列</el-radio-button><el-radio-button value="production">生产队列</el-radio-button></el-radio-group>
       <el-button :loading="loading" @click="load">刷新验收</el-button>
       <el-button @click="router.push('/sessions')">返回场次</el-button>
     </div>
@@ -48,12 +48,23 @@
       </article>
     </section>
 
-    <el-drawer v-model="drawer" :title="`新场验收 · ${source === 'acceptance' ? '隔离' : '生产'} · ${name}`" size="min(880px, 100vw)" destroy-on-close @closed="detailRequestId++">
+    <section v-if="source === 'acceptance'" class="session-list">
+      <div class="section-title"><h3>历史场次隔离试跑</h3><span class="muted">独立任务历史 · 只读</span></div>
+      <el-alert v-if="trialListError" type="warning" :title="trialListError" :closable="false" />
+      <el-empty v-if="!tasks.length && !loading" description="暂无历史隔离试跑任务" />
+      <article v-for="task in tasks" :key="task.taskId" class="session-row">
+        <div class="row-main"><div class="row-title"><strong>{{ task.session }}</strong><el-tag :type="statusType(task.status)">{{ task.mode === 'fixture' && task.status === 'has_clips' ? '模拟试跑完成（非正式库存）' : statusLabel(task.status) }}</el-tag></div><p>{{ task.message || '等待任务更新' }}</p><div class="row-meta"><span>任务 {{ task.taskId }}</span><span>候选 #{{ task.rank }}</span><span>{{ stepLabel(task.currentStep) }}</span><span>{{ dateLabel(task.updatedAt || task.createdAt) }}</span></div></div>
+        <el-button type="primary" plain @click="openTask(task)">查看试跑详情</el-button>
+      </article>
+    </section>
+
+    <el-drawer v-model="drawer" :title="`新场验收 · ${source === 'acceptance' ? '隔离' : '生产'} · ${name}${selectedTaskId ? ' · ' + selectedTaskId : ''}`" size="min(880px, 100vw)" destroy-on-close @close="closeDetail">
+      <el-button :loading="detailLoading" @click="refreshDetail">刷新详情</el-button>
       <div v-loading="detailLoading" class="detail">
         <template v-if="detail">
-          <div class="detail-conclusion" :class="statusType(detail.status)"><span>当前结论</span><strong>{{ statusLabel(detail.status) }}</strong><p>{{ detail.message || '暂无说明' }}</p></div>
+          <div class="detail-conclusion" :class="statusType(detail.status)"><span>当前结论</span><strong>{{ selectedTaskId && detail.mode === 'fixture' && detail.status === 'has_clips' ? '模拟试跑完成（非正式库存）' : statusLabel(detail.status) }}</strong><p>{{ detail.message || '暂无说明' }}</p></div>
           <el-descriptions :column="2" border size="small">
-            <el-descriptions-item label="任务">{{ detail.jobId || '未入队 / 未记录' }}</el-descriptions-item>
+            <el-descriptions-item label="任务">{{ detail.taskId || detail.jobId || '未入队 / 未记录' }}</el-descriptions-item>
             <el-descriptions-item label="房间">{{ detail.room || '未知' }}</el-descriptions-item>
             <el-descriptions-item label="当前步骤">{{ detail.currentStep ? stepLabel(detail.currentStep) : '尚未领取' }}</el-descriptions-item>
             <el-descriptions-item label="最后更新">{{ detail.updatedAt ? dateLabel(detail.updatedAt) : '未知' }}</el-descriptions-item>
@@ -61,8 +72,8 @@
             <el-descriptions-item label="预算">{{ budgetText(detail.budget) }}</el-descriptions-item>
           </el-descriptions>
 
-          <h4>监控与入队匹配</h4>
-          <div class="match-box"><span>监控：{{ detail.monitor?.observed ? (detail.monitor.live == null ? '查询失败或状态未知' : detail.monitor.live ? '最近观察为直播中' : '最近观察为未直播') : '尚无轮询记录' }}</span><span>下播事件：{{ detail.match?.endedCount ? '已记录' : '未记录' }}</span><span>队列：{{ detail.match?.jobId || '未入队' }}</span><span>唯一匹配：{{ detail.match?.unique ? '是' : '待核对' }}</span></div>
+          <h4 v-if="!selectedTaskId">监控与入队匹配</h4>
+          <div v-if="!selectedTaskId" class="match-box"><span>监控：{{ detail.monitor?.observed ? (detail.monitor.live == null ? '查询失败或状态未知' : detail.monitor.live ? '最近观察为直播中' : '最近观察为未直播') : '尚无轮询记录' }}</span><span>下播事件：{{ detail.match?.endedCount ? '已记录' : '未记录' }}</span><span>队列：{{ detail.match?.jobId || '未入队' }}</span><span>唯一匹配：{{ detail.match?.unique ? '是' : '待核对' }}</span></div>
 
           <p v-if="detail.match?.endedAt" class="muted">监控观察下播时间：{{ dateLabel(detail.match.endedAt) }}</p>
           <p v-if="detail.blocker" class="blocker">当前卡点：{{ detail.blocker }}</p>
@@ -79,9 +90,10 @@
               <div v-if="item.review?.missingRepairFields" class="muted">审片记录缺少返修动作或成片区间；需要人工复核。</div>
               <div v-for="(finding, idx) in item.findings || []" :key="idx" class="muted">{{ rangeText(finding.range, finding.timeline) }}</div>
               <div class="reports"><div><b>审片（{{ item.review?.bound ? '当前版本' : '未绑定当前版本' }}）</b>：{{ reviewLabel(item.review) }}<span v-if="item.review?.range">（{{ rangeText(item.review.range, item.review.timeline) }}）</span><span v-if="item.review?.reason">；{{ item.review.reason }}</span></div><div><b>技术质检（{{ item.quality?.bound ? '当前版本' : '未绑定当前版本' }}）</b>：{{ qualityLabel(item.quality) }}<span v-if="item.quality?.errors?.length">；{{ item.quality.errors.join('；') }}</span></div><div><b>证据覆盖</b>：{{ item.evidence?.status || '未记录' }}</div><div><b>媒体规格</b>：{{ item.quality?.data?.width || item.quality?.data?.checks?.resolution?.width || '未知' }} × {{ item.quality?.data?.height || item.quality?.data?.checks?.resolution?.height || '未知' }} · {{ item.quality?.data?.durationSeconds || item.quality?.data?.checks?.file_integrity?.duration || '未知' }} 秒</div></div>
-              <div v-if="item.versions?.length" class="version-compare"><div class="compare-controls"><el-select v-model="compareVersions[item.rank]" aria-label="对比版本" placeholder="选择历史版本"><el-option v-for="version in item.versions" :key="version.version" :label="`${version.current ? '当前' : '历史'} · ${version.version.slice(0, 12)}`" :value="version.version" :disabled="!version.playable" /></el-select><el-button :disabled="!compareVersions[item.rank]" @click="seekCompare(item.rank)">定位当前版问题</el-button><el-button :disabled="!compareVersions[item.rank]" @click="seekCompare(item.rank, null, true)">定位历史版问题</el-button><el-button :disabled="!compareVersions[item.rank]" @click="seekCompare(item.rank, videos[`current-${item.rank}`]?.currentTime)">按原片锚点同步</el-button></div><div v-if="compareVersions[item.rank]" class="compare-grid"><div><b>当前通过版本</b><video v-if="item.playable" :ref="el => videos[`current-${item.rank}`] = el" class="preview" controls preload="metadata" :src="api.operationsMedia(name, item.rank, source === 'acceptance')"></video><p class="muted">{{ item.inventoryVersion || item.qualifiedVersion || '无有效库存版本' }} · {{ item.playable ? '已入库 / 可播放' : '无有效库存' }}</p></div><div><b>选定历史版本（不代表已入库）</b><video :ref="el => videos[`compare-${item.rank}`] = el" class="preview" controls preload="metadata" :src="api.operationsMedia(name, item.rank, source === 'acceptance', compareVersions[item.rank])"></video><p class="muted">{{ versionById(item, compareVersions[item.rank])?.version }} · 父版 {{ versionById(item, compareVersions[item.rank])?.parent || '无' }} · 审片 {{ versionById(item, compareVersions[item.rank])?.review?.status || '未知' }}（{{ versionById(item, compareVersions[item.rank])?.reviewBound ? '哈希绑定' : '未绑定' }}） · SHA-256 {{ versionById(item, compareVersions[item.rank])?.mediaSha256 || '未知' }}</p></div></div><p v-if="compareMessage[item.rank]" class="muted" role="status">{{ compareMessage[item.rank] }}</p><div v-if="compareVersions[item.rank]" class="reports"><b>历史版 → 当前库存版改动</b><el-empty v-if="!compareDiff(item).length" description="无已知编辑差异或版本清单不完整" /><div v-for="(change, idx) in compareDiff(item)" :key="idx"><b>{{ change.action }} · {{ change.target }}</b><pre class="report-data">{{ JSON.stringify({ before: change.before, after: change.after }, null, 2) }}</pre></div></div></div><el-collapse v-if="item.versions?.length > 1 || item.attempts?.length || item.events?.length"><el-collapse-item title="历史版本与处理审计" :name="`history-${item.rank}`"><div v-for="version in item.versions" :key="version.version">版本 {{ version.version }} · {{ version.current ? '当前' : '历史' }} · 父版本 {{ version.parent || '未知' }}<span> · {{ version.playable ? '可播放' : '媒体失效/未绑定' }} · {{ version.accepted ? '已入库' : '历史预览' }} · {{ version.simulation === true ? '模拟夹具' : version.simulation === false ? '实际媒体审片' : '证据类型未知' }}</span><pre class="report-data">{{ JSON.stringify({ review: version.review, quality: version.quality, evidence: version.evidence }, null, 2) }}</pre></div><p v-for="(attempt, idx) in item.attempts" :key="`attempt-${idx}`">{{ attempt.purpose || '请求' }} · {{ attempt.status || '状态未知' }} · 预留上限 {{ money(attempt.maximum_fen) }} · 已知结算 {{ money(attempt.actual_fen) }} · 用量 {{ attempt.usage ? JSON.stringify(attempt.usage) : '未记录' }} · HTTP 尝试次数与缓存命中：未记录</p><p v-for="(event, idx) in item.events" :key="`event-${idx}`">{{ stepLabel(event.stage) }} · {{ event.status }} · {{ event.reason || '' }}</p></el-collapse-item></el-collapse>
+              <div v-if="item.versions?.length" class="version-compare"><div class="compare-controls"><el-select v-model="compareVersions[item.rank]" aria-label="对比版本" placeholder="选择历史版本"><el-option v-for="version in item.versions" :key="version.version" :label="`${version.current ? '当前' : '历史'} · ${version.version.slice(0, 12)}`" :value="version.version" :disabled="!version.playable" /></el-select><el-button :disabled="!compareVersions[item.rank]" @click="seekCompare(item.rank)">定位当前版问题</el-button><el-button :disabled="!compareVersions[item.rank]" @click="seekCompare(item.rank, null, true)">定位历史版问题</el-button><el-button :disabled="!compareVersions[item.rank]" @click="seekCompare(item.rank, videos[`current-${item.rank}`]?.currentTime)">按原片锚点同步</el-button></div><div v-if="compareVersions[item.rank]" class="compare-grid"><div><b>当前通过版本</b><video v-if="item.playable" :ref="el => videos[`current-${item.rank}`] = el" class="preview" controls preload="metadata" :src="mediaUrl(item.rank)"></video><p class="muted">{{ item.inventoryVersion || item.qualifiedVersion || '无有效库存版本' }} · {{ item.playable ? '已入库 / 可播放' : '无有效库存' }}</p></div><div><b>选定历史版本（不代表已入库）</b><video :ref="el => videos[`compare-${item.rank}`] = el" class="preview" controls preload="metadata" :src="mediaUrl(item.rank, compareVersions[item.rank])"></video><p class="muted">{{ versionById(item, compareVersions[item.rank])?.version }} · 父版 {{ versionById(item, compareVersions[item.rank])?.parent || '无' }} · 审片 {{ versionById(item, compareVersions[item.rank])?.review?.status || '未知' }}（{{ versionById(item, compareVersions[item.rank])?.reviewBound ? '哈希绑定' : '未绑定' }}） · SHA-256 {{ versionById(item, compareVersions[item.rank])?.mediaSha256 || '未知' }}</p></div></div><p v-if="compareMessage[item.rank]" class="muted" role="status">{{ compareMessage[item.rank] }}</p><div v-if="compareVersions[item.rank]" class="reports"><b>历史版 → 当前库存版改动</b><el-empty v-if="!compareDiff(item).length" description="无已知编辑差异或版本清单不完整" /><div v-for="(change, idx) in compareDiff(item)" :key="idx"><b>{{ change.action }} · {{ change.target }}</b><pre class="report-data">{{ JSON.stringify({ before: change.before, after: change.after }, null, 2) }}</pre></div></div></div><el-collapse v-if="item.versions?.length > 1 || item.attempts?.length || item.events?.length"><el-collapse-item title="历史版本与处理审计" :name="`history-${item.rank}`"><div v-for="version in item.versions" :key="version.version">版本 {{ version.version }} · {{ version.current ? '当前' : '历史' }} · 父版本 {{ version.parent || '未知' }}<span> · {{ version.playable ? '可播放' : '媒体失效/未绑定' }} · {{ version.accepted ? '已入库' : '历史预览' }} · {{ version.simulation === true ? '模拟夹具' : version.simulation === false ? '实际媒体审片' : '证据类型未知' }}</span><pre class="report-data">{{ JSON.stringify({ review: version.review, quality: version.quality, evidence: version.evidence }, null, 2) }}</pre></div><p v-for="(attempt, idx) in item.attempts" :key="`attempt-${idx}`">{{ attempt.purpose || '请求' }} · {{ attempt.status || '状态未知' }} · 预留上限 {{ money(attempt.maximum_fen) }} · 已知结算 {{ money(attempt.actual_fen) }} · 用量 {{ attempt.usage ? JSON.stringify(attempt.usage) : '未记录' }} · HTTP 尝试次数与缓存命中：未记录</p><p v-for="(event, idx) in item.events" :key="`event-${idx}`">{{ stepLabel(event.stage) }} · {{ event.status }} · {{ event.reason || '' }}</p></el-collapse-item></el-collapse>
               <el-collapse><el-collapse-item title="质检项目、证据映射与检查点" :name="`reports-${item.rank}`"><pre class="report-data">{{ JSON.stringify({ quality: item.quality, evidence: item.evidence, steps: item.steps }, null, 2) }}</pre></el-collapse-item></el-collapse>
-              <video v-if="item.playable" :ref="el => videos[item.rank] = el" class="preview" controls preload="metadata" :src="api.operationsMedia(name, item.rank, source === 'acceptance')"></video>
+              <div v-if="selectedTaskId && previewVersion(detail, item)" class="simulation-preview"><el-alert title="模拟试跑预览（非正式合格库存）" description="仅用于验证隔离链路；不计入正式合格成片。" type="info" :closable="false" /><video :ref="el => videos[`fixture-${item.rank}`] = el" class="preview" controls preload="metadata" :src="previewVersion(detail, item).mediaUrl"></video></div>
+              <video v-if="item.playable" :ref="el => videos[item.rank] = el" class="preview" controls preload="metadata" :src="mediaUrl(item.rank)"></video>
               <el-button v-if="item.playable && item.review?.range?.length === 2 && item.review.timeline === 'output'" size="small" @click="seek(item.rank, item.review.range[0])">定位成片问题位置</el-button>
             </el-collapse-item>
           </el-collapse>
@@ -94,10 +106,11 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { acceptanceTime as dateLabel, money, statusLabel, rangeLabel } from '../acceptance'
+import { previewVersion, trialTasks } from '../isolatedTrials'
 import { mappedSeek, editChanges, versionMapping } from '../versionCompare'
 const source = ref('acceptance')
 const videos = {}
@@ -129,7 +142,9 @@ const detailError = ref('')
 let requestId = 0
 let detailRequestId = 0
 
-const router = useRouter()
+const router = useRouter(), route = useRoute()
+const tasks = ref([]), trialListError = ref(''), selectedTaskId = ref('')
+function mediaUrl(rank, version = null) { return selectedTaskId.value ? api.isolatedTrialMedia(name.value, selectedTaskId.value, rank, version) : api.operationsMedia(name.value, rank, source.value === 'acceptance', version) }
 const loading = ref(false); const error = ref(''); const overview = ref(null); const drawer = ref(false); const name = ref(''); const detail = ref(null); const detailLoading = ref(false)
 const sessions = computed(() => overview.value?.sessions || [])
 const observed = computed(() => !!overview.value?.observed); const apiFailures = computed(() => overview.value?.apiFailures || 0); const unmatched = computed(() => overview.value?.unmatched || 0)
@@ -144,24 +159,62 @@ const budgetText = (b) => !b ? '未记录' : `${b.day || '日期未知'} · 剩�
 const reviewLabel = (r) => r?.status === 'pass' ? '通过' : r?.status === 'repair' ? '返修' : r?.status === 'unknown' ? '未记录' : '未通过 / 待复核'; const qualityLabel = (q) => q?.status === 'pass' ? '通过' : q?.status === 'fail' ? '失败' : '未记录'
 function rangeText (r, timeline) { return rangeLabel(r, timeline) }
 async function load () {
-  if (loading.value) return
-  const request = ++requestId
+  const request = ++requestId, currentSource = source.value
   loading.value = true
-  try { const result = await api.acceptanceOperations(source.value); if (request === requestId) { overview.value = result; loadedAt.value = new Date().toISOString(); error.value = '' } }
-  catch { if (request === requestId) error.value = overview.value ? '刷新失败，仍显示上次成功结果，状态可能已过期' : '验收数据读取失败，请稍后刷新' }
-  finally { if (request === requestId) loading.value = false }
+  const jobs = [api.acceptanceOperations(currentSource).then(result => {
+    if (request === requestId) { overview.value = result; loadedAt.value = new Date().toISOString(); error.value = '' }
+  }).catch(() => { if (request === requestId) error.value = overview.value ? '刷新失败，仍显示上次成功结果，状态可能已过期' : '验收数据读取失败，请稍后刷新' })]
+  if (currentSource === 'acceptance') jobs.push(api.isolatedTrials().then(result => {
+    if (request === requestId) { tasks.value = trialTasks(result); trialListError.value = '' }
+  }).catch(() => { if (request === requestId) trialListError.value = '历史试跑列表读取失败，请刷新重试' }))
+  await Promise.all(jobs)
+  if (request === requestId) loading.value = false
+  if (drawer.value) await refreshDetail()
 }
-async function changeSource () { overview.value = null; await load() }
-async function open (session) {
-  const request = ++detailRequestId
+function clearMedia() {
   compareVersions.value = {}; compareMessage.value = {}
   for (const key of Object.keys(videos)) { videos[key]?.pause(); delete videos[key] }
-  name.value = session; drawer.value = true; detail.value = null; detailError.value = ''; detailLoading.value = true
-  try { const result = await api.acceptanceDetail(session, source.value); if (request === detailRequestId) detail.value = result }
-  catch { if (request === detailRequestId) detailError.value = '详情读取失败，请刷新重试' }
+}
+function closeDetail() { ++detailRequestId; detailLoading.value = false; clearMedia() }
+async function changeSource () {
+  ++detailRequestId; drawer.value = false; selectedTaskId.value = ''; detail.value = null; detailError.value = ''; clearMedia()
+  overview.value = null; tasks.value = []; trialListError.value = ''
+  if (route.query.taskId) await router.replace({ path: route.path, query: {} })
+  await load()
+}
+async function open (session) {
+  selectedTaskId.value = ''; name.value = session
+  if (route.query.taskId) await router.replace({ path: route.path, query: {} })
+  drawer.value = true; await refreshDetail()
+}
+async function openTask(task, updateUrl = true) {
+  if (!task?.taskId || !task?.session) return
+  source.value = 'acceptance'; name.value = task.session; selectedTaskId.value = task.taskId; drawer.value = true
+  if (updateUrl) await router.replace({ path: route.path, query: { taskId: task.taskId, session: task.session } })
+  await refreshDetail()
+}
+async function refreshDetail() {
+  const request = ++detailRequestId, session = name.value, taskId = selectedTaskId.value, currentSource = source.value
+  clearMedia(); detail.value = null; detailError.value = ''; detailLoading.value = true
+  try {
+    const result = taskId ? await api.isolatedTrialDetail(session, taskId) : await api.acceptanceDetail(session, currentSource)
+    if (request === detailRequestId) detail.value = result
+  } catch { if (request === detailRequestId) detailError.value = '详情读取失败，请刷新重试' }
   finally { if (request === detailRequestId) detailLoading.value = false }
 }
-onMounted(load)
+async function openQueryTask() {
+  const taskId = typeof route.query.taskId === 'string' ? route.query.taskId : ''
+  if (!taskId) return
+  const task = tasks.value.find(item => item.taskId === taskId)
+  const session = typeof route.query.session === 'string' ? route.query.session : task?.session
+  if (session) await openTask({ taskId, session }, false)
+  else { trialListError.value = '未在任务列表找到该任务，请刷新或使用包含场次的任务链接'; }
+}
+watch(() => [route.query.taskId, route.query.session], () => {
+  if (route.query.taskId && (route.query.taskId !== selectedTaskId.value || route.query.session !== name.value)) openQueryTask()
+})
+onMounted(async () => { await load(); await openQueryTask() })
+
 </script>
 
 <style scoped>

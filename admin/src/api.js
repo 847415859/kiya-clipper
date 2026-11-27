@@ -65,6 +65,11 @@ export const api = {
   streamers: () => http.get('/api/streamers'),
   switchStreamer: (id) => http.post('/api/streamers/current', { streamer: id }),
 
+  isolatedTrialOptions: name => http.get(`/api/sessions/${encodeURIComponent(name)}/isolated-trials/options`),
+  submitIsolatedTrial: (name, body) => http.post(`/api/sessions/${encodeURIComponent(name)}/isolated-trials`, body),
+  isolatedTrials: () => http.get('/api/sessions/isolated-trials'),
+  isolatedTrialDetail: (name, taskId) => http.get(`/api/sessions/${encodeURIComponent(name)}/isolated-trials/${encodeURIComponent(taskId)}`),
+  isolatedTrialMedia: (name, taskId, rank, version = null) => `/api/sessions/${encodeURIComponent(name)}/isolated-trials/${encodeURIComponent(taskId)}/media/${encodeURIComponent(rank)}${version ? `/version/${encodeURIComponent(version)}` : ''}`,
   sessions: () => http.get('/api/sessions'),
   acceptanceOperations: (source = 'acceptance') => http.get(source === 'production' ? '/api/sessions/production-acceptance' : '/api/sessions/acceptance-operations'),
   acceptanceDetail: (name, source = 'acceptance') => http.get(`/api/sessions/${encodeURIComponent(name)}/${source === 'production' ? 'production-acceptance' : 'acceptance-operations'}`),

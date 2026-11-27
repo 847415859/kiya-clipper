@@ -1,0 +1,28 @@
+[Unit]
+Description=Kiya isolated historical trial worker (fixture only)
+After=local-fs.target
+
+[Service]
+Type=simple
+User=kiya
+Group=kiya
+WorkingDirectory=/opt/kiya-clipper/worker
+# Must match admin acceptanceRoot/history; deliberately no live/model option.
+ExecStart=/opt/kiya-clipper/worker/.venv/bin/python scripts/historical_trial_worker.py --root /var/lib/kiya-next-session-acceptance/history --fixture
+Restart=on-failure
+RestartSec=5
+# root admin publishes group-readable 0640 jobs into shared 2770 history dirs.
+# Provision/migrate only history with prepare-historical-trial.py before startup.
+# Worker-private outputs stay 0600; root admin can still read and stream them.
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# Prebuild renderer/build and provision REMOTION_BROWSER before starting this unit.
+# No source/session/production directory is writable, including renderer source.
+ReadOnlyPaths=/opt/kiya-clipper /data/rec
+ReadWritePaths=/var/lib/kiya-next-session-acceptance/history
+
+[Install]
+WantedBy=multi-user.target

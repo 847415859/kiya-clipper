@@ -51,9 +51,10 @@
         <div v-if="row.operations?.currentStep" class="muted">{{ stepLabel(row.operations.currentStep) }}</div>
       </template>
     </el-table-column>
-    <el-table-column label="操作" width="265" fixed="right">
+    <el-table-column label="操作" width="345" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="openOperations(row.name)">制作详情</el-button>
+          <el-button link type="primary" @click="openTrial(row.name)">隔离试跑</el-button>
           <el-button link type="primary" :disabled="!row.hasCandidates" @click="review(row)">审核</el-button>
           <el-dropdown trigger="click" @command="(c) => run(row, c)">
             <el-button link type="primary">运行 ▾</el-button>
@@ -71,6 +72,33 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <el-dialog v-model="trialOpen" title="历史场次 · 隔离试跑" width="min(760px, 95vw)" @closed="trialRequest++">
+      <div v-loading="trialLoading">
+        <p><b>场次：{{ trialSession }}</b></p>
+        <el-alert v-if="trialError" type="error" :title="trialError" :closable="false" />
+        <template v-if="trialOptions">
+          <p>来源：历史场次独立任务 · 模式：{{ trialOptions.mode }} · 仅进入隔离库存，不自动投稿</p>
+          <p>费用上限：<b>{{ money(trialOptions.maxCostFen) }}</b><span v-if="!Number.isFinite(trialOptions.maxCostFen)">（费用上限未知，暂停提交）</span></p>
+          <p>运行步骤：{{ (trialOptions.steps || []).map(step => stepLabel(typeof step === 'string' ? step : step.name || step.stage)).join(' → ') || '未确定' }}</p>
+          <el-alert v-for="(blocker, i) in trialOptions.blockers || []" :key="i" type="warning" :title="reasonText(blocker)" :closable="false" />
+          <el-table :data="trialOptions.candidates || []" empty-text="无已有候选">
+            <el-table-column label="选择" width="65"><template #default="{ row }"><el-radio v-model="trialRank" :value="row.rank" :disabled="!row.available || trialSubmitting" :aria-label="`候选 ${row.rank}`">{{ '' }}</el-radio></template></el-table-column>
+            <el-table-column label="候选" width="85"><template #default="{ row }">#{{ row.rank }}</template></el-table-column>
+            <el-table-column label="原片区间" width="140"><template #default="{ row }">{{ row.start }}–{{ row.end }} 秒</template></el-table-column>
+            <el-table-column label="素材与条件"><template #default="{ row }"><el-tag :type="row.available ? 'success' : 'warning'">{{ row.available ? '素材可读' : '条件未满足' }}</el-tag><div>{{ missingText(row) }}</div><div v-for="(blocker, i) in row.blockers || []" :key="i">{{ reasonText(blocker) }}</div></template></el-table-column>
+          </el-table>
+          <p v-if="trialCandidate">确认候选 #{{ trialRank }}，运行上述步骤，费用上限 {{ money(trialOptions.maxCostFen) }}。</p>
+          <p v-if="trialCandidate?.activeTask">进行中任务 {{ trialCandidate.activeTask.taskId }}：重复提交将返回该任务。<el-button link type="primary" @click="router.push(trialLink({ ...trialCandidate.activeTask, session: trialSession }))">查看进行中任务</el-button></p>
+          <p v-else-if="trialCandidate?.lastTask">历史任务 {{ trialCandidate.lastTask.taskId }}：{{ opLabel(trialCandidate.lastTask.status) }}。新一轮试跑请勾选明确重跑。</p>
+          <p v-if="trialCandidate?.lastTask && !trialCandidate?.activeTask"><el-checkbox v-model="trialRerun" :disabled="trialSubmitting">明确重跑已结束任务（保留历史记录）</el-checkbox></p>
+          <el-checkbox v-model="trialConfirmed" :disabled="trialSubmitting">我确认场次、候选、步骤及费用上限，提交隔离试跑</el-checkbox>
+        </template>
+        <el-alert v-if="trialResult" type="success" :closable="false" :title="`任务 ${trialResult.taskId} · ${trialResult.message || '已提交'}`" />
+        <el-button v-if="trialResult" link type="primary" @click="router.push(trialLink(trialResult))">查看任务详情</el-button>
+      </div>
+      <template #footer><el-button :disabled="trialSubmitting" @click="openTrial(trialSession)">刷新条件</el-button><el-button type="primary" :loading="trialSubmitting" :disabled="!trialCanSubmit" @click="submitTrial">提交隔离试跑</el-button></template>
+    </el-dialog>
 
     <el-dialog v-model="lookupOpen" title="按场次排查" width="min(420px, 95vw)">
       <el-form @submit.prevent="openOperations(lookupName.trim())">
@@ -214,10 +242,41 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { api, fmtDuration } from '../api'
+
+import { money } from '../acceptance'
+import { canSubmitTrial, missingText, reasonText, trialBody, trialLink } from '../isolatedTrials'
+
+const trialOpen = ref(false), trialLoading = ref(false), trialSubmitting = ref(false)
+const trialSession = ref(''), trialOptions = ref(null), trialRank = ref(null), trialConfirmed = ref(false)
+const trialError = ref(''), trialResult = ref(null), trialRerun = ref(false)
+let trialRequest = 0
+const trialCandidate = computed(() => trialOptions.value?.candidates?.find(row => row.rank === trialRank.value))
+const trialCanSubmit = computed(() => !trialLoading.value && !trialSubmitting.value && canSubmitTrial(trialOptions.value, trialCandidate.value, trialConfirmed.value))
+watch(trialRank, () => { trialConfirmed.value = false; trialRerun.value = false; trialResult.value = null })
+async function openTrial(session) {
+  const request = ++trialRequest
+  trialSession.value = session; trialOptions.value = null; trialRank.value = null
+  trialConfirmed.value = false; trialRerun.value = false; trialResult.value = null; trialError.value = ''
+  trialOpen.value = true; trialLoading.value = true
+  try { const result = await api.isolatedTrialOptions(session); if (request === trialRequest) trialOptions.value = result }
+  catch (e) { if (request === trialRequest) trialError.value = e.response?.data?.error || '试跑条件读取失败，请刷新' }
+  finally { if (request === trialRequest) trialLoading.value = false }
+}
+async function submitTrial() {
+  if (!trialCanSubmit.value) return
+  const request = trialRequest, session = trialSession.value
+  const last = trialCandidate.value?.lastTask
+  trialSubmitting.value = true; trialError.value = ''
+  try {
+    const result = await api.submitIsolatedTrial(session, trialBody(trialRank.value, trialRerun.value ? (typeof last === 'string' ? last : last?.taskId) : ''))
+    if (request === trialRequest) { trialResult.value = { ...result, session: result.session || session }; trialConfirmed.value = false }
+  } catch (e) { if (request === trialRequest) trialError.value = e.response?.data?.error || '提交失败，请刷新条件后重试；重复提交将复用进行中任务' }
+  finally { trialSubmitting.value = false }
+}
 
 const router = useRouter()
 const rows = ref([])

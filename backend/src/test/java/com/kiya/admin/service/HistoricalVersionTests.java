@@ -58,6 +58,15 @@ class HistoricalVersionTests {
         assertEquals(2.0, ((Map<?,?>)((List<?>)row.get("sourceMapping")).get(0)).get("output_start"));
         assertThrows(RuntimeException.class, () -> service.acceptanceMedia(SESSION,1));
     }
+    @Test void historicalFixturePreviewIsPlayableButFormalInventoryIsNot() throws Exception {
+        write(root.resolve("queue/" + JOB), Map.of("streamer", "kiya", "room", "123", "mode", "fixture"));
+        Map<?,?> detail = service.historicalDetail(root, JOB.replace(".json", ""), SESSION);
+        Map<?,?> row = (Map<?,?>)((List<?>)detail.get("candidates")).get(0);
+        assertEquals(false, row.get("playable")); assertEquals(true, row.get("previewPlayable"));
+        assertEquals(true, row.get("simulation")); assertEquals(false, row.get("accepted"));
+        assertEquals(0, detail.get("clipCount")); assertEquals(1L, detail.get("previewClipCount"));
+        assertEquals(media.toRealPath(), service.historicalMedia(root, JOB.replace(".json", ""), SESSION, 1, null));
+    }
     @Test void staleMediaAndReportHashesBlockPlayback() throws Exception {
         Files.writeString(quality,"{}"); assertThrows(RuntimeException.class, () -> service.versionMedia(SESSION,1,VERSION,true));
         assertEquals(false, summary().get("playable"));

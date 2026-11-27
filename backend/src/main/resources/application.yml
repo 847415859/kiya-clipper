@@ -46,6 +46,8 @@ kiya:
   ops-dir: ${KIYA_OPS_DIR:}
   acceptance-dir: ${KIYA_ACCEPTANCE_DIR:/var/lib/kiya-next-session-acceptance}
   ops-recovery-enabled: ${KIYA_OPS_RECOVERY_ENABLED:false}
+  historical-trial-fixture-enabled: ${KIYA_HISTORICAL_TRIAL_FIXTURE_ENABLED:false}
+  historical-trial-group: ${KIYA_HISTORICAL_TRIAL_GROUP:kiya}
   task-timeout-minutes: 180
 
 logging:
