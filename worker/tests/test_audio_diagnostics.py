@@ -26,6 +26,36 @@ def media(tmp_path):
 from clipper import audio_diagnostics
 
 
+@pytest.mark.parametrize('drop,kind', [("lt(n,25)", 'uncovered_head'), ("gte(n,210)", 'uncovered_tail')])
+def test_selected_source_requires_decoded_head_and_tail(media, tmp_path, drop, kind):
+    source, _ = media
+    damaged = tmp_path / 'edge-loss.mp4'
+    subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-i', str(source),
+                    '-map', '0', '-c', 'copy', '-bsf:a', f"noise=drop='{drop}'",
+                    str(damaged)], check=True)
+    report = audio_diagnostics.diagnose_pipeline(
+        [{'video': str(damaged), 'source_ranges': [[0, 5]]}], source, source)
+    assert report['earliest_stage'] == 'source'
+    assert any(gap.get('kind') == kind for gap in report['sources'][0]['gaps'])
+    report = audio_diagnostics.diagnose_pipeline(
+        [{'video': str(damaged), 'source_ranges': [[1, 4]]}], source, source)
+    assert report['sources'][0]['gaps'] == []
+
+
+@pytest.mark.parametrize('timestamps', [['-0.5', '0'], ['1.0', '0.5']])
+def test_negative_and_backward_timestamps_require_review(tmp_path, monkeypatch, timestamps):
+    path = tmp_path / 'fixture.mp4'
+    path.write_bytes(b'fixture')
+    payload = {'streams': [{'sample_rate': '48000'}], 'frames': [
+        {'best_effort_timestamp_time': stamp, 'nb_samples': 1024} for stamp in timestamps]}
+    monkeypatch.setattr(audio_diagnostics.shutil, 'which', lambda name: name)
+    monkeypatch.setattr(audio_diagnostics.subprocess, 'run', lambda *a, **k:
+                        subprocess.CompletedProcess(a, 0, json.dumps(payload), ''))
+    report = audio_diagnostics.diagnose_pipeline([{'video': str(path)}], path, path)
+    assert report['status'] == 'review'
+    assert report['sources'][0]['status'] == 'unavailable'
+
+
 def test_pipeline_audio_gap_localizes_first_bad_stage(monkeypatch, tmp_path):
     source = tmp_path / 'source.mp4'
     cut = tmp_path / 'cut.mp4'

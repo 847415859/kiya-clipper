@@ -9,6 +9,14 @@ import subprocess
 from pathlib import Path
 
 
+class _AudioGaps(list):
+    """List-compatible gap result carrying decoded coverage without extra probes."""
+
+    def __init__(self):
+        super().__init__()
+        self.coverage = None
+
+
 def decoded_audio_gaps(path: Path, threshold: float = 0.10) -> list[dict]:
     """Return internal missing-sample intervals; missing/undecodable audio raises.
 
@@ -34,7 +42,9 @@ def decoded_audio_gaps(path: Path, threshold: float = 0.10) -> list[dict]:
         raise ValueError("No audio stream")
     stream_rate = streams[0].get("sample_rate")
     end = None
-    gaps = []
+    previous_start = None
+    first = None
+    gaps = _AudioGaps()
     frames = data.get("frames", [])
     if not frames:
         raise ValueError("No decoded audio frames")
@@ -44,10 +54,16 @@ def decoded_audio_gaps(path: Path, threshold: float = 0.10) -> list[dict]:
         rate = float(frame.get("sample_rate") or stream_rate or 0)
         if not all(math.isfinite(v) for v in (start, rate)) or samples <= 0 or rate <= 0:
             raise ValueError("Invalid decoded audio timing")
+        if start < -threshold or (previous_start is not None and previous_start - start > threshold):
+            raise ValueError("Negative or backward decoded audio timestamps")
+        if first is None:
+            first = start
+        previous_start = start
         if end is not None and start - end > threshold:
             gaps.append({"start": round(end, 6), "end": round(start, 6),
                          "duration": round(start - end, 6)})
         end = max(end if end is not None else start, start + samples / rate)
+    gaps.coverage = [first, end]
     return gaps
 
 
@@ -83,7 +99,9 @@ def _stage(path: Path | None) -> dict:
     path = Path(path)
     row["sha256"] = _sha(path)
     try:
-        row["gaps"] = decoded_audio_gaps(path)
+        decoded = decoded_audio_gaps(path)
+        row["gaps"] = list(decoded)
+        row["decoded_coverage"] = getattr(decoded, "coverage", None)
         row["status"] = "available"
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as exc:
         row["reason"] = f"{type(exc).__name__}: {exc}"
@@ -123,6 +141,16 @@ def diagnose_segments(segments: list[dict], output_gaps: list[dict] | None = Non
                         if right > left:
                             selected.append({"start": round(left, 6), "end": round(right, 6),
                                              "duration": round(right - left, 6)})
+                coverage = row.get("decoded_coverage")
+                if coverage is not None:
+                    first, last = coverage
+                    for a, b in ranges:
+                        for left, right, kind in ((a, min(b, first), "uncovered_head"),
+                                                   (max(a, last), b, "uncovered_tail")):
+                            # Ignore ordinary AAC frame/padding rounding, not lost speech.
+                            if right - left > 0.10:
+                                selected.append({"start": round(left, 6), "end": round(right, 6),
+                                                 "duration": round(right - left, 6), "kind": kind})
                 row["gaps"] = selected
         except (ValueError, TypeError) as exc:
             row.update(status="unavailable", reason=str(exc))
