@@ -183,7 +183,8 @@ public class OperationsQueueService {
             row.put("version", candidate.path("current_version").asText(inventory.path("version").asText("")));
             row.put("hasInventory", inventory.isObject());
             boolean currentInventory = inventory.path("version").isTextual()
-                    && inventory.path("version").asText().equals(candidate.path("current_version").asText());
+                    && inventory.path("version").asText().equals(candidate.path(candidate.path("qualified_version").isTextual()
+                    ? "qualified_version" : "current_version").asText());
             JsonNode render = currentInventory ? inventory.path("render") : candidate.path("render");
             row.put("review", boundReview(currentInventory ? inventory.path("review") : MissingNode.getInstance(), render, dir));
             row.put("quality", currentInventory ? report(render, "quality", dir) : Map.of("status", "unknown", "bound", false));
@@ -191,7 +192,8 @@ public class OperationsQueueService {
             row.put("events", candidate.path("events").isArray() ? candidate.path("events") : null);
             row.put("steps", candidate.path("steps").isObject() ? candidate.path("steps") : null);
             row.put("attempts", candidate.path("attempts").isArray() ? candidate.path("attempts") : null);
-            row.put("versions", versions(candidate, dir));
+            row.put("versions", versions(candidate, dir, entry, session, rank));
+            row.put("inventoryVersion", inventory.path("version").asText(null));
             row.put("budget", budget(candidate));
             row.put("findings", findings(candidate));
             Path media = inventoryMedia(entry, dir);
@@ -251,22 +253,149 @@ public class OperationsQueueService {
         return out;
     }
 
-    private List<Map<String, Object>> versions(JsonNode state, Path dir) {
+    private List<Map<String, Object>> versions(JsonNode state, Path dir, Entry entry, String session, int rank) {
         List<Map<String, Object>> rows = new ArrayList<>();
         for (Path version : directories(dir.resolve("versions"))) {
-            if (under(version.toString(), dir) == null) continue;
-            JsonNode draft = read(version.resolve("draft.json"));
+            String id = version.getFileName().toString();
+            Path scoped = historicalVersion(dir, id, entry.root());
+            if (scoped == null) continue;
+            JsonNode draft = read(scoped.resolve("draft.json"));
+            Historical historical = historical(state, dir, scoped, id);
             Map<String, Object> row = new LinkedHashMap<>();
-            row.put("version", version.getFileName().toString());
-            row.put("current", version.getFileName().toString().equals(state.path("current_version").asText()));
+            row.put("version", id);
+            row.put("current", id.equals(state.path("current_version").asText()));
+            row.put("playable", historical.playable());
+            row.put("renderBound", historical.playable());
+            row.put("mediaSha256", historical.playable() ? sha256(historical.media()) : null);
+            String route = entry.root().toAbsolutePath().normalize().equals(acceptanceDirectory().resolve("operations"))
+                    ? "/acceptance-operations/media/" : "/operations/media/";
+            row.put("mediaUrl", historical.playable() ? "/api/sessions/" + session + route + rank + "/version/" + id : null);
+            row.put("review", historical.review());
+            row.put("reviewBound", Boolean.TRUE.equals(historical.review().get("bound")));
+            row.put("simulation", historical.simulation());
+            row.put("accepted", false); // Historical comparison is never inventory acceptance.
+            row.put("quality", historical.quality());
+            row.put("evidence", historical.receipt());
+            row.put("sourceMapping", historical.playable() ? historical.mapping() : null);
+            row.put("mapping", historical.playable() ? historical.mapping() : null);
             row.put("parent", draft.path("parent").isTextual() ? draft.path("parent").asText() : null);
-            row.put("createdAt", draft.path("created_at").isTextual() ? draft.path("created_at").asText() : null);
+            row.put("createdAt", draft.path("created_at").asText(null));
             row.put("draft", draft);
             rows.add(row);
         }
-        // Checkpoint results preserve past renders/reviews, including multiple renders of one draft.
         return rows;
     }
+
+    private Path historicalVersion(Path dir, String version, Path root) {
+        if (version == null || !version.matches("[a-fA-F0-9]{64}")) return null;
+        Path candidate = under(dir.toString(), root);
+        if (candidate == null) return null;
+        Path versions = under(dir.resolve("versions").toString(), candidate);
+        if (versions == null) return null;
+        Path scoped = under(dir.resolve("versions").resolve(version).toString(), versions);
+        if (scoped == null || !scoped.equals(versions.resolve(version))) return null;
+        Path manifest = historicalPath(scoped.resolve("draft.json").toString(), dir, scoped);
+        return manifest != null && version.equals(read(manifest).path("id").asText()) ? scoped : null;
+    }
+
+    // Resolve both worker Windows paths and portable candidate-relative paths; enforce lexical AND real containment.
+    private Path historicalPath(String raw, Path dir, Path scoped) {
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            Path path = Path.of(raw.replace('\\', '/'));
+            if (!path.isAbsolute()) path = dir.resolve(path);
+            path = path.toAbsolutePath().normalize();
+            Path lexicalScope = scoped.toAbsolutePath().normalize();
+            if (!path.startsWith(lexicalScope)) return null;
+            Path real = path.toRealPath();
+            return real.startsWith(scoped.toRealPath()) && Files.isRegularFile(real) ? real : null;
+        } catch (IOException | RuntimeException e) { return null; }
+    }
+
+    private boolean historicalArtifact(JsonNode render, Path target, Path dir, Path scoped) {
+        if (target == null) return false;
+        for (var fields = render.path("files").fields(); fields.hasNext();) {
+            var field = fields.next();
+            Path file = historicalPath(field.getKey(), dir, scoped);
+            if (target.equals(file) && field.getValue().asText().matches("[a-fA-F0-9]{64}")
+                    && field.getValue().asText().equalsIgnoreCase(sha256(file))) return true;
+        }
+        return false;
+    }
+
+    private Historical historical(JsonNode state, Path dir, Path scoped, String version) {
+        JsonNode render = MissingNode.getInstance();
+        String renderStep = "";
+        Path media = null;
+        for (var fields = state.path("steps").fields(); fields.hasNext();) {
+            var field = fields.next();
+            JsonNode result = field.getValue().path("result");
+            Path file = historicalPath(result.path("media").asText(""), dir, scoped);
+            if (field.getKey().matches("render-[0-9]+") && file != null
+                    && (!result.has("version") || version.equals(result.path("version").asText()))) {
+                render = result; media = mp4(file); renderStep = field.getKey();
+            }
+        }
+        boolean valid = media != null && historicalArtifact(render, media, dir, scoped);
+        for (var fields = render.path("files").fields(); fields.hasNext();) {
+            var field = fields.next();
+            Path file = historicalPath(field.getKey(), dir, scoped);
+            valid &= file != null && field.getValue().asText().matches("[a-fA-F0-9]{64}")
+                    && field.getValue().asText().equalsIgnoreCase(sha256(file));
+        }
+        Path qualityFile = historicalPath(render.path("quality").asText(""), dir, scoped);
+        Path receiptFile = historicalPath(render.path("receipt").asText(""), dir, scoped);
+        JsonNode quality = qualityFile == null ? MissingNode.getInstance() : read(qualityFile);
+        JsonNode receipt = receiptFile == null ? MissingNode.getInstance() : read(receiptFile);
+        boolean qualityBound = valid && quality.isObject() && historicalArtifact(render, qualityFile, dir, scoped)
+                && media.equals(historicalPath(quality.path("media").asText(""), dir, scoped));
+        boolean receiptBound = valid && receipt.isObject() && historicalArtifact(render, receiptFile, dir, scoped);
+        if (receipt.has("media")) receiptBound &= media != null && media.equals(historicalPath(receipt.path("media").asText(""), dir, scoped));
+        valid &= qualityBound && receiptBound;
+        Map<String, Object> q = new LinkedHashMap<>(publicQuality(quality));
+        q.put("bound", qualityBound); if (!qualityBound) q.put("status", "unknown");
+        Map<String, Object> r = new LinkedHashMap<>(); r.put("bound", receiptBound);
+        r.put("status", receiptBound ? receipt.path("status").asText("unknown") : "unknown");
+        JsonNode checkpoint = state.path("steps").path(renderStep.replace("render-", "review-"));
+        JsonNode review = checkpoint.path("result");
+        boolean reviewBound = valid && review.path("media_sha256").asText("").equalsIgnoreCase(sha256(media));
+        if (review.has("version_id")) reviewBound &= version.equals(review.path("version_id").asText());
+        JsonNode inputs = checkpoint.path("inputs");
+        if (inputs.isArray()) reviewBound &= inputs.size() >= 2 && version.equals(inputs.path(0).asText())
+                && inputs.path(1).equals(render.path("files"));
+        JsonNode binding = checkpoint.path("binding");
+        if (binding.isObject()) reviewBound &= version.equals(binding.path("version").asText())
+                && binding.path("files").equals(render.path("files"));
+        Map<String, Object> reviewView = new LinkedHashMap<>(publicReview(review));
+        reviewView.put("bound", reviewBound);
+        if (!reviewBound) reviewView.put("status", "unknown");
+        String basis = review.path("basis").asText("");
+        Boolean simulation = null;
+        if (review.path("simulation").isBoolean()) simulation = review.path("simulation").asBoolean();
+        else if (basis.contains("fixture") || basis.contains("simulat") || "fixture".equals(binding.path("adapter").asText())) simulation = Boolean.TRUE;
+        else if ("actual_mp4_model".equals(basis)) simulation = Boolean.FALSE;
+        reviewView.put("basis", basis.isBlank() ? "unknown" : basis);
+        return new Historical(media, valid, reviewView, q, r, simulation, sourceMapping(receipt));
+    }
+
+    private List<Map<String, Object>> sourceMapping(JsonNode receipt) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        double offset = receipt.path("callback_offset").asDouble(0);
+        for (JsonNode source : receipt.path("source_to_output")) {
+            if (!source.path("output_start").isNumber() || !source.path("output_end").isNumber()) continue;
+            Map<String, Object> row = new LinkedHashMap<>();
+            for (String key : List.of("source_start", "source_end", "source_index", "segment_index", "kind")) {
+                if (source.has(key)) row.put(key, source.get(key));
+            }
+            row.put("output_start", source.path("output_start").asDouble() + offset);
+            row.put("output_end", source.path("output_end").asDouble() + offset);
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    private record Historical(Path media, boolean playable, Map<String, Object> review,
+                              Map<String, Object> quality, Map<String, Object> receipt, Object simulation, List<Map<String, Object>> mapping) {}
 
     private Map<String, Object> boundReview(JsonNode review, JsonNode render, Path dir) {
         Map<String, Object> out = new LinkedHashMap<>(publicReview(review));
@@ -339,7 +468,7 @@ public class OperationsQueueService {
             Map<String, Object> out = new LinkedHashMap<>();
             node.fields().forEachRemaining(e -> {
                 String key = e.getKey();
-                if (key.matches("(?i).*(cookie|api.?key|authorization|password|secret|environment|raw_log|request_key).*")) out.put(clean(key), "[redacted]");
+                if (key.matches("(?i).*(cookie|api.?key|authorization|password|secret|environment|raw_log|request_key|token|credential|access.?token|refresh.?token).*")) out.put(clean(key), "[redacted]");
                 else out.put(clean(key), scrub(e.getValue()));
             });
             return out;
@@ -400,6 +529,31 @@ public class OperationsQueueService {
 
     public Path acceptanceMedia(String name, int rank) {
         return media(name, rank, catalog(acceptanceDirectory().resolve("operations"), false), true);
+    }
+
+    public Path versionMedia(String name, int rank, String version, boolean acceptance) {
+        String session = paths.checkSession(name);
+        Catalog catalog = acceptance ? catalog(acceptanceDirectory().resolve("operations"), false) : catalog();
+        List<Entry> jobs = catalog.jobs(session);
+        if (jobs.size() != 1 || rank < 1 || (version == null || !version.matches("[a-fA-F0-9]{64}"))
+                || catalog.unresolved.stream().anyMatch(e -> couldBe(session, e.job()))) {
+            throw ApiException.notFound("历史版本不存在或待核对");
+        }
+        Entry entry = jobs.get(0);
+        if (acceptance && !"isolated".equals(entry.state().path("production_mode").asText())) {
+            throw ApiException.notFound("隔离版本不存在");
+        }
+        JsonNode ranks = entry.state().path("production_ranks");
+        if (ranks.isArray() && !ranks.isEmpty()
+                && java.util.stream.StreamSupport.stream(ranks.spliterator(), false).noneMatch(r -> r.asInt() == rank)) {
+            throw ApiException.notFound("历史候选不存在");
+        }
+        Path dir = candidateDir(entry, rank);
+        Path scoped = historicalVersion(dir, version, entry.root());
+        if (scoped == null) throw ApiException.notFound("版本清单或路径无效");
+        Historical result = historical(read(dir.resolve("state.json")), dir, scoped, version);
+        if (!result.playable()) throw ApiException.notFound("历史媒体或报告哈希不匹配");
+        return result.media();
     }
 
     private Path media(String name, int rank, Catalog catalog, boolean isolatedOnly) {
@@ -696,11 +850,15 @@ public class OperationsQueueService {
         String raw = render.path("media").asText("");
         if (raw.isBlank()) return null;
         JsonNode state = read(dir.resolve("state.json"));
-        if (!"inventoried".equals(state.path("status").asText())
-                || !Objects.equals(inventory.path("version").asText(null), state.path("current_version").asText(null))
+        // A failed working draft may retain an explicitly qualified prior inventory. This never
+        // falls back to history: the complete modern inventory bindings below still must pass.
+        boolean qualified = state.path("qualified_version").isTextual();
+        String expectedVersion = state.path(qualified ? "qualified_version" : "current_version").asText(null);
+        if ((!qualified && !"inventoried".equals(state.path("status").asText()))
+                || !Objects.equals(inventory.path("version").asText(null), expectedVersion)
                 || !inventory.path("version").isTextual()) return null;
-        // Minimal pre-versioning records remain readable; any modern identity/binding field opts into full validation.
-        boolean modern = inventory.has("rank") || inventory.has("review") || inventory.has("simulation") || render.has("files");
+        // Minimal pre-versioning records remain readable; qualified retention always opts into full validation.
+        boolean modern = qualified || inventory.has("rank") || inventory.has("review") || inventory.has("simulation") || render.has("files");
         if (modern) {
             int rank = Integer.parseInt(dir.getFileName().toString());
             if (inventory.path("rank").asInt(-1) != rank || inventory.path("simulation").asBoolean(true)

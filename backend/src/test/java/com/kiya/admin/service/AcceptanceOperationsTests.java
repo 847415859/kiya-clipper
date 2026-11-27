@@ -95,6 +95,17 @@ class AcceptanceOperationsTests {
         write(candidate.resolve("state.json"), Map.of("status", "inventoried", "current_version", "v2", "session", SESSION, "rank", 1, "event_id", "event-a"));
         assertNull(service.acceptanceSummary(SESSION).get("action"));
         assertThrows(RuntimeException.class, () -> service.acceptanceMedia(SESSION, 1));
+        // Explicit qualification preserves the fully bound prior inventory after working repair failure.
+        write(candidate.resolve("state.json"), Map.of("status", "needs_review", "current_version", "v2", "qualified_version", "v1",
+                "session", SESSION, "rank", 1, "event_id", "event-a"));
+        assertEquals(media.toRealPath(), service.acceptanceMedia(SESSION, 1));
+        write(candidate.resolve("state.json"), Map.of("status", "needs_review", "current_version", "v2", "qualified_version", "v2",
+                "session", SESSION, "rank", 1, "event_id", "event-a"));
+        assertThrows(RuntimeException.class, () -> service.acceptanceMedia(SESSION, 1));
+        write(candidate.resolve("state.json"), Map.of("status", "needs_review", "current_version", "v2", "qualified_version", "v1",
+                "session", SESSION, "rank", 1, "event_id", "event-a"));
+        Files.writeString(media, "changed after qualification");
+        assertThrows(RuntimeException.class, () -> service.acceptanceMedia(SESSION, 1));
     }
 
     private void seed(Path root, String statusSession) throws Exception {

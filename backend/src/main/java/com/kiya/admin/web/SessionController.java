@@ -82,6 +82,18 @@ public class SessionController {
         return video(operations.acceptanceMedia(name, rank));
     }
 
+    @GetMapping("/{name}/operations/media/{rank}/version/{version}")
+    public ResponseEntity<Resource> operationsVersionMedia(@PathVariable String name, @PathVariable int rank,
+                                                            @PathVariable String version) {
+        return video(operations.versionMedia(name, rank, version, false));
+    }
+
+    @GetMapping("/{name}/acceptance-operations/media/{rank}/version/{version}")
+    public ResponseEntity<Resource> acceptanceVersionMedia(@PathVariable String name, @PathVariable int rank,
+                                                            @PathVariable String version) {
+        return video(operations.versionMedia(name, rank, version, true));
+    }
+
     private ResponseEntity<Resource> video(Path media) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
                 .contentType(MediaType.parseMediaType("video/mp4"))
