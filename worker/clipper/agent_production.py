@@ -4,7 +4,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import os
 import shutil
 import sqlite3
 import tempfile
@@ -20,6 +19,7 @@ from .agent_flow import (Pause, Review, RunState, decode, digest, disk_guard, id
                          interval, load, now, probe, save, session_lock)
 from .edit import validate_edit
 from .protection import required, revision
+from .agent_repairs import repair
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
 
@@ -38,7 +38,7 @@ def artifacts_valid(records):
     return all(fingerprint(Path(path)) == checksum for path, checksum in records.items())
 
 
-def verify_render(directory: Path, edit: dict[str, Any]) -> dict[str, Any]:
+def verify_render(directory: Path, edit: dict[str, Any], source_segments: list[dict] | None = None) -> dict[str, Any]:
     media, normalized, receipt_file, quality_file = version_files(directory)
     receipt, quality = load(receipt_file), load(quality_file)
     info = probe(media)
@@ -74,7 +74,7 @@ def render(directory, data, candidate, edit, transcript, config, minimum):
         proc = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=900)
     if proc.returncode:
         raise Pause(f'render exit {proc.returncode}: {directory / "render.log"}')
-    return verify_render(directory, edit)
+    return verify_render(directory, edit, data.get('segments'))
 
 
 def adopt_rank5_repaired_audio(version, previous, preview, edit, candidate, minimum):
@@ -140,79 +140,6 @@ def rank5_opening_overlay_decision(edit, decision, rendered):
             'item_id': target_id, 'repair_basis': 'operator_approved_opening_overlay'}
 
 
-def repair(edit, decision, evidence, mapping, transcript=None):
-    reason = decision.get('reason') or '审片建议未给出原因'
-    action = decision.get('action')
-    fields = {
-        'extend_tail': ('source_end', 'evidence_ids'),
-        'remove_overlay': ('item_id',),
-        'shorten_subtitle': ('subtitle',),
-    }
-    if not isinstance(action, str) or action not in fields:
-        raise Review(f'审片建议需人工复核，缺少有效返修动作。{reason}')
-    missing = [key for key in ('output_range', *fields[action]) if not decision.get(key)]
-    if missing:
-        raise Review(f"审片建议需人工复核，缺少 {', '.join(missing)}。{reason}")
-    try:
-        start, end = interval(decision['output_range'])
-    except Review as exc:
-        raise Review(f'审片建议需人工复核，成片时间区间无效。{reason}') from exc
-    revised = copy.deepcopy(edit)
-    touched = []
-    for row in mapping:
-        left, right = max(start, row['output_start']), min(end, row['output_end'])
-        if left < right:
-            offset = row['source_start'] - row['output_start']
-            touched.append({'source_start': left + offset, 'source_end': right + offset})
-    if not touched or not decision.get('reason'):
-        raise Review('repair needs a mapped output interval and reason')
-    if action == 'extend_tail':
-        source_end = decision['source_end']
-        origin = edit['window']['start']
-        old_end = origin + edit['trim']['end']
-        if not old_end < source_end <= min(old_end + 5, edit['window']['end']):
-            raise Review('tail extension exceeds local repair bounds')
-        proven = [(r['start'], r['end']) for r in evidence if r['modality'] in {'av', 'audio'}
-                  and r['id'] in decision.get('evidence_ids', [])]
-        if subtract([old_end, source_end], proven) or abs(touched[-1]['source_end'] - old_end) > 0.05:
-            raise Review('tail extension lacks continuous original audio or tail location')
-        revised['trim']['end'] = round(source_end - origin, 3)
-        revised.setdefault('required_evidence', []).append({
-            'id': f'tail-repair-{old_end:g}', 'start': old_end, 'end': source_end,
-            'modality': '原声', 'role': 'effective_response', 'reason': decision['reason'],
-        })
-    elif action == 'remove_overlay':
-        item = next((x for x in edit['items'] if x['id'] == decision.get('item_id')), None)
-        if item is None or not any(edit['window']['start'] + item['start'] < row['source_end']
-                                   and edit['window']['start'] + item['start'] + item['duration'] > row['source_start']
-                                   for row in touched):
-            raise Review('overlay does not match repair location')
-        revised['items'] = [x for x in edit['items'] if x['id'] != item['id']]
-    elif action == 'shorten_subtitle':
-        from .speech_edit import sentence_text, validate_overrides
-
-        override, = validate_overrides([decision['subtitle']])
-        a, b = override['t0'], override['t1']
-        matching = [row for row in (transcript or {}).get('sentences', [])
-                    if round(row['t0'], 2) == round(a, 2) and round(row['t1'], 2) == round(b, 2)]
-        if len(matching) != 1 or sentence_text(matching[0]) != override['original']:
-            raise Review('subtitle revision does not match the original transcript')
-        if not any(a < row['source_end'] and b > row['source_start'] for row in touched):
-            raise Review('subtitle does not match repair location')
-        subs = revised.setdefault('subtitles', {})
-        overrides = subs.get('sentence_overrides', [])
-        key = (round(a, 2), round(b, 2))
-        previous = next((row['text'] for row in overrides if (round(row['t0'], 2), round(row['t1'], 2)) == key),
-                        override['original'])
-        remaining = iter(previous)
-        text = override['text']
-        if len(text) >= len(previous) or not all(char in remaining for char in text):
-            raise Review('subtitle shortening must only remove characters from the current wording')
-        subs['sentence_overrides'] = [row for row in overrides
-                                      if (round(row['t0'], 2), round(row['t1'], 2)) != key] + [override]
-    return revised
-
-
 class Production:
     def __init__(self, source, output, roles, config, ledger=None, minimum=1024**3, max_repairs=2):
         self.source, self.output, self.config = source.resolve(), output.resolve(), config.resolve()
@@ -259,7 +186,6 @@ class Production:
                      room=data.get('room_id', '1724773744'), streamer=data.get('streamer', 'kiya'),
                      role_adapter=self.roles.name)
         try:
-            role_data = self.roles.for_rank(rank)
             def source_versions():
                 return [identity(path) if path.is_file() else [str(path), 'missing']
                         for path in (Path(s['video']) for s in data['segments'])]
@@ -275,9 +201,14 @@ class Production:
             current_inventory = load(inventory) if inventory.exists() else None
             if current_inventory and (current_inventory['base'] != base or current_inventory['formal_revision'] != formal_revision
                                       or current_inventory['transcript_revision'] != transcript_revision
-                                      or current_inventory['role_revision'] != role_data
-                                      or not artifacts_valid(current_inventory['render']['files'])):
+                                      or not artifacts_valid(current_inventory['render']['files'])
+                                      or fingerprint(Path(current_inventory['draft'])) != current_inventory.get('draft_sha256')
+                                      or fingerprint(Path(current_inventory['pack'])) != current_inventory.get('pack_sha256')):
                 inventory.unlink()
+                state.commit(qualified_version=None)
+            elif current_inventory:
+                state.commit(qualified_version=current_inventory['version'])
+            role_data = self.roles.for_rank(rank)
             rows = evidence_rows(role_data.get('evidence', []), data['segments'])
             contextual = getattr(self.roles, 'contextual_gap', None)
             topic = state.step('topic', [base, rows, role_data['topic']],
@@ -285,6 +216,7 @@ class Production:
             state.commit(topic=topic, evidence=rows, event_id=topic.get('event_id', f'{state.data["session"]}:{rank}'))
             if topic['verdict'] == 'drop':
                 inventory.unlink(missing_ok=True)
+                state.commit(qualified_version=None)
                 state.event('topic', 'dropped', reason=topic['reason'])
                 return state.data
             if topic['verdict'] == 'review':
@@ -370,40 +302,57 @@ class Production:
                     raise Review('draft snapshot changed')
                 if not manifest.exists():
                     save(manifest, record)
-                audio_preview = None
-                if (index == 1 and contextual == 'gap-1' and manual_review_audit and rank == 5
-                        and state.data['session'] == '20261124-2151'):
-                    audio_preview = os.environ.get('KIYA_RANK5_TAIL_AUDIO_PREVIEW')
-
                 def render_version():
                     target = version
                     if (version / 'final').exists():
                         target = version / 'renders' / uuid4().hex
-                    return render(target, data, candidate, draft, transcript, self.config, self.minimum)
+                    rendered = render(target, data, candidate, draft, transcript, self.config, self.minimum)
+                    sidecar = Path(rendered['media']).with_suffix('.audio.json')
+                    if not sidecar.is_file():
+                        raise Review('音频诊断 sidecar 缺失，需人工复核')
+                    audio = load(sidecar)
+                    diagnosis = audio.get('after_recovery', {})
+                    final_stage = diagnosis.get('stages', {}).get('final', {})
+                    cut_stage = diagnosis.get('stages', {}).get('cut', {})
+                    if (diagnosis.get('status') != 'diagnosed' or diagnosis.get('earliest_stage') != 'none'
+                            or final_stage.get('sha256') != rendered['files'].get(rendered['media'])
+                            or final_stage.get('status') != 'available' or final_stage.get('gaps')
+                            or cut_stage.get('status') != 'available' or cut_stage.get('gaps')
+                            or any(s.get('status') != 'available' or s.get('gaps') for s in diagnosis.get('sources', []))):
+                        raise Review('音频分阶段诊断存在缺口、不匹配或不确定结果，需人工复核')
+                    rendered['audio_diagnostics'] = audio
+                    rendered['files'][str(sidecar)] = digest(sidecar)
+                    return rendered
 
-                suffix = '-tail-audio' if audio_preview else ''
-                if audio_preview:
-                    preview = Path(audio_preview).resolve()
-                    saved = state.data['steps'].get(f'render-{index}', {})
-                    previous = saved.get('result')
-                    if previous is None or not preview.is_file():
-                        raise Review('缺少已渲染返修版或已验证的音轨修复文件')
-                    result = state.step(f'render-{index}{suffix}', [record['id'], base, previous['files'], digest(preview)],
-                                        lambda: adopt_rank5_repaired_audio(version, previous, preview, draft, candidate, self.minimum),
-                                        valid=lambda r: artifacts_valid(r['files']))
-                else:
-                    result = state.step(f'render-{index}', [record['id'], base], render_version,
-                                        valid=lambda r: artifacts_valid(r['files']))
+                result = state.step(f'render-{index}', [record['id'], base, data['segments']], render_version,
+                                    valid=lambda r: artifacts_valid(r['files']))
                 receipt = load(Path(result['receipt']))
                 mapping = [dict(row, output_start=row['output_start'] + receipt['callback_offset'],
                                 output_end=row['output_end'] + receipt['callback_offset']) for row in receipt['source_to_output']]
-                review_input = {**role_data, 'evidence': rows}
+                review_input = {**role_data, 'evidence': rows,
+                                'version_id': record['id'], 'parent_version': parent,
+                                'transcript_revision': transcript_revision,
+                                'transcript': {'sentences': [s for s in (transcript or {}).get('sentences', [])
+                                    if s['t0'] < window['end'] and s['t1'] > window['start']]}}
                 review_inputs = [record['id'], result['files'], review_input, self.roles.name]
                 if contextual is not None and state.data.get('manual_review'):
                     review_inputs.append(state.data['manual_review'])
-                decision = state.step(f'review-{index}{suffix}', review_inputs,
-                                      lambda: self.roles.review(review_input, index, result))
-                state.commit(current_version=record['id'], render=result)
+                state.commit(current_version=record['id'], working_version=record['id'], render=result)
+                def review_version():
+                    decision = self.roles.review(review_input, index, result)
+                    if decision.get('verdict') in {'pass', 'repair'}:
+                        if decision.get('media_sha256') != result['files'].get(result['media']):
+                            raise Review(f"审片建议媒体哈希与当前版本不匹配。{decision.get('reason', '')}")
+                        current_edit = load(Path(result['media']).with_suffix('.edit.json'))
+                        if decision.get('edit_revision') != revision(current_edit):
+                            raise Review(f"审片建议编辑版本已过期。{decision.get('reason', '')}")
+                        if decision.get('version_id', record['id']) != record['id']:
+                            raise Review('review version_id differs from current draft')
+                        if decision.get('verdict') == 'repair' and not str(decision.get('expected_change') or '').strip():
+                            raise Review('repair requires expected_change and exact location')
+                    return {**decision, 'version_id': record['id'], 'simulation': self.roles.name == 'fixture'}
+                decision = state.step(f'review-{index}', review_inputs, review_version,
+                                      valid=lambda d: d.get('version_id') == record['id'])
                 if decision['verdict'] == 'pass':
                     if manual_review_audit:
                         self.roles.verify_manual_review_render(result, manual_review_audit)
@@ -427,16 +376,12 @@ class Production:
                             'simulation': self.roles.name == 'fixture'}
                     if not inventory.exists() or load(inventory) != item:
                         save(inventory, item)
+                    state.commit(qualified_version=record['id'])
                     if state.data['status'] != 'inventoried':
                         state.event('inventory', 'inventoried', file=str(inventory))
                     return state.data
                 if decision['verdict'] != 'repair' or index == self.max_repairs:
                     raise Review(decision.get('reason', 'review or repair limit reached'))
-                if (index == 0 and contextual == 'gap-1' and manual_review_audit
-                        and rank == 5 and state.data['session'] == '20261124-2151'
-                        and os.environ.get('KIYA_RANK5_REMOVE_OPENING_OVERLAY') == '1'):
-                    decision = state.step('approved-opening-overlay-repair', [decision, result['files'], draft],
-                                          lambda: rank5_opening_overlay_decision(draft, decision, result))
                 parent = record['id']
                 draft = validate_edit(repair(draft, decision, rows, mapping, transcript), length)
         except (Pause, OSError, subprocess.SubprocessError) as exc:
@@ -444,5 +389,19 @@ class Production:
         except (Review, ValueError, KeyError, TypeError) as exc:
             state.event(state.data.get('stage', 'inputs'), 'needs_review', reason=str(exc))
         if inventory.exists():
-            inventory.unlink()
+            accepted = load(inventory)
+            unchanged = ('formal' in locals() and 'transcript_path' in locals() and 'sources' in locals()
+                         and accepted.get('base') == locals().get('base')
+                         and accepted.get('formal_revision') == fingerprint(formal)
+                         and accepted.get('transcript_revision') == fingerprint(transcript_path)
+                         and artifacts_valid(accepted['render']['files'])
+                         and fingerprint(Path(accepted['draft'])) == accepted.get('draft_sha256')
+                         and fingerprint(Path(accepted['pack'])) == accepted.get('pack_sha256')
+                         and digest(self.source) == candidate_file_revision
+                         and sources == source_versions())
+            if unchanged:
+                state.commit(qualified_version=accepted['version'])
+            else:
+                inventory.unlink()
+                state.commit(qualified_version=None)
         return state.data

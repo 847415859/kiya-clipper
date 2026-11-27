@@ -51,15 +51,29 @@ CONTEXT_QUESTION = 'Kiya 在目标区间说了什么？请引用能听清的原�
 CONTEXT_VERSION = 'rank5-gap1-context-v1'
 
 
-class MediaDecision(BaseModel):
-    verdict: Literal['pass', 'repair', 'review']
-    reason: str = Field(min_length=1)
+class TargetedRepair(BaseModel):
     output_range: list[float] | None = None
-    action: str | None = None
+    action: Literal['extend_tail', 'remove_overlay', 'remove_zoom', 'adjust_overlay', 'move_overlay',
+                    'shorten_overlay', 'adjust_zoom', 'shorten_subtitle', 'correct_subtitle',
+                    'adjust_subtitle_timing', 'adjust_subtitle_layout', 'split_subtitle',
+                    'adjust_boundary', 'adjust_rhythm'] | None = None
+    expected_change: str | None = None
     item_id: str | None = None
     subtitle: dict | None = None
     source_end: float | None = None
     evidence_ids: list[str] | None = None
+    changes: dict | None = None
+    trim: dict | None = None
+    cuts: list[dict] | None = None
+
+
+class MediaDecision(TargetedRepair):
+    verdict: Literal['pass', 'repair', 'review']
+    reason: str = Field(min_length=1)
+    actions: list[TargetedRepair] | None = None
+    version_id: str | None = None
+    media_sha256: str | None = None
+    edit_revision: str | None = None
 
 
 class LiveRoles:
@@ -321,10 +335,25 @@ class LiveRoles:
     def review(self, row, index, rendered):
         media = Path(rendered['media'])
         inputs = {'receipt': load(Path(rendered['receipt'])), 'edit': load(media.with_suffix('.edit.json')),
-                  'evidence': row['evidence'], 'pack': row['pack'], 'quality': load(Path(rendered['quality']))}
+                  'evidence': row['evidence'], 'pack': row['pack'], 'quality': load(Path(rendered['quality'])),
+                  'transcript': row.get('transcript'), 'transcript_revision': row.get('transcript_revision'),
+                  'version_id': row.get('version_id'), 'parent_version': row.get('parent_version')}
+        from .protection import revision
+        binding = {'media_sha256': rendered['files'][str(media)], 'edit_revision': revision(inputs['edit'])}
+        inputs['binding'] = binding
         decision = self._request([media], '看实际成片，检查前因、反应末句、字幕阅读和画面遮挡及标题真实性。'
             '返回 JSON verdict=pass/repair/review, reason。返修给成片秒 output_range 和 action。'
-            '只允许 remove_overlay（item_id）、shorten_subtitle（subtitle: 原片 t0,t1,original,text）、'
-            'extend_tail（原片 source_end 和 evidence_ids）。事实或位置不确定则 review。\n'
+            '动作：remove_overlay（item_id）、shorten_subtitle（subtitle）、extend_tail（source_end,evidence_ids）、'
+            'adjust_overlay/adjust_zoom（item_id,changes）、adjust_boundary（trim）、adjust_rhythm（cuts）。'
+            '还支持 move_overlay/shorten_overlay、remove_zoom、correct_subtitle、adjust_subtitle_timing、'
+            'adjust_subtitle_layout（subtitle.display_x/display_y .05-.95）、'
+            'split_subtitle（subtitle.parts=[{text,t0,t1}]，整场秒，拼接等于当前字幕文字）。'
+            '所有通过或返修结论原样返回 binding 的 media_sha256/edit_revision。'
+            '返修必须含 expected_change、output_range；缺失或定位不确定则 review。'
+            'trim/cuts/item 时间相对 window；subtitle t0/t1/original 必须精确绑定原始转写；'
+            '字幕显示时间另用整场秒 display_t0/display_t1，不更改原始绑定。'
+            '节奏只删除无语音且非必保证据的区间；边界保留所有必保证据和完整句子。\n'
             + json.dumps(inputs, ensure_ascii=False), MediaDecision)
-        return {**decision, 'media_sha256': rendered['files'][str(media)], 'basis': 'actual_mp4_model'}
+        if decision.get('verdict') in {'pass', 'repair'} and any(decision.get(k) != v for k, v in binding.items()):
+            raise Review('model review media hash or edit revision differs from supplied binding')
+        return {**decision, 'basis': 'actual_mp4_model'}

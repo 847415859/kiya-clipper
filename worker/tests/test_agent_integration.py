@@ -41,7 +41,10 @@ def test_live_review_sends_exact_mp4_and_reserves_before_network(tmp_path, monke
 
     class Response:
         def __enter__(self):
-            return [b'data: {"choices":[{"delta":{"content":"{\\"verdict\\":\\"pass\\",\\"reason\\":\\"fixture\\"}"},"finish_reason":"stop"}]}\n']
+            import json
+            from clipper.protection import revision
+            answer = {'verdict': 'pass', 'reason': 'fixture', 'media_sha256': digest(media), 'edit_revision': revision({})}
+            return [('data: ' + json.dumps({'choices': [{'delta': {'content': json.dumps(answer)}, 'finish_reason': 'stop'}]}) + '\n').encode()]
 
         def __exit__(self, *args):
             return False

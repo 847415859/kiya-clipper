@@ -40,7 +40,12 @@ class RecordedRoles:
             expected = row.get('fixture_expectations', {}).get(str(index))
             if expected is not None and abs(rendered['probe']['duration'] - expected) > 0.2:
                 return {'verdict': 'review', 'reason': 'Fixture actual duration differs from expected'}
-            return row['reviews'][index]
+            from clipper.protection import revision
+            decision = dict(row['reviews'][index])
+            return {**decision, 'media_sha256': rendered['files'][rendered['media']],
+                    'edit_revision': revision(load(Path(rendered['media']).with_suffix('.edit.json'))),
+                    'expected_change': decision.get('expected_change', 'Fixture: apply specified local repair'),
+                    'basis': 'fixture_generated_for_exact_render', 'simulation': True}
         decision = next((r for r in row.get('reviews', []) if r.get('media_sha256') ==
                          rendered['files'][rendered['media']]), None)
         return decision or {'verdict': 'review', 'reason': 'Review of this exact MP4 is pending'}
