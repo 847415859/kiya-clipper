@@ -70,7 +70,7 @@ export const api = {
   acceptanceDetail: (name, source = 'acceptance') => http.get(`/api/sessions/${encodeURIComponent(name)}/${source === 'production' ? 'production-acceptance' : 'acceptance-operations'}`),
   sessionOperations: (name, acceptance = false) => http.get(`/api/sessions/${encodeURIComponent(name)}/${acceptance ? 'acceptance-operations' : 'operations'}`),
   recoverSession: (name, action) => http.post(`/api/sessions/${encodeURIComponent(name)}/operations/${action}`),
-  operationsMedia: (name, rank, acceptance = false) => `/api/sessions/${encodeURIComponent(name)}/${acceptance ? 'acceptance-operations' : 'operations'}/media/${rank}`,
+  operationsMedia: (name, rank, acceptance = false, version = null) => `/api/sessions/${encodeURIComponent(name)}/${acceptance ? 'acceptance-operations' : 'operations'}/media/${rank}${version ? `/version/${encodeURIComponent(version)}` : ''}`,
   scan: () => http.post('/api/sessions/scan', null, { timeout: 200000 }),
   valueStrategy: (name) => http.get(`/api/sessions/${encodeURIComponent(name)}/value-strategy`),
   candidates: (name) => http.get(`/api/sessions/${encodeURIComponent(name)}/candidates`),
