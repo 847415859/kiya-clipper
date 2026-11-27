@@ -189,6 +189,9 @@ def link(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists() or dst.is_symlink():
         dst.unlink()
+    if os.environ.get("KIYA_RENDER_COPY_ASSETS") == "1":
+        shutil.copyfile(src, dst)
+        return
     try:
         dst.symlink_to(src.resolve())
     except OSError:

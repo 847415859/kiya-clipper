@@ -74,6 +74,21 @@ def test_missing_source_failure_is_readable_and_terminal(job):
     assert worker.once() == 0
 
 
+def test_poll_preserves_finished_status_with_legacy_render_link(job):
+    worker, task, _, _, video = job
+    output = worker.root / 'production' / task['task_id']
+    output.mkdir()
+    try:
+        (output / 'source.mp4').symlink_to(video)
+    except OSError as exc:
+        pytest.skip(f'Cannot create fixture symlink: {exc}')
+    worker.status(task, 'has_clips', 'inventory')
+    finished = state(worker, task)
+
+    assert worker.once() == 0
+    assert state(worker, task) == finished
+
+
 def test_hash_binding_and_containment(job):
     worker, task, queue, original, video = job
     task['input_files'][str(video)] = '0' * 64

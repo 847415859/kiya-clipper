@@ -7,6 +7,8 @@ Type=simple
 User=kiya
 Group=kiya
 WorkingDirectory=/opt/kiya-clipper/worker
+# The fixture renderer must not load the production .env or its credentials.
+Environment=KIYA_ENV_FILE=/dev/null
 # Must match admin acceptanceRoot/history; deliberately no live/model option.
 ExecStart=/opt/kiya-clipper/worker/.venv/bin/python scripts/historical_trial_worker.py --root /var/lib/kiya-next-session-acceptance/history --fixture
 Restart=on-failure

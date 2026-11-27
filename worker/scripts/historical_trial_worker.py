@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from contextlib import closing
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -196,9 +197,6 @@ class HistoricalWorker:
         task = load(queue)
         self.validate(task, queue)
         directory = contained(self.root / 'production' / task['task_id'], self.root, exists=False)
-        directory.mkdir(parents=True, exist_ok=True)
-        for existing in directory.rglob('*'):
-            contained(existing, directory)
         status_path = contained(self.root / 'status' / queue.name, self.root, exists=False)
         if status_path.exists() and load(status_path).get('status') in TERMINAL:
             return False
@@ -211,6 +209,9 @@ class HistoricalWorker:
         with closing(lock):
             if status_path.exists() and load(status_path).get('status') in TERMINAL:
                 return False
+            directory.mkdir(parents=True, exist_ok=True)
+            for existing in directory.rglob('*'):
+                contained(existing, directory)
             phase = 'configuration'
             try:
                 if (not self.fixture or task.get('mode') != 'fixture'
@@ -259,6 +260,7 @@ def main():
     args = parser.parse_args()
     if args.poll_seconds < 0.2:
         parser.error('--poll-seconds must be at least 0.2')
+    os.environ['KIYA_RENDER_COPY_ASSETS'] = '1'
     worker = HistoricalWorker(args.root, fixture=args.fixture, config=args.config)
     while True:
         worker.once()
