@@ -48,6 +48,7 @@ from clipper.peaks import hhmmss  # noqa: E402
 from clipper.subtitles import (STRIP_PUNCT, StyleError, apply_corrections, build_events, get_style,  # noqa: E402
                                load_config, lore_keywords, validate_style)
 from clipper.media import probe_duration  # noqa: E402
+from clipper.audio_diagnostics import decoded_audio_gaps, diagnose_pipeline, video_sha256  # noqa: E402
 from clipper.quality import probe as probe_media, quality_report, write_report  # noqa: E402
 from clipper.schedule import for_pack, append_description  # noqa: E402
 from cut import cut_one, pieces, probe_size  # noqa: E402
@@ -56,7 +57,10 @@ FPS = 30
 
 
 def restore_source_audio(source: Path, rendered: Path, duration: float) -> bool:
-    """Recover a truncated Remotion audio track for a main-only composition."""
+    """Remux good source audio for truncated OR internally gapped main-only audio.
+
+    Never generate padding or re-encode video; validate before atomic replacement.
+    """
     def timing(info, kind):
         stream = next((s for s in (info or {}).get("streams", []) if s.get("codec_type") == kind), {})
         try:
@@ -67,13 +71,27 @@ def restore_source_audio(source: Path, rendered: Path, duration: float) -> bool:
 
     current = probe_media(rendered)
     audio = timing(current, "audio")
-    if audio and audio[0] + audio[1] >= duration - 0.25:
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError("Invalid recovery duration")
+    # Missing/decode-error tracks require review, rather than being assumed good.
+    try:
+        current_gaps = decoded_audio_gaps(rendered) if audio else []
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return False
+    if audio and abs(audio[0]) <= 1 / FPS and sum(audio) >= duration - 1 / FPS and not current_gaps:
         return False
     video = timing(current, "video")
     original = timing(probe_media(source), "audio")
     tolerance = 1 / FPS
     if (not video or not original or abs(video[0]) > tolerance or abs(original[0]) > tolerance
             or abs(video[1] - duration) > tolerance or sum(original) < duration - tolerance):
+        return False
+
+    try:
+        if decoded_audio_gaps(source):
+            return False
+        before_video_hash = video_sha256(rendered)
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
         return False
 
     with tempfile.TemporaryDirectory(prefix=".restore-audio-", dir=rendered.parent) as directory:
@@ -84,8 +102,52 @@ def restore_source_audio(source: Path, rendered: Path, duration: float) -> bool:
         restored = timing(probe_media(output), "audio")
         if not restored or abs(restored[0]) > tolerance or abs(sum(restored) - duration) > tolerance:
             raise ValueError("恢复的原声音轨未覆盖成片时长")
+        if decoded_audio_gaps(output):
+            raise ValueError("Recovered audio still contains timestamp gaps")
+        if video_sha256(output) != before_video_hash:
+            raise ValueError("Audio recovery changed encoded video")
         output.replace(rendered)
     return True
+
+
+def audio_receipt(segments: list[dict], cut: Path, rendered: Path, receipt: Path,
+                  duration: float, recover: bool) -> dict:
+    """Persist original evidence before any recovery, including recovery failures."""
+    def snapshot():
+        result = diagnose_pipeline(segments, cut, rendered)
+        for name, path in (("cut", cut), ("final", rendered)):
+            try:
+                result["stages"][name]["video_sha256"] = video_sha256(path)
+            except (OSError, subprocess.SubprocessError, ValueError) as exc:
+                result["stages"][name]["video_hash_error"] = str(exc)
+                result["status"] = "review"
+        return result
+
+    def save(value):
+        pending = receipt.with_suffix(receipt.suffix + ".tmp")
+        pending.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+        pending.replace(receipt)
+
+    before = snapshot()
+    report = {"before_recovery": before, "after_recovery": None,
+              "recovery": {"eligible": recover, "applied": False}}
+    save(report)
+    try:
+        sources_good = (bool(before["sources"]) and not before["segment_boundary_gaps"] and all(
+            row["status"] == "available" and not row["gaps"] for row in before["sources"]))
+        if recover and sources_good:
+            report["recovery"]["applied"] = restore_source_audio(cut, rendered, duration)
+        elif recover:
+            report["recovery"]["skipped_reason"] = "selected_source_unavailable_or_gapped"
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        report["recovery"]["error"] = f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        report["after_recovery"] = snapshot()
+        if report["recovery"].get("error"):
+            report["after_recovery"]["status"] = "review"
+        save(report)
+    return report
 
 
 def stickers_dir() -> Path:
@@ -241,6 +303,7 @@ def main() -> int:
                         "size": Path(s["video"]).stat().st_size if Path(s["video"]).exists() else None,
                         "mtime_ns": Path(s["video"]).stat().st_mtime_ns if Path(s["video"]).exists() else None} for s in data["segments"]]
     parts = [part for a, b in kept for part in pieces(data["segments"], a, b)]
+    audio_sources = [{"video": str(path), "source_ranges": [[a, b]]} for path, a, b in parts]
     cache_version = "_v4_" if len(parts) > 1 else "_v3_"
     rm_tag = cache_version + hashlib.sha256(json.dumps([t_start, t_end, removed, source_revision], sort_keys=True).encode()).hexdigest()[:16]
     src = work / f"src_{args.rank:02d}_{t_start:.1f}_{t_end:.1f}{rm_tag}_{args.height}.mp4"
@@ -400,12 +463,16 @@ def main() -> int:
     t0 = time.time()
     r = subprocess.run(render_cmd() + [str(job), str(job / "props.json"), str(tmp)] + frame_args)
     if r.returncode != 0 or not tmp.exists():
+        audio_receipt(audio_sources, src, tmp, out.with_suffix(".audio.json"),
+                      props["mainDuration"], False)
         print("渲染失败（看上面 Remotion 的输出）", file=sys.stderr)
         return 1
+    audio_report = audio_receipt(audio_sources, src, tmp, out.with_suffix(".audio.json"),
+                                 props["mainDuration"],
+                                 not partial and not bgm and not callback and not schedule["enabled"])
+    if audio_report["recovery"]["applied"]:
+        print("Remotion 音轨缺失采样，已从连续拼接源视频恢复原声（视频流哈希保持一致）")
     if not partial:
-        if not bgm and not callback and not schedule["enabled"]:
-            if restore_source_audio(src, tmp, props["mainDuration"]):
-                print("Remotion 音轨提前结束，已从拼接源视频恢复原声")
         # Record the new file before replacing the video. An interrupted replacement
         # leaves a detectable mismatch, never a new outro without its matching receipt.
         metadata = out.with_suffix(".schedule.json")

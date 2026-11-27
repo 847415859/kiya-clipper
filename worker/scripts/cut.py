@@ -39,6 +39,7 @@ from clipper.kcfg import load_cfg  # noqa: E402
 from clipper.streamer import resolve_config  # noqa: E402
 from clipper.asr import load_transcript  # noqa: E402
 from clipper.media import probe_duration  # noqa: E402
+from clipper.audio_diagnostics import diagnose_pipeline  # noqa: E402
 from clipper.subtitles import (StyleError, ass_filter, build_events, font_available, get_style,  # noqa: E402
                                load_config, lore_keywords, to_ass, to_srt, validate_style)
 from clipper.peaks import hhmmss  # noqa: E402
@@ -253,6 +254,11 @@ def main() -> int:
                 ass = None
         try:
             cut_one(parts, dst, args.fast, args.height, ass, removed)
+            audio = diagnose_pipeline(
+                [{"video": str(path), "source_ranges": [[a, b]]} for path, a, b in parts],
+                dst, None)
+            dst.with_suffix(".audio.json").write_text(
+                json.dumps(audio, ensure_ascii=False, indent=2), encoding="utf-8")
             ok += 1
             dst.with_suffix(".evidence.json").write_text(json.dumps(evidence_coverage, ensure_ascii=False, indent=2), encoding="utf-8")
             windows[f"{c['rank']:02d}"] = {"start": round(cs, 2), "end": round(ce, 2), "refined": by_refined,
